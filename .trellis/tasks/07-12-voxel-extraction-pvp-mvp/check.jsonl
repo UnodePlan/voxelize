@@ -1,0 +1,5 @@
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"检查身份、意图、局内状态、结算事务与客户端展示是否端到端闭合，避免只验证单层实现。"}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"检查新增代码是否复用现有引擎能力，并防止玩法逻辑泄漏进通用核心。"}
+{"file":".trellis/tasks/07-12-voxel-extraction-pvp-mvp/research/repository-integration.md","reason":"复核原子 Join、strict policy、连接重绑、World 清理及 legacy 兼容风险。"}
+{"file":".trellis/tasks/07-12-voxel-extraction-pvp-mvp/research/auth-persistence.md","reason":"复核 SIWE 信任边界、session 安全、唯一约束、事务幂等和只读运维边界。"}
+{"file":".trellis/tasks/07-12-voxel-extraction-pvp-mvp/research/gameplay-runtime.md","reason":"复核同 tick 竞态、资产守恒、死亡优先级、pending drop 和撤离状态机。"}

@@ -1,0 +1,105 @@
+{
+  "fixtureVersion": 1,
+  "cases": [
+    {
+      "name": "valid-intent-envelope",
+      "route": "contract:v1:probe",
+      "accept": true,
+      "value": {
+        "protocolVersion": 1,
+        "type": "intent",
+        "requestId": "11111111-1111-4111-8111-111111111111",
+        "sequence": 7,
+        "payload": {
+          "probe": "ready"
+        }
+      }
+    },
+    {
+      "name": "valid-ok-result",
+      "route": "contract:v1:result",
+      "accept": true,
+      "value": {
+        "protocolVersion": 1,
+        "type": "result",
+        "requestId": "11111111-1111-4111-8111-111111111111",
+        "outcome": {
+          "status": "ok",
+          "data": null
+        }
+      }
+    },
+    {
+      "name": "valid-error-result",
+      "route": "pvp:v1:result",
+      "accept": true,
+      "value": {
+        "protocolVersion": 1,
+        "type": "result",
+        "requestId": "11111111-1111-4111-8111-111111111111",
+        "outcome": {
+          "status": "error",
+          "error": {
+            "code": "MATCH_ROSTER_LOCKED",
+            "retryable": false
+          }
+        }
+      }
+    },
+    {
+      "name": "unsupported-version",
+      "route": "pvp:v1:attack",
+      "accept": false,
+      "value": {
+        "protocolVersion": 2,
+        "type": "intent",
+        "requestId": "11111111-1111-4111-8111-111111111111",
+        "sequence": 7,
+        "payload": {}
+      }
+    },
+    {
+      "name": "unknown-top-level-field",
+      "route": "pvp:v1:attack",
+      "accept": false,
+      "value": {
+        "protocolVersion": 1,
+        "type": "intent",
+        "requestId": "11111111-1111-4111-8111-111111111111",
+        "sequence": 7,
+        "payload": {},
+        "damage": 20
+      }
+    },
+    {
+      "name": "missing-ok-data",
+      "route": "contract:v1:result",
+      "accept": false,
+      "value": {
+        "protocolVersion": 1,
+        "type": "result",
+        "requestId": "11111111-1111-4111-8111-111111111111",
+        "outcome": {
+          "status": "ok"
+        }
+      }
+    },
+    {
+      "name": "unknown-error-code",
+      "route": "pvp:v1:result",
+      "accept": false,
+      "value": {
+        "protocolVersion": 1,
+        "type": "result",
+        "requestId": "11111111-1111-4111-8111-111111111111",
+        "outcome": {
+          "status": "error",
+          "error": {
+            "code": "CLIENT_INVENTED_ERROR",
+            "retryable": false
+          }
+        }
+      }
+    }
+  ]
+}

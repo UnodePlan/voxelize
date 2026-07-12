@@ -1,0 +1,60 @@
+{
+  "protocolVersion": 1,
+  "catalogVersion": 1,
+  "gameplayVersion": "pvp-mvp-v1",
+  "generationVersion": "generation-v1",
+  "configVersion": "balance-v1",
+  "resources": [
+    {
+      "key": "dirt",
+      "voxelId": 1001,
+      "itemId": 2001,
+      "maxStack": 64,
+      "scoreWeight": 1
+    },
+    {
+      "key": "gold",
+      "voxelId": 1002,
+      "itemId": 2002,
+      "maxStack": 64,
+      "scoreWeight": 10
+    },
+    {
+      "key": "diamond",
+      "voxelId": 1003,
+      "itemId": 2003,
+      "maxStack": 64,
+      "scoreWeight": 100
+    }
+  ],
+  "equipment": [
+    {
+      "key": "basic_pickaxe",
+      "itemId": 2101
+    },
+    {
+      "key": "basic_melee_weapon",
+      "itemId": 2102
+    }
+  ],
+  "errorCodes": [
+    "PROTOCOL_UNSUPPORTED_VERSION",
+    "REQUEST_MALFORMED",
+    "AUTH_REQUIRED",
+    "AUTH_WRONG_NETWORK",
+    "AUTH_INVALID_SIWE",
+    "AUTH_NONCE_INVALID",
+    "MATCH_FULL",
+    "MATCH_ROSTER_LOCKED",
+    "MATCH_RECONNECT_EXPIRED",
+    "GAME_INVALID_STATE",
+    "GAME_STALE_SEQUENCE",
+    "GAME_STALE_REVISION",
+    "GAME_OUT_OF_RANGE",
+    "GAME_COOLDOWN",
+    "INVENTORY_SLOT_INVALID",
+    "SETTLEMENT_PENDING",
+    "SETTLEMENT_CONFLICT",
+    "SERVICE_UNAVAILABLE"
+  ]
+}

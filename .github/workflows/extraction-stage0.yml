@@ -1,0 +1,106 @@
+name: 撤离玩法第一阶段
+
+on:
+  pull_request:
+    paths:
+      - ".cargo/**"
+      - ".github/workflows/extraction-stage0.yml"
+      - ".eslintignore"
+      - ".eslintrc"
+      - ".npmrc"
+      - ".prettierrc"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "apps/**"
+      - "build.rs"
+      - "contracts/extraction/**"
+      - "crates/**"
+      - "messages.proto"
+      - "package.json"
+      - "packages/**"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - "rust-toolchain.toml"
+      - "server/**"
+      - "tsconfig*.json"
+      - "vitest*.ts"
+  push:
+    paths:
+      - ".cargo/**"
+      - ".github/workflows/extraction-stage0.yml"
+      - ".eslintignore"
+      - ".eslintrc"
+      - ".npmrc"
+      - ".prettierrc"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "apps/**"
+      - "build.rs"
+      - "contracts/extraction/**"
+      - "crates/**"
+      - "messages.proto"
+      - "package.json"
+      - "packages/**"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - "rust-toolchain.toml"
+      - "server/**"
+      - "tsconfig*.json"
+      - "vitest*.ts"
+
+permissions:
+  contents: read
+
+jobs:
+  server:
+    name: Rust 服务端与引擎
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.93.0
+        with:
+          components: clippy,rustfmt
+      - name: 安装固定版本 Protobuf 编译器
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
+        with:
+          version: "25.3"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: 检查格式
+        run: cargo fmt --manifest-path apps/extraction-server/Cargo.toml -- --check
+      - name: 检查默认骨架代码
+        run: cargo clippy --manifest-path apps/extraction-server/Cargo.toml --all-targets --locked -- -D warnings
+      - name: 测试引擎链接骨架
+        run: cargo test --manifest-path apps/extraction-server/Cargo.toml --all-targets --features engine --locked
+
+  web:
+    name: TypeScript 协议与客户端
+    runs-on: ubuntu-latest
+    env:
+      PUPPETEER_SKIP_DOWNLOAD: "true"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.9.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - name: 安装工作区依赖
+        run: pnpm install --frozen-lockfile
+      - name: 测试客户端协议
+        run: pnpm --filter @voxelize/extraction-client --fail-if-no-match test
+      - name: 检查 Extraction TypeScript 代码
+        run: pnpm lint:extraction
+      - name: 构建客户端骨架
+        run: pnpm --filter @voxelize/extraction-client --fail-if-no-match build
+      - name: 检查演员测试工具类型
+        run: pnpm --filter @voxelize/extraction-e2e --fail-if-no-match typecheck
+      - name: 测试演员测试工具
+        run: pnpm --filter @voxelize/extraction-e2e --fail-if-no-match test:actor
+      - name: 生成现有协议包
+        run: pnpm --filter @voxelize/protocol --fail-if-no-match proto
+      - name: 构建现有 TypeScript 依赖
+        run: pnpm -r --fail-if-no-match --workspace-concurrency=1 --filter './packages/*' --filter '!@voxelize/core' build
+      - name: 测试现有 TypeScript 工作区
+        run: pnpm test

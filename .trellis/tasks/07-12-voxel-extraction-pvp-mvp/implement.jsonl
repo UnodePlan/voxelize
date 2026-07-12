@@ -1,0 +1,5 @@
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"实施会跨越认证、WebSocket、ECS、数据库与客户端状态，需要持续核对完整数据流和层间契约。"}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"实现前先复用 Voxelize 已有 ECS、物品、Method/Event、raycast 和客户端能力，避免在产品应用中重复造轮子。"}
+{"file":".trellis/tasks/07-12-voxel-extraction-pvp-mvp/research/repository-integration.md","reason":"包含引擎可复用边界、现有安全缺口、应用目录划分和核心通用扩展约束。"}
+{"file":".trellis/tasks/07-12-voxel-extraction-pvp-mvp/research/auth-persistence.md","reason":"包含 Reown/SIWE 会话、PostgreSQL schema、幂等结算与迁移约束。"}
+{"file":".trellis/tasks/07-12-voxel-extraction-pvp-mvp/research/gameplay-runtime.md","reason":"包含比赛状态机、ECS 顺序、挖掘原子 claim、资产守恒与掉落保管模型。"}
