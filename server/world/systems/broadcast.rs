@@ -153,6 +153,9 @@ impl<'a> System<'a> for BroadcastSystem {
 
             if let ClientFilter::Direct(id) = &filter {
                 if let Some(client) = clients.get(id) {
+                    if !client.attached {
+                        continue;
+                    }
                     if use_rtc {
                         if let Some(ref rtc_map) = rtc_map {
                             if let Some(rtc_sender) = rtc_map.get(id) {
@@ -171,6 +174,9 @@ impl<'a> System<'a> for BroadcastSystem {
             }
 
             clients.iter().for_each(|(id, client)| {
+                if !client.attached {
+                    return;
+                }
                 match &filter {
                     ClientFilter::All => {}
                     ClientFilter::Include(ids) => {

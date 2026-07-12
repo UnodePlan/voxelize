@@ -2,7 +2,7 @@ use hashbrown::HashMap;
 
 use specs::Entity;
 
-use crate::server::WsSender;
+use crate::{server::WsSender, ConnectionPrincipal};
 
 /// A client of the server.
 #[derive(Clone)]
@@ -18,6 +18,15 @@ pub struct Client {
 
     /// WebSocket sender to the client.
     pub sender: WsSender,
+
+    /// Authenticated owner. `None` is reserved for legacy sessions.
+    pub principal: Option<ConnectionPrincipal>,
+
+    /// Detached clients keep their entity but cannot receive or submit requests.
+    pub attached: bool,
+
+    /// Admission lease that created this client entity.
+    pub(crate) join_attempt_id: String,
 }
 
 pub type Clients = HashMap<String, Client>;

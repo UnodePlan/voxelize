@@ -84,7 +84,7 @@ impl<'a> System<'a> for EventsSystem {
                     return;
                 }
 
-                for (id, _) in clients.iter() {
+                for (id, _client) in clients.iter().filter(|(_, client)| client.attached) {
                     match &filter {
                         ClientFilter::All => {}
                         ClientFilter::Include(ids) => {
@@ -105,7 +105,7 @@ impl<'a> System<'a> for EventsSystem {
             }
             // No filter, but a location is set.
             else if let Some(location) = &location {
-                for (id, _) in clients.iter() {
+                for (id, _client) in clients.iter().filter(|(_, client)| client.attached) {
                     if interests.is_interested(id, location) {
                         let mut queue = dispatch_map.remove(id).unwrap_or_default();
                         queue.push(serialized.clone());
@@ -113,11 +113,14 @@ impl<'a> System<'a> for EventsSystem {
                     }
                 }
             } else {
-                clients.iter().for_each(|(id, _)| {
-                    let mut queue = dispatch_map.remove(id).unwrap_or_default();
-                    queue.push(serialized.clone());
-                    dispatch_map.insert(id.to_owned(), queue);
-                });
+                clients
+                    .iter()
+                    .filter(|(_, client)| client.attached)
+                    .for_each(|(id, _)| {
+                        let mut queue = dispatch_map.remove(id).unwrap_or_default();
+                        queue.push(serialized.clone());
+                        dispatch_map.insert(id.to_owned(), queue);
+                    });
             }
         });
 
@@ -134,6 +137,9 @@ impl<'a> System<'a> for EventsSystem {
             }
 
             let client = client.unwrap();
+            if !client.attached {
+                return;
+            }
             let message = Message::new(&MessageType::Event).events(&events).build();
             let encoded = encode_message(&message);
 

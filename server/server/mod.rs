@@ -1,10 +1,18 @@
+mod client_requests;
+mod connections;
+mod join;
 mod models;
+mod websocket;
+mod world_lifecycle;
+
+#[cfg(test)]
+mod tests;
 
 use std::time::{Duration, Instant};
 
 use actix::{
     fut::wrap_future, Actor, ActorFutureExt, Addr, AsyncContext, Context, Handler,
-    Message as ActixMessage, MessageResult,
+    Message as ActixMessage, MessageResult, WrapFuture,
 };
 use fern::colors::{Color, ColoredLevelConfig};
 use futures_util::future::join_all;
@@ -15,19 +23,21 @@ use nanoid::nanoid;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::sync::Arc;
-use tokio::sync::mpsc;
 
 use crate::{
     errors::AddWorldError,
-    world::{ClientPreferencesPatch, Registry, World, WorldConfig},
-    ChunkStatus, ClientJoinRequest, ClientLeaveRequest, ClientRequest, GetConfig, GetInfo,
-    GetWorldStats, Mesher, MessageQueues, Preload, Prepare, RtcSenders, Stats, SyncWorld, Tick,
-    TransportJoinRequest, TransportLeaveRequest, WorldStatsResponse,
+    world::{ClientPreferencesPatch, Registry, World},
+    ClientCancelJoinRequest, ClientDespawnRequest, ClientDetachOutcome, ClientDetachRequest,
+    ClientJoinRequest, ClientRequest, ConnectionPrincipal, GetInfo, GetWorldStats, HttpConfig,
+    Preload, Prepare, RtcSenders, SyncWorld, Tick, TransportJoinRequest, TransportLeaveRequest,
+    WorldStatsResponse,
 };
 
+use connections::{DetachedConnection, PendingJoin};
+pub use connections::{WsReceiver, WsSendError, WsSender};
 pub use models::*;
-
-pub type WsSender = mpsc::UnboundedSender<Vec<u8>>;
+pub(crate) use websocket::{ws_route, HandshakeConfig};
+pub use world_lifecycle::{AddWorld, RemoveWorld, RemoveWorldOutcome};
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -186,8 +196,17 @@ pub struct Server {
     /// A secret to join the server.
     pub secret: Option<String>,
 
+    /// HTTP and WebSocket security configuration.
+    pub http_config: HttpConfig,
+
     /// A map of all the worlds.
     pub worlds: HashMap<String, Addr<SyncWorld>>,
+
+    /// Stable instance ID for each world name.
+    world_generations: HashMap<String, String>,
+
+    /// World names waiting for their previous actor instance to stop completely.
+    removing_worlds: HashSet<String>,
 
     /// Registry of the server.
     pub registry: Registry,
@@ -203,7 +222,31 @@ pub struct Server {
     /// Value: (sender, world_name, connection_token)
     pub connections: HashMap<String, (WsSender, String, String)>,
 
-    /// Worlds with a tick already queued or running.
+    /// Authenticated principal for each connection. Legacy sessions have no entry.
+    pub connection_principals: HashMap<String, ConnectionPrincipal>,
+
+    /// Sessions waiting for an atomic World join acknowledgement.
+    pending_joins: HashMap<String, PendingJoin>,
+
+    /// Explicit leaves waiting for World to confirm despawn before rejoining.
+    leaving_sessions: HashMap<String, String>,
+
+    /// World-facing client ID for each active socket connection.
+    connection_client_ids: HashMap<String, String>,
+
+    /// Detached authenticated seats keyed by account ID for later rebind.
+    detached_connections: HashMap<String, DetachedConnection>,
+
+    /// Disconnects awaiting confirmation that World retained the client entity.
+    pending_detaches: HashMap<String, DetachedConnection>,
+
+    /// Detached seats currently being rebound, keyed by account ID.
+    pending_rebinds: HashMap<String, DetachedConnection>,
+
+    /// Admitted client requests currently queued or executing per World instance.
+    pending_world_requests: HashMap<String, usize>,
+
+    /// World instance IDs with a tick already queued or running.
     pending_world_ticks: HashSet<String>,
 
     /// The information sent to the client when requested.
@@ -237,8 +280,14 @@ impl Server {
     /// started right away.
     pub fn add_world(&mut self, mut world: World) -> Result<&mut Addr<SyncWorld>, AddWorldError> {
         let name = world.name.clone();
+        if self.worlds.contains_key(&name) || self.removing_worlds.contains(&name) {
+            return Err(AddWorldError);
+        }
+        // 内部代次不信任可变的公开 World.id，避免旧异步回调命中新实例。
+        let world_generation = nanoid!();
         let saving = world.config().saving;
         let save_dir = world.config().save_dir.clone();
+        let preload = world.config().preload;
         world.ecs_mut().insert(self.registry.clone());
 
         if let Some(rtc_senders) = &self.rtc_senders {
@@ -246,10 +295,15 @@ impl Server {
         }
 
         let addr = world.start();
-
-        if self.worlds.insert(name.clone(), addr).is_some() {
-            return Err(AddWorldError);
+        if self.started {
+            addr.do_send(Prepare);
+            if preload {
+                addr.do_send(Preload);
+            }
         }
+        self.worlds.insert(name.clone(), addr);
+        self.world_generations
+            .insert(name.clone(), world_generation);
 
         info!(
             "World created: {} ({})",
@@ -290,118 +344,6 @@ impl Server {
     /// Get the information of the server
     pub fn get_info(&mut self) -> Value {
         (self.info_handle)(self)
-    }
-
-    /// Handler for client's message.
-    pub(crate) fn on_request(&mut self, id: &str, data: Message) -> Option<String> {
-        if data.r#type == MessageType::Join as i32 {
-            let json: OnJoinRequest = serde_json::from_str(&data.json)
-                .expect("`on_join` error. Could not read JSON string.");
-
-            if !self.lost_sessions.contains_key(id) {
-                return Some(format!(
-                    "Client at {} is already in world: {}",
-                    id, json.world
-                ));
-            }
-
-            if let Some(world) = self.worlds.get_mut(&json.world) {
-                if let Some((sender, token)) = self.lost_sessions.remove(id) {
-                    world.do_send(ClientJoinRequest {
-                        id: id.to_owned(),
-                        username: json.username,
-                        sender: sender.clone(),
-                        preferences: json
-                            .flat_preferences
-                            .merge(json.preferences.unwrap_or_default()),
-                    });
-                    self.connections
-                        .insert(id.to_owned(), (sender, json.world, token));
-                    return None;
-                }
-
-                return Some("Something went wrong with joining. Maybe you called .join twice on the client?".to_owned());
-            }
-
-            return Some(format!(
-                "ID {} is attempting to connect to a non-existent world!",
-                id
-            ));
-        } else if data.r#type == MessageType::Leave as i32 {
-            if let Some(world) = self.worlds.get_mut(&data.text) {
-                if let Some((sender, _, token)) = self.connections.remove(id) {
-                    self.lost_sessions.insert(id.to_owned(), (sender, token));
-
-                    world.do_send(ClientLeaveRequest { id: id.to_owned() });
-                }
-            }
-
-            return None;
-        } else if data.r#type == MessageType::Action as i32 {
-            self.on_action(id, &data);
-
-            return None;
-        } else if data.r#type == MessageType::Transport as i32
-            || self.transport_sessions.contains_key(id)
-        {
-            if !self.transport_sessions.contains_key(id) {
-                return Some(
-                    "Someone who isn't a transport server is attempting to transport.".to_owned(),
-                );
-            }
-
-            if data.text.is_empty() {
-                return Some(format!(
-                    "Transport message missing world name (text field empty). Message type: {:?}",
-                    MessageType::try_from(data.r#type)
-                        .map(|t| format!("{:?}", t))
-                        .unwrap_or_else(|_| data.r#type.to_string())
-                ));
-            }
-
-            if let Some(world) = self.get_world_mut(&data.text) {
-                if world
-                    .try_send(ClientRequest {
-                        client_id: id.to_owned(),
-                        data,
-                    })
-                    .is_err()
-                {
-                    return Some("World is busy, please reconnect.".to_owned());
-                }
-
-                return None;
-            } else {
-                return Some(format!(
-                    "Transport message for unknown world '{}'. Message type: {:?}",
-                    data.text,
-                    MessageType::try_from(data.r#type)
-                        .map(|t| format!("{:?}", t))
-                        .unwrap_or_else(|_| data.r#type.to_string())
-                ));
-            }
-        }
-
-        let connection = self.connections.get(id);
-        if connection.is_none() {
-            return Some("You are not connected to a world!".to_owned());
-        }
-
-        let (_, world_name, _) = connection.unwrap().to_owned();
-
-        if let Some(world) = self.get_world_mut(&world_name) {
-            if world
-                .try_send(ClientRequest {
-                    client_id: id.to_owned(),
-                    data,
-                })
-                .is_err()
-            {
-                return Some("World is busy, please reconnect.".to_owned());
-            }
-        }
-
-        None
     }
 
     /// Prepare all worlds on the server to start.
@@ -533,28 +475,6 @@ impl Server {
         self.action_handles
             .insert(action.to_lowercase(), Arc::new(handle));
     }
-
-    /// Handler for `Action` type messages.
-    fn on_action(&mut self, _: &str, data: &Message) {
-        let json: OnActionRequest = serde_json::from_str(&data.json)
-            .expect("`on_action` error. Could not read JSON string.");
-        let action = json.action.to_lowercase();
-
-        info!("{:?}", &self.action_handles.keys());
-        info!("{:?}", &action);
-
-        if !self.action_handles.contains_key(&action) {
-            warn!(
-                "`Action` type messages received of type {}, but no action handler set.",
-                action
-            );
-            return;
-        }
-
-        let handle = self.action_handles.get(&action).unwrap().to_owned();
-
-        handle(json.data, self);
-    }
 }
 
 /// New chat session is created. Returns (client_id, connection_token).
@@ -562,6 +482,7 @@ impl Server {
 #[rtype(result = "(String, String)")]
 pub struct Connect {
     pub id: Option<String>,
+    pub principal: Option<crate::ConnectionPrincipal>,
     pub is_transport: bool,
     pub sender: WsSender,
 }
@@ -602,24 +523,26 @@ impl Actor for Server {
     type Context = Context<Self>;
 
     fn started(&mut self, ctx: &mut Self::Context) {
+        self.started = true;
         ctx.run_interval(Duration::from_millis(self.interval), |act, ctx| {
             let worlds_to_tick: Vec<_> = act
                 .worlds
                 .iter()
                 .filter_map(|(name, world)| {
-                    if act.pending_world_ticks.contains(name) {
+                    let generation = act.world_generations.get(name)?.clone();
+                    if act.pending_world_ticks.contains(&generation) {
                         None
                     } else {
-                        Some((name.clone(), world.clone()))
+                        Some((name.clone(), generation, world.clone()))
                     }
                 })
                 .collect();
 
-            for (world_name, world) in worlds_to_tick {
-                act.pending_world_ticks.insert(world_name.clone());
+            for (world_name, generation, world) in worlds_to_tick {
+                act.pending_world_ticks.insert(generation.clone());
                 ctx.spawn(
                     wrap_future(world.send(Tick)).map(move |result, act: &mut Server, _| {
-                        act.pending_world_ticks.remove(&world_name);
+                        act.pending_world_ticks.remove(&generation);
                         if let Err(error) = result {
                             warn!("World tick failed for {}: {:?}", world_name, error);
                         }
@@ -635,10 +558,10 @@ impl Actor for Server {
 /// Register new session and assign unique id to this session.
 /// Returns (client_id, connection_token).
 impl Handler<Connect> for Server {
-    type Result = MessageResult<Connect>;
+    type Result = actix::ResponseActFuture<Self, (String, String)>;
 
     fn handle(&mut self, msg: Connect, _: &mut Context<Self>) -> Self::Result {
-        let id = if msg.id.is_none() {
+        let id = if msg.principal.is_some() || msg.id.is_none() {
             nanoid!()
         } else {
             msg.id.unwrap()
@@ -656,7 +579,90 @@ impl Handler<Connect> for Server {
 
             self.transport_sessions.insert(id.to_owned(), msg.sender);
 
-            return MessageResult((id, token));
+            return Box::pin(actix::fut::ready((id, token)));
+        }
+
+        if let Some(principal) = msg.principal.clone() {
+            let account_id = principal.account_id.clone();
+            let detached = self
+                .detached_connections
+                .remove(&account_id)
+                .or_else(|| self.pending_detaches.remove(&account_id));
+
+            if let Some(detached) = detached {
+                let generation_matches = self
+                    .world_generations
+                    .get(&detached.world_name)
+                    .is_some_and(|generation| generation == &detached.world_generation);
+
+                if generation_matches {
+                    if let Some(world) = self.worlds.get(&detached.world_name).cloned() {
+                        let sender = msg.sender.clone();
+                        let request = crate::ClientRebindRequest {
+                            id: detached.client_id.clone(),
+                            sender: sender.clone(),
+                            principal: principal.clone(),
+                        };
+                        let connection_id = id.clone();
+                        let connection_token = token.clone();
+                        let rebind_world = world.clone();
+                        let rebind_request = world.send(request);
+                        self.pending_rebinds
+                            .insert(account_id.clone(), detached.clone());
+
+                        return Box::pin(rebind_request.into_actor(self).map(
+                            move |result, server, _| {
+                                let reservation_matches = server
+                                    .pending_rebinds
+                                    .get(&account_id)
+                                    .is_some_and(|current| current == &detached);
+                                let world_matches = server
+                                    .world_generations
+                                    .get(&detached.world_name)
+                                    .is_some_and(|generation| {
+                                        generation == &detached.world_generation
+                                    });
+                                if reservation_matches {
+                                    server.pending_rebinds.remove(&account_id);
+                                }
+
+                                let receipt = match result {
+                                    Ok(Ok(receipt)) => Some(receipt),
+                                    _ => None,
+                                };
+                                if receipt.is_some() && reservation_matches && world_matches {
+                                    server.connections.insert(
+                                        connection_id.clone(),
+                                        (sender, detached.world_name, connection_token.clone()),
+                                    );
+                                    server
+                                        .connection_client_ids
+                                        .insert(connection_id.clone(), detached.client_id);
+                                    server
+                                        .connection_principals
+                                        .insert(connection_id.clone(), principal);
+                                } else {
+                                    if let Some(receipt) = receipt {
+                                        rebind_world.do_send(ClientDespawnRequest {
+                                            id: receipt.client_id,
+                                            join_attempt_id: Some(receipt.join_attempt_id),
+                                        });
+                                    }
+                                    server.lost_sessions.insert(
+                                        connection_id.clone(),
+                                        (sender, connection_token.clone()),
+                                    );
+                                    server
+                                        .connection_principals
+                                        .insert(connection_id.clone(), principal);
+                                }
+
+                                (connection_id, connection_token)
+                            },
+                        ));
+                    }
+                }
+            }
         }
 
         let kick_msg = encode_message(
@@ -670,18 +676,40 @@ impl Handler<Connect> for Server {
             let _ = old_sender.send(kick_msg.clone());
         }
 
+        if let Some(pending) = self.pending_joins.remove(&id) {
+            info!("Kicking duplicate pending session: {}", id);
+            let _ = pending.sender.send(kick_msg.clone());
+            if let Some(world) = self.worlds.get(&pending.world_name) {
+                world.do_send(ClientCancelJoinRequest {
+                    id: pending.client_id,
+                    join_attempt_id: pending.attempt_id,
+                });
+            }
+        }
+
         if let Some((old_sender, world_name, _old_token)) = self.connections.remove(&id) {
             info!("Kicking duplicate in-world session: {}", id);
             let _ = old_sender.send(kick_msg);
+            let client_id = self
+                .connection_client_ids
+                .remove(&id)
+                .unwrap_or_else(|| id.clone());
             if let Some(world) = self.worlds.get_mut(&world_name) {
-                world.do_send(ClientLeaveRequest { id: id.clone() });
+                world.do_send(ClientDespawnRequest {
+                    id: client_id,
+                    join_attempt_id: None,
+                });
             }
         }
 
         self.lost_sessions
             .insert(id.to_owned(), (msg.sender, token.clone()));
 
-        MessageResult((id, token))
+        if let Some(principal) = msg.principal {
+            self.connection_principals.insert(id.clone(), principal);
+        }
+
+        Box::pin(actix::fut::ready((id, token)))
     }
 }
 
@@ -692,13 +720,85 @@ impl Handler<Connect> for Server {
 impl Handler<Disconnect> for Server {
     type Result = ();
 
-    fn handle(&mut self, msg: Disconnect, _: &mut Context<Self>) {
+    fn handle(&mut self, msg: Disconnect, ctx: &mut Context<Self>) {
+        if let Some(pending) = self.pending_joins.get(&msg.id) {
+            if pending.token == msg.token {
+                let pending = self.pending_joins.remove(&msg.id).unwrap();
+                if let Some(world) = self.worlds.get(&pending.world_name) {
+                    world.do_send(ClientCancelJoinRequest {
+                        id: pending.client_id,
+                        join_attempt_id: pending.attempt_id,
+                    });
+                }
+                self.connection_principals.remove(&msg.id);
+            }
+        }
+
         // Check connections: only remove if the token matches the current session
         if let Some((_, _, current_token)) = self.connections.get(&msg.id) {
             if *current_token == msg.token {
                 let (_, world_name, _) = self.connections.remove(&msg.id).unwrap();
-                if let Some(world) = self.worlds.get_mut(&world_name) {
-                    world.do_send(ClientLeaveRequest { id: msg.id.clone() });
+                let client_id = self
+                    .connection_client_ids
+                    .remove(&msg.id)
+                    .unwrap_or_else(|| msg.id.clone());
+                let principal = self.connection_principals.remove(&msg.id);
+                let generation = self.world_generations.get(&world_name).cloned();
+                let world = self.worlds.get(&world_name).cloned();
+
+                match (principal, generation, world) {
+                    (Some(principal), Some(world_generation), Some(world)) => {
+                        let account_id = principal.account_id;
+                        let reservation = DetachedConnection {
+                            connection_id: msg.id.clone(),
+                            world_name,
+                            client_id: client_id.clone(),
+                            world_generation,
+                            connection_token: msg.token.clone(),
+                        };
+                        self.pending_detaches
+                            .insert(account_id.clone(), reservation.clone());
+                        let detach_world = world.clone();
+                        let detach_request = world.send(ClientDetachRequest { id: client_id });
+                        ctx.spawn(
+                            detach_request
+                                .into_actor(self)
+                                .map(move |result, server, _| {
+                                    let reservation_matches = server
+                                        .pending_detaches
+                                        .get(&account_id)
+                                        .is_some_and(|current| current == &reservation);
+                                    if !reservation_matches {
+                                        return;
+                                    }
+                                    server.pending_detaches.remove(&account_id);
+
+                                    let world_matches = server
+                                        .world_generations
+                                        .get(&reservation.world_name)
+                                        .is_some_and(|generation| {
+                                            generation == &reservation.world_generation
+                                        });
+                                    if matches!(result, Ok(ClientDetachOutcome::Detached))
+                                        && world_matches
+                                    {
+                                        server.detached_connections.insert(account_id, reservation);
+                                    } else if matches!(result, Ok(ClientDetachOutcome::Detached)) {
+                                        detach_world.do_send(ClientDespawnRequest {
+                                            id: reservation.client_id,
+                                            join_attempt_id: None,
+                                        });
+                                    }
+                                }),
+                        );
+                    }
+                    (_, _, Some(world)) => {
+                        world.do_send(ClientDespawnRequest {
+                            id: client_id,
+                            join_attempt_id: None,
+                        });
+                    }
+                    _ => {}
                 }
             } else {
                 info!("Ignoring stale disconnect for {} (token mismatch)", msg.id);
@@ -713,10 +813,20 @@ impl Handler<Disconnect> for Server {
             info!("A transport server connection has ended.")
         }
 
+        if self
+            .leaving_sessions
+            .get(&msg.id)
+            .is_some_and(|token| token == &msg.token)
+        {
+            self.leaving_sessions.remove(&msg.id);
+            self.connection_principals.remove(&msg.id);
+        }
+
         // Check lost_sessions: only remove if the token matches
         if let Some((_, current_token)) = self.lost_sessions.get(&msg.id) {
             if *current_token == msg.token {
                 self.lost_sessions.remove(&msg.id);
+                self.connection_principals.remove(&msg.id);
             }
         }
     }
@@ -750,15 +860,6 @@ impl Handler<GetAllWorldStats> for Server {
     }
 }
 
-/// Handler for Message message.
-impl Handler<ClientMessage> for Server {
-    type Result = Option<String>;
-
-    fn handle(&mut self, msg: ClientMessage, _: &mut Context<Self>) -> Self::Result {
-        self.on_request(&msg.id, msg.data)
-    }
-}
-
 const DEFAULT_DEBUG: bool = true;
 const DEFAULT_PORT: u16 = 4000;
 const DEFAULT_ADDR: &str = "0.0.0.0";
@@ -773,6 +874,7 @@ pub struct ServerBuilder {
     serve: String,
     interval: u64,
     secret: Option<String>,
+    http_config: HttpConfig,
     registry: Option<Registry>,
 }
 
@@ -786,6 +888,7 @@ impl ServerBuilder {
             serve: DEFAULT_SERVE.to_owned(),
             interval: DEFAULT_INTERVAL,
             secret: None,
+            http_config: HttpConfig::legacy(),
             registry: None,
         }
     }
@@ -826,6 +929,12 @@ impl ServerBuilder {
         self
     }
 
+    /// Configure HTTP routes, limits, origins, and connection authentication.
+    pub fn http_config(mut self, config: HttpConfig) -> Self {
+        self.http_config = config;
+        self
+    }
+
     /// Configure the block registry of the server. Once a registry is configured, mutating it wouldn't
     /// change the server's block list.
     pub fn registry(mut self, registry: &Registry) -> Self {
@@ -849,16 +958,27 @@ impl ServerBuilder {
             debug: self.debug,
             interval: self.interval,
             secret: self.secret,
+            http_config: self.http_config,
 
             registry,
 
             started: false,
 
             connections: HashMap::default(),
+            connection_principals: HashMap::default(),
+            pending_joins: HashMap::default(),
+            leaving_sessions: HashMap::default(),
+            connection_client_ids: HashMap::default(),
+            detached_connections: HashMap::default(),
+            pending_detaches: HashMap::default(),
+            pending_rebinds: HashMap::default(),
+            pending_world_requests: HashMap::default(),
             lost_sessions: HashMap::default(),
             transport_sessions: HashMap::default(),
             pending_world_ticks: HashSet::default(),
             worlds: HashMap::default(),
+            world_generations: HashMap::default(),
+            removing_worlds: HashSet::default(),
             info_handle: default_info_handle,
             action_handles: HashMap::default(),
             rtc_senders: None,

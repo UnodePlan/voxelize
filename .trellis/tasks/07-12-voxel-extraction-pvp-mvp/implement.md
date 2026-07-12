@@ -26,13 +26,19 @@
 
 ## 阶段 1：Voxelize 核心信任边界
 
-- [ ] 抽出可插拔 HTTP 配置与异步 `ConnectionAuthenticator`，principal 替代 public 模式的查询参数 `client_id`。
-- [ ] 删除 secret 明文日志，配置精确 CORS/Origin、请求大小和有界队列；生产认证失败关闭，不回退 guest。
-- [ ] 将 World Join 改为有返回值的原子操作，World 接纳成功后 Server 才提交连接表；覆盖 10/11 人竞态。
-- [ ] 增加 opt-in strict policy：禁 raw voxel UPDATE、未知 Event 转发、客户端 flying/ghost 和未授权管理 Method。
-- [ ] 修复非法 MessageType、畸形 JSON、大小写 handler key、bulk 长度不一致等公网 panic。
-- [ ] 拆分 detach/rebind/despawn，并增加 prepare/preload/stop/remove World 的幂等生命周期。
-- [ ] 新逻辑拆入小模块；`server/server/mod.rs`、`server/world/mod.rs` 只保留必要接线。
+- [x] 抽出可插拔 HTTP 配置与异步 `ConnectionAuthenticator`，principal 替代 public 模式的查询参数 `client_id`。
+- [x] 删除 secret 明文日志，配置精确 CORS/Origin、请求大小和有界队列；生产认证失败关闭，不回退 guest。
+- [x] 将 World Join 改为有返回值的原子操作，World 接纳成功后 Server 才提交连接表；覆盖 10/11 人竞态。
+- [x] 增加 opt-in strict policy：禁 raw voxel UPDATE、未知 Event 转发、客户端 flying/ghost 和未授权管理 Method。
+- [x] 修复非法 MessageType、畸形 JSON、大小写 handler key、bulk 长度不一致等公网 panic。
+- [x] 拆分 detach/rebind/despawn，并增加 prepare/preload/stop/remove World 的幂等生命周期。
+- [x] 新逻辑拆入小模块；`server/server/mod.rs`、`server/world/mod.rs` 只保留必要接线。
+
+实现记录（2026-07-12）：新增 `HttpConfig` 的 legacy/public-strict 双模式、异步 `ConnectionAuthenticator`、精确 Origin/CORS 门禁、HTTP/WS 大小限制、有界出站与 World 请求队列，以及认证/消息超时；public 模式忽略查询参数身份并使用认证 principal 与服务端生成的单局公开玩家 ID。World Join 以 attempt/generation 租约原子接纳，World 返回 receipt 后 Server 才提交连接路由；离开、取消 Join、detach、rebind、despawn 分离并保持 Actor 邮箱顺序。World 生命周期完成 `Created -> Preparing -> Ready -> Stopping -> Stopped`、动态 AddWorld、幂等 RemoveWorld 和旧 Addr 关闭；strict policy 默认拒绝 raw UPDATE、移动特权、命令和未列入白名单的 Method/Event，同时修复非法枚举、JSON、bulk 和 handler key 的 panic 路径。客户端仅在显式 Leave 后允许下一局 INIT 替换公开 ID，同一席位重绑仍拒绝 ID 漂移。
+
+验证记录：`cargo test --lib --tests` 53/53、`cargo check --all-targets`、extraction-server engine 测试 9/9、extraction-server 格式与 Clippy 零警告、根 `pnpm test` 19/19、extraction-client 12/12 及生产构建、extraction E2E Actor 2/2、全部变更 Rust 文件的定向 rustfmt、Prettier 与 `git diff --check` 均通过。未修改 Cargo/pnpm manifest 或锁文件，新增代码未发现 secret/debug 输出。全仓 `cargo fmt --all -- --check` 仍被既有 mesher、灯光测试等格式差异阻塞；`@voxelize/core` build/types 仍因仓库缺少 `@voxelize/wasm-mesher` 生成物失败；旧 Demo 客户端 build 仍因其 TypeScript 工具链不能解析当前 `@types/d3-dispatch` 的 `const` 类型参数失败，均非本阶段差异。
+
+文件规模说明：新增生产模块均低于 300 行；`server/http.rs` 与 `server/server/websocket.rs` 的生产段分别为 297/270 行，超出部分仅为同文件测试。既有 `server/server/mod.rs` 与 `server/world/mod.rs` 在上游已超过 500 行，本阶段已将 Join、请求转发、连接状态、WebSocket、World 生命周期和客户端生命周期拆至小模块，保留文件只承载原有主体与必要接线；继续机械拆分会扩大本阶段回归范围，后续修改仍须优先向现有小模块收敛。
 
 验收：无需账号或玩法即可通过 Actor 测试证明 principal、原子 Join、strict 拒绝、重绑、World 销毁及 legacy 兼容。
 

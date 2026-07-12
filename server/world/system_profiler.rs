@@ -169,6 +169,13 @@ pub fn clear_timing_data_for_world(world_name: &str) {
     }
 }
 
+/// Remove all timing state for a destroyed World instance.
+pub fn remove_timing_data_for_world(world_name: &str) {
+    if let Ok(mut world_timings) = WORLD_TIMINGS.write() {
+        world_timings.remove(world_name);
+    }
+}
+
 /// Wraps a system so its `run` duration is recorded under `name` every tick.
 ///
 /// Applied automatically by [`TimedDispatcherBuilder`], so individual systems

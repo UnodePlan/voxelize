@@ -5,6 +5,7 @@ import { setWorkerInterval } from "../../libs/setWorkerInterval";
 import { WorkerPool } from "../../libs/worker-pool";
 
 import { NetIntercept } from "./intercept";
+import { resolveInitClientId } from "./client-id";
 import { WebRTCConnection } from "./webrtc";
 import DecodeWorker from "./workers/decode-worker.ts?worker&inline";
 
@@ -93,6 +94,8 @@ export class Network {
   private waitingForInit = false;
 
   private initPacketReceived = false;
+
+  private allowInitIdReplacement = false;
 
   private rtc: WebRTCConnection | null = null;
 
@@ -316,6 +319,7 @@ export class Network {
     }
 
     this.joined = false;
+    this.allowInitIdReplacement = true;
 
     this.send({
       type: "LEAVE",
@@ -489,14 +493,13 @@ export class Network {
       const { id } = message.json;
 
       if (id) {
-        if (this.clientInfo.id && this.clientInfo.id !== id) {
-          throw new Error(
-            "Something went wrong with IDs! Better check if you're passing two same ID's to the same Voxelize server.",
-          );
-        }
-
-        this.clientInfo.id = id;
+        this.clientInfo.id = resolveInitClientId(
+          this.clientInfo.id,
+          id,
+          this.allowInitIdReplacement,
+        );
       }
+      this.allowInitIdReplacement = false;
     }
 
     this.intercepts.forEach((intercept) => {

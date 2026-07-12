@@ -1,6 +1,6 @@
 use serde::Serialize;
 
-use super::generators::NoiseOptions;
+use super::{generators::NoiseOptions, ClientDisconnectPolicy, WorldRequestPolicy};
 
 /// World configuration, storing information of how a world is constructed.
 #[derive(Clone, Serialize)]
@@ -8,6 +8,12 @@ use super::generators::NoiseOptions;
 pub struct WorldConfig {
     /// Max clients for each world. Default is 100 clients.
     pub max_clients: usize,
+
+    /// Validation policy for client-originated requests.
+    pub request_policy: WorldRequestPolicy,
+
+    /// Whether a network disconnect despawns or only detaches the client entity.
+    pub client_disconnect_policy: ClientDisconnectPolicy,
 
     /// The horizontal dimension of the chunks in this world. Default is 16 blocks wide.
     pub chunk_size: usize,
@@ -101,7 +107,6 @@ pub struct WorldConfig {
     /// Whether chunk geometry should only be built by clients. Default is true.
     pub client_only_meshing: bool,
 
-
     pub entity_visible_radius: f32,
 }
 
@@ -156,6 +161,8 @@ const DEFAULT_CLIENT_ONLY_MESHING: bool = true;
 /// Builder for a world configuration.
 pub struct WorldConfigBuilder {
     max_clients: usize,
+    request_policy: WorldRequestPolicy,
+    client_disconnect_policy: ClientDisconnectPolicy,
     chunk_size: usize,
     sub_chunks: usize,
     min_chunk: [i32; 2],
@@ -195,6 +202,8 @@ impl WorldConfigBuilder {
     pub fn new() -> Self {
         Self {
             max_clients: DEFAULT_MAX_CLIENT,
+            request_policy: WorldRequestPolicy::legacy(),
+            client_disconnect_policy: ClientDisconnectPolicy::Despawn,
             chunk_size: DEFAULT_CHUNK_SIZE,
             sub_chunks: DEFAULT_SUB_CHUNKS,
             min_chunk: DEFAULT_MIN_CHUNK,
@@ -233,6 +242,16 @@ impl WorldConfigBuilder {
     /// Configure the maximum clients allowed for this world. Defaults is 100 clients.
     pub fn max_clients(mut self, max_clients: usize) -> Self {
         self.max_clients = max_clients;
+        self
+    }
+
+    pub fn request_policy(mut self, policy: WorldRequestPolicy) -> Self {
+        self.request_policy = policy;
+        self
+    }
+
+    pub fn client_disconnect_policy(mut self, policy: ClientDisconnectPolicy) -> Self {
+        self.client_disconnect_policy = policy;
         self
     }
 
@@ -421,6 +440,8 @@ impl WorldConfigBuilder {
 
         WorldConfig {
             max_clients: self.max_clients,
+            request_policy: self.request_policy,
+            client_disconnect_policy: self.client_disconnect_policy,
             chunk_size: self.chunk_size,
             sub_chunks: self.sub_chunks,
             max_height: self.max_height,

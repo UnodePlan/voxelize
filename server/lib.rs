@@ -1,27 +1,24 @@
 mod common;
 mod errors;
+mod http;
 mod libs;
 mod server;
 mod types;
 pub mod webrtc;
 mod world;
 
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
 use actix::{Actor, Addr};
 use actix_cors::Cors;
 use actix_files::{Files, NamedFile};
-use actix_web::{
-    web::{self, Query},
-    App, Error, HttpRequest, HttpResponse, HttpServer, Result,
-};
-use actix_ws::AggregatedMessage;
-use futures_util::StreamExt;
+use actix_web::{middleware, web, App, HttpResponse, HttpServer, Result};
 use hashbrown::HashMap;
-use log::{info, warn};
+use log::info;
 use tokio::sync::{mpsc, Mutex};
 
 pub use common::*;
+pub use http::*;
 pub use libs::*;
 pub use server::*;
 pub use types::*;
@@ -35,175 +32,12 @@ pub use world::*;
 
 pub type RtcSenders = Arc<Mutex<HashMap<String, mpsc::UnboundedSender<Vec<u8>>>>>;
 
-const CLIENT_MESSAGE_RESPONSE_TIMEOUT: Duration = Duration::from_secs(1);
-
 pub fn create_rtc_senders() -> RtcSenders {
     Arc::new(Mutex::new(HashMap::new()))
 }
 
 struct Config {
     serve: String,
-}
-
-async fn ws_route(
-    req: HttpRequest,
-    body: web::Payload,
-    srv: web::Data<Addr<Server>>,
-    secret: web::Data<Option<String>>,
-    options: Query<HashMap<String, String>>,
-) -> Result<HttpResponse, Error> {
-    if !secret.is_none() {
-        info!("Secret: {:?}", secret);
-        let error = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "wrong secret!");
-
-        if let Some(client_secret) = options.get("secret") {
-            if *client_secret != secret.as_deref().unwrap() {
-                warn!(
-                    "An attempt to join with a wrong secret was made: {}",
-                    client_secret
-                );
-                return Err(error.into());
-            }
-        } else {
-            warn!("An attempt to join with no secret key was made.");
-            return Err(error.into());
-        }
-    }
-
-    let id = if let Some(id) = options.get("client_id") {
-        id.to_owned()
-    } else {
-        "".to_owned()
-    };
-
-    let is_transport = options.contains_key("is_transport");
-
-    if is_transport {
-        info!("A new transport server has connected.");
-    }
-
-    info!("[WS] New connection with 16MB continuation limit");
-
-    let (response, session, stream) = actix_ws::handle(&req, body)?;
-
-    let stream = stream
-        .max_frame_size(16 * 1024 * 1024)
-        .aggregate_continuations()
-        .max_continuation_size(16 * 1024 * 1024);
-
-    actix_web::rt::spawn(handle_ws_connection(
-        id,
-        is_transport,
-        session,
-        stream,
-        srv.get_ref().clone(),
-    ));
-
-    Ok(response)
-}
-
-async fn handle_ws_connection(
-    initial_id: String,
-    is_transport: bool,
-    mut session: actix_ws::Session,
-    mut stream: impl StreamExt<Item = Result<AggregatedMessage, actix_ws::ProtocolError>> + Unpin,
-    server: Addr<Server>,
-) {
-    let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();
-
-    let (session_id, connection_token) = match server
-        .send(Connect {
-            id: if initial_id.is_empty() {
-                None
-            } else {
-                Some(initial_id)
-            },
-            is_transport,
-            sender: tx.clone(),
-        })
-        .await
-    {
-        Ok(result) => result,
-        Err(e) => {
-            warn!("[WS] Failed to register session: {:?}", e);
-            let _ = session.close(None).await;
-            return;
-        }
-    };
-
-    loop {
-        tokio::select! {
-            Some(msg) = rx.recv() => {
-                if session.binary(msg).await.is_err() {
-                    break;
-                }
-            }
-            msg = stream.next() => {
-                match msg {
-                    Some(Ok(AggregatedMessage::Binary(bytes))) => {
-                        let size_kb = bytes.len() as f64 / 1024.0;
-                        if size_kb > 50.0 {
-                            info!("[WS] Received large binary message: {:.2}KB", size_kb);
-                        }
-
-                        let message = match decode_message(&bytes.to_vec()) {
-                            Ok(m) => m,
-                            Err(e) => {
-                                warn!("[WS] Failed to decode message: {:?}", e);
-                                continue;
-                            }
-                        };
-
-                        match tokio::time::timeout(
-                            CLIENT_MESSAGE_RESPONSE_TIMEOUT,
-                            server.send(ClientMessage {
-                                id: session_id.clone(),
-                                data: message,
-                            }),
-                        )
-                        .await
-                        {
-                            Ok(Ok(Some(error_msg))) => {
-                                warn!("[WS] ClientMessage error: {}", error_msg);
-                                let error_response = encode_message(
-                                    &Message::new(&MessageType::Error).text(&error_msg).build(),
-                                );
-                                let _ = session.binary(error_response).await;
-                                break;
-                            }
-                            Ok(Ok(None)) => {}
-                            Ok(Err(e)) => {
-                                warn!("[WS] Actor mailbox error: {:?}", e);
-                                break;
-                            }
-                            Err(_) => {
-                                warn!("[WS] ClientMessage timed out");
-                                break;
-                            }
-                        }
-                    }
-                    Some(Ok(AggregatedMessage::Close(_))) => {
-                        break;
-                    }
-                    Some(Ok(AggregatedMessage::Ping(data))) => {
-                        let _ = session.pong(&data).await;
-                    }
-                    Some(Ok(_)) => {}
-                    Some(Err(e)) => {
-                        warn!("[WS] Protocol error: {:?}", e);
-                        break;
-                    }
-                    None => break,
-                }
-            }
-        }
-    }
-
-    server.do_send(Disconnect {
-        id: session_id,
-        token: connection_token,
-    });
-    let _ = session.close(None).await;
 }
 
 async fn index(path: web::Data<Config>) -> Result<NamedFile> {
@@ -224,6 +58,15 @@ pub struct Voxelize;
 
 impl Voxelize {
     pub async fn run(mut server: Server) -> std::io::Result<()> {
+        if server.http_config.security_mode() == ConnectionSecurityMode::PublicStrict
+            && server.secret.is_some()
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "public HTTP mode cannot use the legacy shared secret",
+            ));
+        }
+        server.http_config.validate()?;
         server.prepare().await;
         server.preload().await;
         server.started = true;
@@ -232,6 +75,7 @@ impl Voxelize {
         let port = server.port.to_owned();
         let serve = server.serve.to_owned();
         let secret = server.secret.to_owned();
+        let http_config = server.http_config.clone();
 
         let server_addr = server.start();
 
@@ -241,19 +85,36 @@ impl Voxelize {
 
         let srv = HttpServer::new(move || {
             let serve = serve.to_owned();
-            let secret = secret.to_owned();
-            let cors = Cors::permissive();
+            let http_config = http_config.clone();
+            let cors = build_cors(&http_config);
+            let handshake_config = HandshakeConfig {
+                secret: secret.clone(),
+                http: http_config.clone(),
+            };
+            let route_config = http_config.clone();
 
-            let app = App::new()
+            let mut app = App::new()
                 .wrap(cors)
-                .app_data(web::Data::new(secret))
+                .wrap(middleware::from_fn(strict_origin_guard))
+                .app_data(web::PayloadConfig::new(
+                    http_config.max_http_payload_size_bytes(),
+                ))
+                .app_data(
+                    web::JsonConfig::default().limit(http_config.max_http_payload_size_bytes()),
+                )
+                .app_data(web::Data::new(http_config.clone()))
+                .app_data(web::Data::new(handshake_config))
                 .app_data(web::Data::new(server_addr.clone()))
                 .app_data(web::Data::new(Config {
                     serve: serve.to_owned(),
                 }))
                 .route("/", web::get().to(index))
                 .route("/ws/", web::get().to(ws_route))
-                .route("/info", web::get().to(info));
+                .configure(move |config| route_config.apply_routes(config));
+
+            if http_config.exposes_info() {
+                app = app.route("/info", web::get().to(info));
+            }
 
             if serve.is_empty() {
                 app
@@ -266,5 +127,119 @@ impl Voxelize {
         info!("Voxelize backend running on http://{}:{}", addr, port);
 
         srv.run().await
+    }
+}
+
+fn build_cors(config: &HttpConfig) -> Cors {
+    match config.cors() {
+        CorsPolicy::Permissive => Cors::permissive(),
+        CorsPolicy::AllowList(origins) => origins.iter().fold(
+            Cors::default()
+                .allowed_methods(["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
+                .allow_any_header()
+                .block_on_origin_mismatch(true)
+                .supports_credentials(),
+            |cors, origin| cors.allowed_origin(origin),
+        ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+
+    use actix_web::{
+        http::{header, StatusCode},
+        middleware, test, web, App, HttpResponse,
+    };
+
+    use super::*;
+
+    async fn counted_route(hits: web::Data<Arc<AtomicUsize>>) -> HttpResponse {
+        hits.fetch_add(1, Ordering::SeqCst);
+        HttpResponse::Ok().finish()
+    }
+
+    fn strict_config() -> HttpConfig {
+        HttpConfig::authenticated(|_: ConnectionAuthRequest| async {
+            Ok(ConnectionPrincipal::new("account-1", "session-1"))
+        })
+        .allowed_origins(["https://game.example"])
+    }
+
+    #[actix_web::test]
+    async fn strict_origin_guard_rejects_before_custom_route() {
+        let config = strict_config();
+        let hits = Arc::new(AtomicUsize::new(0));
+        let app = test::init_service(
+            App::new()
+                .wrap(build_cors(&config))
+                .wrap(middleware::from_fn(strict_origin_guard))
+                .app_data(web::Data::new(config))
+                .app_data(web::Data::new(hits.clone()))
+                .route("/custom", web::get().to(counted_route)),
+        )
+        .await;
+
+        let denied_requests = [
+            test::TestRequest::get().uri("/custom").to_request(),
+            test::TestRequest::get()
+                .uri("/custom")
+                .append_header((header::ORIGIN, "https://game.example"))
+                .append_header((header::ORIGIN, "https://game.example"))
+                .to_request(),
+            test::TestRequest::get()
+                .uri("/custom")
+                .insert_header((header::ORIGIN, "null"))
+                .to_request(),
+            test::TestRequest::get()
+                .uri("/custom")
+                .insert_header((header::ORIGIN, "https://evil.example"))
+                .to_request(),
+        ];
+
+        for request in denied_requests {
+            let response = test::call_service(&app, request).await;
+            assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        }
+        assert_eq!(hits.load(Ordering::SeqCst), 0);
+
+        let allowed = test::TestRequest::get()
+            .uri("/custom")
+            .insert_header((header::ORIGIN, "https://game.example"))
+            .to_request();
+        let response = test::call_service(&app, allowed).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+    }
+
+    #[actix_web::test]
+    async fn legacy_origin_guard_keeps_requests_compatible() {
+        let config = HttpConfig::legacy();
+        let hits = Arc::new(AtomicUsize::new(0));
+        let app = test::init_service(
+            App::new()
+                .wrap(build_cors(&config))
+                .wrap(middleware::from_fn(strict_origin_guard))
+                .app_data(web::Data::new(config))
+                .app_data(web::Data::new(hits.clone()))
+                .route("/custom", web::get().to(counted_route)),
+        )
+        .await;
+
+        let missing_origin = test::TestRequest::get().uri("/custom").to_request();
+        let response = test::call_service(&app, missing_origin).await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let arbitrary_origin = test::TestRequest::get()
+            .uri("/custom")
+            .insert_header((header::ORIGIN, "https://legacy.example"))
+            .to_request();
+        let response = test::call_service(&app, arbitrary_origin).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(hits.load(Ordering::SeqCst), 2);
     }
 }

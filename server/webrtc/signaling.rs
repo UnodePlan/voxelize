@@ -1,6 +1,6 @@
-use std::sync::Arc;
+use std::{future::Ready, sync::Arc};
 
-use actix_web::{web, Error, HttpResponse};
+use actix_web::{web, Error, FromRequest, HttpRequest, HttpResponse};
 use bytes::Bytes;
 use log::info;
 use serde::{Deserialize, Serialize};
@@ -14,7 +14,9 @@ use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
 use webrtc::peer_connection::RTCPeerConnection;
 
 use super::datachannel::{fragment_message, FragmentAssembler};
-use crate::{decode_message, ClientMessage, RtcSenders, Server};
+use crate::{
+    decode_message, ClientMessage, ConnectionSecurityMode, HttpConfig, RtcSenders, Server,
+};
 
 use actix::Addr;
 use hashbrown::HashMap;
@@ -40,7 +42,38 @@ pub struct RtcCandidateRequest {
     pub sdp_mline_index: Option<u16>,
 }
 
+fn rtc_disabled(config: Option<&HttpConfig>) -> bool {
+    matches!(
+        config.map(HttpConfig::security_mode),
+        Some(ConnectionSecurityMode::PublicStrict)
+    )
+}
+
+/// 仅用于让旧信令路由在严格模式下先于 JSON 和其他依赖提取返回 403。
+#[doc(hidden)]
+pub struct LegacyRtcAccess;
+
+impl FromRequest for LegacyRtcAccess {
+    type Error = Error;
+    type Future = Ready<Result<Self, Self::Error>>;
+
+    fn from_request(request: &HttpRequest, _payload: &mut actix_web::dev::Payload) -> Self::Future {
+        let config = request
+            .app_data::<web::Data<HttpConfig>>()
+            .map(|config| config.get_ref());
+
+        if rtc_disabled(config) {
+            std::future::ready(Err(actix_web::error::ErrorForbidden(
+                "legacy WebRTC signaling is disabled",
+            )))
+        } else {
+            std::future::ready(Ok(Self))
+        }
+    }
+}
+
 pub async fn rtc_offer(
+    _access: LegacyRtcAccess,
     body: web::Json<RtcOfferRequest>,
     api: web::Data<Arc<API>>,
     peers: web::Data<WebRTCPeers>,
@@ -193,6 +226,7 @@ pub async fn rtc_offer(
 }
 
 pub async fn rtc_candidate(
+    _access: LegacyRtcAccess,
     body: web::Json<RtcCandidateRequest>,
     peers: web::Data<WebRTCPeers>,
 ) -> Result<HttpResponse, Error> {
@@ -214,4 +248,59 @@ pub async fn rtc_candidate(
     })?;
 
     Ok(HttpResponse::Ok().json(serde_json::json!({"status": "ok"})))
+}
+
+#[cfg(test)]
+mod tests {
+    use actix_web::{http::StatusCode, test, web, App};
+
+    use super::*;
+    use crate::{ConnectionAuthRequest, ConnectionPrincipal};
+
+    fn strict_config() -> HttpConfig {
+        HttpConfig::authenticated(|_: ConnectionAuthRequest| async {
+            Ok(ConnectionPrincipal::new("account-1", "session-1"))
+        })
+        .allowed_origins(["https://game.example"])
+    }
+
+    #[actix_web::test]
+    async fn public_strict_rejects_both_legacy_rtc_handlers() {
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(strict_config()))
+                .route("/rtc/offer", web::post().to(rtc_offer))
+                .route("/rtc/candidate", web::post().to(rtc_candidate)),
+        )
+        .await;
+
+        for path in ["/rtc/offer", "/rtc/candidate"] {
+            // 即使缺少 JSON 和其他 RTC app data，也必须由首个门禁稳定返回 403。
+            let request = test::TestRequest::post().uri(path).to_request();
+            let response = test::call_service(&app, request).await;
+            assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        }
+    }
+
+    #[actix_web::test]
+    async fn rtc_candidate_without_http_config_keeps_legacy_behavior() {
+        let peers: WebRTCPeers = Arc::new(Mutex::new(HashMap::new()));
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(peers))
+                .route("/rtc/candidate", web::post().to(rtc_candidate)),
+        )
+        .await;
+
+        let request = test::TestRequest::post()
+            .uri("/rtc/candidate")
+            .set_json(serde_json::json!({
+                "client_id": "legacy-client",
+                "candidate": "unused"
+            }))
+            .to_request();
+        let response = test::call_service(&app, request).await;
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
 }

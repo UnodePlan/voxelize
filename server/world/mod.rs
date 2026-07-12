@@ -1,4 +1,5 @@
 mod bookkeeping;
+mod client_lifecycle;
 mod clients;
 mod components;
 mod config;
@@ -9,11 +10,13 @@ mod events;
 mod generators;
 mod interests;
 pub mod items;
+mod lifecycle;
 mod messages;
 mod metadata;
 mod physics;
 mod profiler;
 mod registry;
+mod request_policy;
 mod stats;
 pub mod system_profiler;
 mod systems;
@@ -21,11 +24,14 @@ mod types;
 mod utils;
 mod voxels;
 
+#[cfg(test)]
+mod tests;
+
+use actix::Addr;
 use actix::{
-    Actor, AsyncContext, Context, Handler, Message as ActixMessage, MessageResult, SyncContext,
+    Actor, ActorContext, Arbiter, Context, Handler, Message as ActixMessage, MessageResult,
 };
-use actix::{Addr, SyncArbiter};
-use hashbrown::HashMap;
+use hashbrown::{HashMap, HashSet};
 use log::{error, info, warn};
 use metadata::WorldMetadata;
 use nanoid::nanoid;
@@ -51,7 +57,8 @@ use crate::{
     encode_message,
     protocols::Peer,
     server::{Message, MessageType, WsSender},
-    EntityOperation, EntityProtocol, MethodProtocol, PeerProtocol, Server, Vec2, Vec3,
+    ConnectionPrincipal, EntityOperation, EntityProtocol, MethodProtocol, PeerProtocol, Server,
+    Vec2, Vec3,
 };
 
 use super::common::ClientFilter;
@@ -67,9 +74,11 @@ pub use events::*;
 pub use generators::*;
 pub use interests::*;
 pub use items::*;
+pub use lifecycle::*;
 pub use messages::*;
 pub use physics::*;
 pub use registry::*;
+pub use request_policy::*;
 pub use stats::*;
 pub use system_profiler::*;
 pub use systems::*;
@@ -275,6 +284,9 @@ pub struct World {
     /// The progress of preloading.
     pub preload_progress: f32,
 
+    /// Lifecycle gate for joins and requests.
+    pub lifecycle: WorldLifecycleState,
+
     /// Entity component system world.
     ecs: ECSWorld,
 
@@ -295,6 +307,9 @@ pub struct World {
     /// The metadata parser for clients.
     client_parser: Arc<dyn Fn(&mut World, &str, Entity) + Send + Sync>,
 
+    /// Strict worlds require an application validator before accepting movement metadata.
+    client_parser_is_default: bool,
+
     /// The handler for `Method`s.
     method_handles: HashMap<String, Arc<dyn Fn(&mut World, &str, &str) + Send + Sync>>,
 
@@ -310,6 +325,9 @@ pub struct World {
     /// A map to spawn and create entities.
     entity_loaders:
         HashMap<String, Arc<dyn Fn(&mut World, MetadataComp) -> EntityBuilder + Send + Sync>>,
+
+    /// Join attempts cancelled before their World message was processed.
+    cancelled_join_attempts: HashSet<String>,
 
     extra_init_data: HashMap<String, serde_json::Value>,
 
@@ -338,6 +356,7 @@ pub struct WorldInfo {
     pub config: WorldConfig,
     pub preloading: bool,
     pub preload_progress: f32,
+    pub lifecycle: WorldLifecycleState,
 }
 
 #[derive(ActixMessage)]
@@ -377,12 +396,14 @@ pub(crate) struct ClientRequest {
 }
 
 #[derive(ActixMessage)]
-#[rtype(result = "()")]
-pub(crate) struct ClientJoinRequest {
+#[rtype(result = "Result<ClientJoinReceipt, ClientJoinError>")]
+pub struct ClientJoinRequest {
     pub id: String,
     pub username: String,
     pub sender: WsSender,
     pub preferences: ClientPreferencesPatch,
+    pub principal: Option<ConnectionPrincipal>,
+    pub join_attempt_id: String,
 }
 
 #[derive(ActixMessage)]
@@ -390,6 +411,44 @@ pub(crate) struct ClientJoinRequest {
 pub(crate) struct ClientLeaveRequest {
     pub id: String,
 }
+
+#[derive(ActixMessage)]
+#[rtype(result = "ClientDetachOutcome")]
+pub struct ClientDetachRequest {
+    pub id: String,
+}
+
+#[derive(ActixMessage)]
+#[rtype(result = "Result<ClientJoinReceipt, ClientRebindError>")]
+pub struct ClientRebindRequest {
+    pub id: String,
+    pub sender: WsSender,
+    pub principal: ConnectionPrincipal,
+}
+
+#[derive(ActixMessage)]
+#[rtype(result = "bool")]
+pub struct ClientDespawnRequest {
+    pub id: String,
+    pub join_attempt_id: Option<String>,
+}
+
+#[derive(ActixMessage)]
+#[rtype(result = "bool")]
+pub struct ClientCancelJoinRequest {
+    pub id: String,
+    pub join_attempt_id: String,
+}
+
+#[derive(ActixMessage)]
+#[rtype(result = "()")]
+pub struct ClientForgetJoinAttemptRequest {
+    pub join_attempt_id: String,
+}
+
+#[derive(ActixMessage)]
+#[rtype(result = "WorldStopSummary")]
+pub struct StopWorld;
 
 #[derive(ActixMessage)]
 #[rtype(result = "()")]
@@ -405,17 +464,17 @@ pub struct TransportLeaveRequest {
 }
 
 // Create a new struct that will be the actual actor
-pub struct SyncWorld(Arc<std::sync::RwLock<World>>);
+pub struct SyncWorld(Arc<std::sync::RwLock<World>>, actix::ArbiterHandle);
 
 impl Actor for SyncWorld {
-    type Context = SyncContext<Self>;
+    type Context = Context<Self>;
 }
 
 // Implement handler for Tick message
 impl Handler<Tick> for SyncWorld {
     type Result = ();
 
-    fn handle(&mut self, _: Tick, _: &mut SyncContext<Self>) {
+    fn handle(&mut self, _: Tick, _: &mut Context<Self>) {
         self.0.write().unwrap().tick();
     }
 }
@@ -423,7 +482,7 @@ impl Handler<Tick> for SyncWorld {
 impl Handler<Prepare> for SyncWorld {
     type Result = ();
 
-    fn handle(&mut self, _: Prepare, _: &mut SyncContext<Self>) {
+    fn handle(&mut self, _: Prepare, _: &mut Context<Self>) {
         self.0.write().unwrap().prepare();
     }
 }
@@ -431,7 +490,7 @@ impl Handler<Prepare> for SyncWorld {
 impl Handler<GetConfig> for SyncWorld {
     type Result = MessageResult<GetConfig>;
 
-    fn handle(&mut self, _: GetConfig, _: &mut SyncContext<Self>) -> Self::Result {
+    fn handle(&mut self, _: GetConfig, _: &mut Context<Self>) -> Self::Result {
         MessageResult(self.0.read().unwrap().config().make_copy())
     }
 }
@@ -439,7 +498,7 @@ impl Handler<GetConfig> for SyncWorld {
 impl Handler<GetInfo> for SyncWorld {
     type Result = MessageResult<GetInfo>;
 
-    fn handle(&mut self, _: GetInfo, _: &mut SyncContext<Self>) -> Self::Result {
+    fn handle(&mut self, _: GetInfo, _: &mut Context<Self>) -> Self::Result {
         let world = self.0.read().unwrap();
         let config = world.config().make_copy();
         MessageResult(WorldInfo {
@@ -447,6 +506,7 @@ impl Handler<GetInfo> for SyncWorld {
             config,
             preloading: world.preloading,
             preload_progress: world.preload_progress,
+            lifecycle: world.lifecycle,
         })
     }
 }
@@ -454,7 +514,7 @@ impl Handler<GetInfo> for SyncWorld {
 impl Handler<GetWorldStats> for SyncWorld {
     type Result = MessageResult<GetWorldStats>;
 
-    fn handle(&mut self, _: GetWorldStats, _: &mut SyncContext<Self>) -> Self::Result {
+    fn handle(&mut self, _: GetWorldStats, _: &mut Context<Self>) -> Self::Result {
         let world = self.0.read().unwrap();
         MessageResult(world.get_stats())
     }
@@ -463,7 +523,7 @@ impl Handler<GetWorldStats> for SyncWorld {
 impl Handler<Preload> for SyncWorld {
     type Result = ();
 
-    fn handle(&mut self, _: Preload, _: &mut SyncContext<Self>) {
+    fn handle(&mut self, _: Preload, _: &mut Context<Self>) {
         self.0.write().unwrap().preload();
     }
 }
@@ -472,34 +532,109 @@ impl Handler<Preload> for SyncWorld {
 impl Handler<ClientRequest> for SyncWorld {
     type Result = ();
 
-    fn handle(&mut self, msg: ClientRequest, _: &mut SyncContext<Self>) {
+    fn handle(&mut self, msg: ClientRequest, _: &mut Context<Self>) {
         self.0.write().unwrap().on_request(&msg.client_id, msg.data);
     }
 }
 
 impl Handler<ClientJoinRequest> for SyncWorld {
-    type Result = ();
+    type Result = MessageResult<ClientJoinRequest>;
 
-    fn handle(&mut self, msg: ClientJoinRequest, _: &mut SyncContext<Self>) {
-        self.0
-            .write()
-            .unwrap()
-            .add_client(&msg.id, &msg.username, &msg.sender, msg.preferences);
+    fn handle(&mut self, msg: ClientJoinRequest, _: &mut Context<Self>) -> Self::Result {
+        MessageResult(self.0.write().unwrap().add_client(
+            &msg.id,
+            &msg.username,
+            &msg.sender,
+            msg.preferences,
+            msg.principal,
+            msg.join_attempt_id,
+        ))
     }
 }
 
 impl Handler<ClientLeaveRequest> for SyncWorld {
     type Result = ();
 
-    fn handle(&mut self, msg: ClientLeaveRequest, _: &mut SyncContext<Self>) {
+    fn handle(&mut self, msg: ClientLeaveRequest, _: &mut Context<Self>) {
         self.0.write().unwrap().remove_client(&msg.id);
+    }
+}
+
+impl Handler<ClientDetachRequest> for SyncWorld {
+    type Result = MessageResult<ClientDetachRequest>;
+
+    fn handle(&mut self, msg: ClientDetachRequest, _: &mut Context<Self>) -> Self::Result {
+        MessageResult(self.0.write().unwrap().detach_client(&msg.id))
+    }
+}
+
+impl Handler<ClientRebindRequest> for SyncWorld {
+    type Result = MessageResult<ClientRebindRequest>;
+
+    fn handle(&mut self, msg: ClientRebindRequest, _: &mut Context<Self>) -> Self::Result {
+        MessageResult(
+            self.0
+                .write()
+                .unwrap()
+                .rebind_client(&msg.id, &msg.sender, &msg.principal),
+        )
+    }
+}
+
+impl Handler<ClientDespawnRequest> for SyncWorld {
+    type Result = MessageResult<ClientDespawnRequest>;
+
+    fn handle(&mut self, msg: ClientDespawnRequest, _: &mut Context<Self>) -> Self::Result {
+        let mut world = self.0.write().unwrap();
+        let removed = if let Some(attempt_id) = msg.join_attempt_id {
+            world.remove_client_for_join_attempt(&msg.id, &attempt_id)
+        } else {
+            world.remove_client(&msg.id)
+        };
+        MessageResult(removed)
+    }
+}
+
+impl Handler<ClientCancelJoinRequest> for SyncWorld {
+    type Result = MessageResult<ClientCancelJoinRequest>;
+
+    fn handle(&mut self, msg: ClientCancelJoinRequest, _: &mut Context<Self>) -> Self::Result {
+        MessageResult(
+            self.0
+                .write()
+                .unwrap()
+                .cancel_join_attempt(&msg.id, &msg.join_attempt_id),
+        )
+    }
+}
+
+impl Handler<ClientForgetJoinAttemptRequest> for SyncWorld {
+    type Result = ();
+
+    fn handle(&mut self, msg: ClientForgetJoinAttemptRequest, _: &mut Context<Self>) {
+        self.0
+            .write()
+            .unwrap()
+            .cancelled_join_attempts
+            .remove(&msg.join_attempt_id);
+    }
+}
+
+impl Handler<StopWorld> for SyncWorld {
+    type Result = MessageResult<StopWorld>;
+
+    fn handle(&mut self, _: StopWorld, context: &mut Context<Self>) -> Self::Result {
+        let summary = self.0.write().unwrap().stop();
+        context.stop();
+        self.1.stop();
+        MessageResult(summary)
     }
 }
 
 impl Handler<TransportJoinRequest> for SyncWorld {
     type Result = ();
 
-    fn handle(&mut self, msg: TransportJoinRequest, _: &mut SyncContext<Self>) {
+    fn handle(&mut self, msg: TransportJoinRequest, _: &mut Context<Self>) {
         self.0.write().unwrap().add_transport(&msg.id, &msg.sender);
     }
 }
@@ -507,7 +642,7 @@ impl Handler<TransportJoinRequest> for SyncWorld {
 impl Handler<TransportLeaveRequest> for SyncWorld {
     type Result = ();
 
-    fn handle(&mut self, msg: TransportLeaveRequest, _: &mut SyncContext<Self>) {
+    fn handle(&mut self, msg: TransportLeaveRequest, _: &mut Context<Self>) {
         self.0.write().unwrap().remove_transport(&msg.id);
     }
 }
@@ -515,7 +650,6 @@ impl Handler<TransportLeaveRequest> for SyncWorld {
 fn dispatcher() -> TimedDispatcherBuilder<'static, 'static> {
     TimedDispatcherBuilder::new()
         .with(UpdateStatsSystem, "update-stats", &[])
-        .with(EntitiesMetaSystem, "entities-meta", &["physics"])
         .with(PeersMetaSystem, "peers-meta", &[])
         .with(CurrentChunkSystem, "current-chunk", &[])
         .with(ChunkUpdatingSystem, "chunk-updating", &["current-chunk"])
@@ -532,6 +666,7 @@ fn dispatcher() -> TimedDispatcherBuilder<'static, 'static> {
             "physics",
             &["current-chunk", "update-stats", "chunk-updating"],
         )
+        .with(EntitiesMetaSystem, "entities-meta", &["physics"])
         .with(DataSavingSystem, "entities-saving", &["entities-meta"])
         .with(
             EntitiesSendingSystem::default(),
@@ -673,6 +808,7 @@ impl World {
             started: false,
             preloading: false,
             preload_progress: 0.0,
+            lifecycle: WorldLifecycleState::Created,
 
             ecs,
 
@@ -681,7 +817,9 @@ impl World {
             method_handles: HashMap::default(),
             event_handles: HashMap::default(),
             entity_loaders: HashMap::default(),
+            cancelled_join_attempts: HashSet::default(),
             client_parser: Arc::new(default_client_parser),
+            client_parser_is_default: true,
             client_modifier: None,
             client_leave_modifier: None,
             transport_handle: None,
@@ -715,8 +853,10 @@ impl World {
         });
 
         world.set_method_handle("vox-builtin:set-time", |world, _, payload| {
-            let payload: BuiltInSetTimeMethodPayload = serde_json::from_str(payload)
-                .expect("Could not parse vox-builtin:set-time payload.");
+            let Ok(payload) = serde_json::from_str::<BuiltInSetTimeMethodPayload>(payload) else {
+                warn!("Rejected malformed vox-builtin:set-time payload.");
+                return;
+            };
             let time_per_day = world.config().time_per_day as f32;
             world.stats_mut().set_time(payload.time % time_per_day);
         });
@@ -852,14 +992,15 @@ impl World {
         world
     }
 
-    pub fn start(mut self) -> Addr<SyncWorld> {
+    pub fn start(self) -> Addr<SyncWorld> {
         // self.prepare();
         // self.preload();
 
         let world = Arc::new(RwLock::new(self));
-        let addr = SyncArbiter::start(1, move || SyncWorld(world.clone()));
-
-        addr
+        let arbiter = Arbiter::new();
+        let handle = arbiter.handle();
+        let stop_handle = handle.clone();
+        SyncWorld::start_in_arbiter(&handle, move |_| SyncWorld(world, stop_handle))
     }
 
     /// Get a reference to the ECS world..
@@ -926,188 +1067,6 @@ impl World {
         self.write_resource::<Transports>().remove(id);
     }
 
-    /// Add a client to the world by an ID and a WebSocket sender.
-    pub(crate) fn add_client(
-        &mut self,
-        id: &str,
-        username: &str,
-        sender: &WsSender,
-        preferences: ClientPreferencesPatch,
-    ) {
-        let body =
-            RigidBody::new(&AABB::new().scale_x(0.8).scale_y(1.8).scale_z(0.8).build()).build();
-
-        let interactor = self.physics_mut().register(&body);
-
-        let ent = self
-            .ecs
-            .create_entity()
-            .with(ClientFlag::default())
-            .with(ClientPreferencesComp(
-                ClientPreferences::default().apply_patch(preferences),
-            ))
-            .with(IDComp::new(id))
-            .with(NameComp::new(username))
-            .with(AddrComp::new(sender))
-            .with(ChunkRequestsComp::default())
-            .with(CurrentChunkComp::default())
-            .with(MetadataComp::default())
-            .with(PositionComp::default())
-            .with(DirectionComp::default())
-            .with(RigidBodyComp::new(&body))
-            .with(InteractorComp::new(&interactor))
-            .with(CollisionsComp::new())
-            .build();
-
-        if let Some(modifier) = self.client_modifier.to_owned() {
-            modifier(self, ent);
-        }
-
-        let saved_position = self
-            .read_component::<PositionComp>()
-            .get(ent)
-            .map(|p| [p.0 .0, p.0 .1, p.0 .2])
-            .filter(|p| p[0] != 0.0 || p[1] != 0.0 || p[2] != 0.0);
-
-        let saved_direction = self
-            .read_component::<DirectionComp>()
-            .get(ent)
-            .map(|d| [d.0 .0, d.0 .1, d.0 .2])
-            .filter(|d| d[0] != 0.0 || d[1] != 0.0 || d[2] != 0.0);
-
-        let saved_is_flying = self
-            .read_component::<RigidBodyComp>()
-            .get(ent)
-            .map(|body| body.0.gravity_multiplier == 0.0 && body.0.aabb.width() > 0.0);
-
-        let saved_is_ghost = self
-            .read_component::<RigidBodyComp>()
-            .get(ent)
-            .map(|body| body.0.aabb.width() <= 0.0);
-        let saved_is_swimming = self
-            .read_component::<RigidBodyComp>()
-            .get(ent)
-            .map(|body| body.0.is_swimming);
-
-        let (init_message, init_entity_ids) = self.generate_init_message(
-            id,
-            saved_position,
-            saved_direction,
-            saved_is_flying,
-            saved_is_ghost,
-            saved_is_swimming,
-        );
-
-        self.clients_mut().insert(
-            id.to_owned(),
-            Client {
-                id: id.to_owned(),
-                entity: ent,
-                username: username.to_owned(),
-                sender: sender.clone(),
-            },
-        );
-
-        self.entity_ids_mut().insert(id.to_owned(), ent.id());
-
-        {
-            let mut bookkeeping = self.write_resource::<Bookkeeping>();
-            let known = bookkeeping
-                .client_known_entities
-                .entry(id.to_owned())
-                .or_default();
-            for entity_id in init_entity_ids {
-                known.insert(entity_id);
-            }
-        }
-
-        self.send(sender, &init_message);
-
-        let join_message = Message::new(&MessageType::Join).text(id).build();
-        self.broadcast(join_message, ClientFilter::All);
-
-        info!("Client at {} joined the server to world: {}", id, self.name);
-    }
-
-    /// Remove a client from the world by endpoint.
-    pub(crate) fn remove_client(&mut self, id: &str) {
-        let removed = self.clients_mut().remove(id);
-        self.entity_ids_mut().remove(id);
-        self.chunk_interest_mut().remove_client(id);
-        self.bookkeeping_mut().remove_client(id);
-
-        if let Some(client) = removed {
-            if let Some(handler) = self.client_leave_modifier.to_owned() {
-                handler(self, client.entity);
-            }
-
-            let mut should_delete_entity = true;
-
-            {
-                let interactors = self.ecs.read_storage::<InteractorComp>();
-
-                // Safely get the interactor component, with error handling
-                let interactor_result = interactors
-                    .get(client.entity)
-                    .map(|interactor| interactor.to_owned());
-
-                if let Some(interactor) = interactor_result {
-                    let body_handle = interactor.body_handle().to_owned();
-                    let collider_handle = interactor.collider_handle().to_owned();
-
-                    drop(interactors);
-
-                    {
-                        let mut physics = self.physics_mut();
-                        physics.unregister(&body_handle, &collider_handle);
-                    }
-
-                    {
-                        let mut interactors = self.ecs.write_storage::<InteractorComp>();
-                        interactors.remove(client.entity);
-                    }
-
-                    {
-                        let mut collisions = self.ecs.write_storage::<CollisionsComp>();
-                        collisions.remove(client.entity);
-                    }
-
-                    {
-                        let mut rigid_bodies = self.ecs.write_storage::<RigidBodyComp>();
-                        rigid_bodies.remove(client.entity);
-                    }
-
-                    {
-                        let mut clients = self.ecs.write_storage::<ClientFlag>();
-                        clients.remove(client.entity);
-                    }
-                } else {
-                    // If we can't find the interactor, the entity might already be deleted or invalid
-                    should_delete_entity = false;
-                    log::warn!(
-                        "Client entity for {} not found or already removed",
-                        client.id
-                    );
-                }
-            }
-
-            if should_delete_entity {
-                let entities = self.ecs.entities();
-
-                // Safe deletion with error handling
-                if let Err(e) = entities.delete(client.entity) {
-                    log::warn!("Error deleting client entity {}: {:?}", client.id, e);
-                }
-            }
-
-            self.ecs.maintain();
-
-            let leave_message = Message::new(&MessageType::Leave).text(&client.id).build();
-            self.broadcast(leave_message, ClientFilter::All);
-            info!("Client at {} left the world: {}", id, self.name);
-        }
-    }
-
     pub fn set_dispatcher<
         F: Fn() -> TimedDispatcherBuilder<'static, 'static> + Send + Sync + 'static,
     >(
@@ -1136,6 +1095,7 @@ impl World {
         parser: F,
     ) {
         self.client_parser = Arc::new(parser);
+        self.client_parser_is_default = false;
     }
 
     pub fn set_method_handle<F: Fn(&mut World, &str, &str) + Send + Sync + 'static>(
@@ -1195,7 +1155,29 @@ impl World {
 
     /// Handler for protobuf requests from clients.
     pub(crate) fn on_request(&mut self, client_id: &str, data: Message) {
-        let msg_type = MessageType::from_i32(data.r#type).unwrap();
+        if matches!(
+            self.lifecycle,
+            WorldLifecycleState::Stopping | WorldLifecycleState::Stopped
+        ) {
+            return;
+        }
+        let Ok(msg_type) = MessageType::try_from(data.r#type) else {
+            warn!("Rejected message with invalid type: {}", data.r#type);
+            return;
+        };
+        if msg_type == MessageType::Transport {
+            if !self.read_resource::<Transports>().contains_key(client_id) {
+                warn!("Rejected transport message from an unknown transport.");
+                return;
+            }
+        } else if !self
+            .clients()
+            .get(client_id)
+            .is_some_and(|client| client.attached)
+        {
+            warn!("Rejected message from a client that is not attached.");
+            return;
+        }
 
         match msg_type {
             MessageType::Peer => self.on_peer(client_id, data),
@@ -1210,12 +1192,11 @@ impl World {
                     warn!("Transport calls are being called, but no transport handlers set!");
                 } else {
                     let handle = self.transport_handle.as_ref().unwrap().to_owned();
-
-                    handle(
-                        self,
-                        serde_json::from_str(&data.json)
-                            .expect("Something went wrong with the transport JSON value."),
-                    );
+                    let Ok(payload) = serde_json::from_str(&data.json) else {
+                        warn!("Rejected malformed transport JSON.");
+                        return;
+                    };
+                    handle(self, payload);
                 }
             }
             _ => {
@@ -1547,6 +1528,11 @@ impl World {
 
     /// Prepare to start.
     pub(crate) fn prepare(&mut self) {
+        if self.lifecycle != WorldLifecycleState::Created {
+            return;
+        }
+        self.lifecycle = WorldLifecycleState::Preparing;
+
         // Merge consecutive chunk stages that don't require spaces together.
         self.pipeline_mut().merge_stages();
         self.load_entities();
@@ -1571,10 +1557,25 @@ impl World {
             stats.prev_time = SystemTime::now();
             stats.delta = 0.0;
         }
+
+        if !self.config().preload {
+            self.lifecycle = WorldLifecycleState::Ready;
+        }
     }
 
     /// Preload the chunks in the world.
     pub(crate) fn preload(&mut self) {
+        if self.lifecycle == WorldLifecycleState::Created {
+            self.prepare();
+        }
+        if self.lifecycle != WorldLifecycleState::Preparing || self.preloading {
+            return;
+        }
+        if !self.config().preload {
+            self.lifecycle = WorldLifecycleState::Ready;
+            return;
+        }
+
         let radius = self.config().preload_radius as i32;
 
         {
@@ -1603,6 +1604,15 @@ impl World {
 
     /// Tick of the world, run every 16ms.
     pub(crate) fn tick(&mut self) {
+        if matches!(
+            self.lifecycle,
+            WorldLifecycleState::Created
+                | WorldLifecycleState::Stopping
+                | WorldLifecycleState::Stopped
+        ) {
+            return;
+        }
+
         if !self.started {
             self.started = true;
         }
@@ -1611,10 +1621,10 @@ impl World {
             let light_padding = (self.config().max_light_level as f32
                 / self.config().chunk_size as f32)
                 .ceil() as usize;
-            let check_radius = (self.config().preload_radius - light_padding) as i32;
+            let check_radius = self.config().preload_radius.saturating_sub(light_padding) as i32;
 
             let mut total = 0;
-            let supposed = (check_radius * 2).pow(2);
+            let supposed = (check_radius * 2 + 1).pow(2);
 
             for x in -check_radius..=check_radius {
                 for z in -check_radius..=check_radius {
@@ -1641,6 +1651,7 @@ impl World {
 
             if total >= supposed {
                 self.preloading = false;
+                self.lifecycle = WorldLifecycleState::Ready;
             }
         }
 
@@ -1689,12 +1700,34 @@ impl World {
             return;
         };
 
+        let policy = self.config().request_policy.clone();
+        if !policy.allows_client_movement_flags() {
+            let invalid = data.peers.iter().any(|peer| {
+                serde_json::from_str::<PeerUpdate>(&peer.metadata)
+                    .map(|update| {
+                        update.is_flying.is_some()
+                            || update.is_ghost.is_some()
+                            || (self.client_parser_is_default
+                                && (update.position.is_some()
+                                    || update.direction.is_some()
+                                    || update.is_crouching.is_some()
+                                    || update.is_swimming.is_some()
+                                    || update.is_swim_pose_active.is_some()))
+                    })
+                    .unwrap_or(true)
+            });
+            if invalid {
+                warn!("Rejected unvalidated client movement metadata.");
+                return;
+            }
+        }
+
         data.peers.into_iter().for_each(|peer| {
             let Peer {
                 metadata, username, ..
             } = peer;
 
-            {
+            if !policy.is_strict() {
                 let mut names = self.write_component::<NameComp>();
                 if let Some(n) = names.get_mut(client_ent) {
                     n.0 = username.to_owned();
@@ -1703,8 +1736,10 @@ impl World {
 
             self.client_parser.clone()(self, &metadata, client_ent);
 
-            if let Some(client) = self.clients_mut().get_mut(client_id) {
-                client.username = username;
+            if !policy.is_strict() {
+                if let Some(client) = self.clients_mut().get_mut(client_id) {
+                    client.username = username;
+                }
             }
         })
     }
@@ -1810,10 +1845,23 @@ impl World {
 
     /// Handler for `Update` type messages.
     fn on_update(&mut self, _: &str, data: Message) {
+        if !self.config().request_policy.allows_raw_voxel_updates() {
+            warn!("Rejected raw voxel update in strict world.");
+            return;
+        }
         let chunk_size = self.config().chunk_size;
-        let mut chunks = self.chunks_mut();
 
         if let Some(bulk) = data.bulk_update {
+            let length = bulk.vx.len();
+            if bulk.vy.len() != length
+                || bulk.vz.len() != length
+                || bulk.voxels.len() != length
+                || bulk.lights.len() != length
+            {
+                warn!("Rejected bulk voxel update with mismatched array lengths.");
+                return;
+            }
+            let mut chunks = self.chunks_mut();
             for i in 0..bulk.vx.len() {
                 let vx = bulk.vx[i];
                 let vy = bulk.vy[i];
@@ -1829,6 +1877,7 @@ impl World {
                 chunks.update_voxel(&Vec3(vx, vy, vz), voxel);
             }
         } else {
+            let mut chunks = self.chunks_mut();
             data.updates.into_iter().for_each(|update| {
                 let coords =
                     ChunkUtils::map_voxel_to_chunk(update.vx, update.vy, update.vz, chunk_size);
@@ -1845,18 +1894,18 @@ impl World {
     /// Handler for `Method` type messages.
     fn on_method(&mut self, client_id: &str, data: Message) {
         if let Some(method) = data.method {
-            if !self
-                .method_handles
-                .contains_key(&method.name.to_lowercase())
-            {
+            let key = method.name.to_lowercase();
+            if !self.config().request_policy.allows_method(&key) {
+                warn!("Rejected unauthorized Method: {}", key);
+                return;
+            }
+            let Some(handle) = self.method_handles.get(&key).cloned() else {
                 warn!(
                     "`Method` type messages received of name {}, but no method handler set.",
                     method.name
                 );
                 return;
-            }
-
-            let handle = self.method_handles.get(&method.name).unwrap().to_owned();
+            };
 
             handle(self, client_id, &method.payload);
         }
@@ -1864,10 +1913,22 @@ impl World {
 
     /// Handler for `Event` type messages.
     fn on_event(&mut self, client_id: &str, data: Message) {
+        let policy = self.config().request_policy.clone();
+        if data
+            .events
+            .iter()
+            .any(|event| !policy.allows_event(&event.name))
+        {
+            warn!("Rejected Event batch containing an unauthorized name.");
+            return;
+        }
         let client_ent = self.clients().get(client_id).map(|c| c.entity.to_owned());
 
         data.events.into_iter().for_each(|event| {
-            if !self.event_handles.contains_key(&event.name.to_lowercase()) {
+            let key = event.name.to_lowercase();
+            if let Some(handle) = self.event_handles.get(&key).cloned() {
+                handle(self, client_id, &event.payload);
+            } else {
                 let location = client_ent.and_then(|ent| {
                     self.read_component::<CurrentChunkComp>()
                         .get(ent)
@@ -1888,17 +1949,18 @@ impl World {
                     event_builder = event_builder.location(loc);
                 }
                 self.events_mut().dispatch(event_builder.build());
-                return;
             }
-
-            let handle = self.event_handles.get(&event.name).unwrap().to_owned();
-            handle(self, client_id, &event.payload);
         });
     }
 
     /// Handler for `Chat` type messages.
-    fn on_chat(&mut self, id: &str, data: Message) {
-        if let Some(chat) = data.chat.clone() {
+    fn on_chat(&mut self, id: &str, mut data: Message) {
+        if let Some(mut chat) = data.chat.clone() {
+            let policy = self.config().request_policy.clone();
+            if policy.is_strict() {
+                chat.sender = id.to_owned();
+                data.chat = Some(chat.clone());
+            }
             let sender = chat.sender.clone();
             let body = chat.body.clone();
 
@@ -1907,6 +1969,10 @@ impl World {
             let command_symbol = self.config().command_symbol.to_owned();
 
             if body.starts_with(&command_symbol) {
+                if !policy.allows_commands() {
+                    warn!("Rejected chat command in strict world.");
+                    return;
+                }
                 if let Some(handle) = self.command_handle.to_owned() {
                     handle(self, id, body.strip_prefix(&command_symbol).unwrap());
                 } else {
