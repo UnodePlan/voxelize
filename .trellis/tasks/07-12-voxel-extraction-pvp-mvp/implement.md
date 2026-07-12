@@ -46,12 +46,20 @@
 
 ## 阶段 2：PostgreSQL、SIWE 与会话
 
-- [ ] 先做 `signinwithethereum 0.8.x + alloy` 在项目工具链上的 EOA/EIP-1271/EIP-6492 编译验证。
-- [ ] 创建 additive migrations：账号/钱包、nonce/session、比赛/参与者、带 digest/config version 的 settlement/items、warehouse、ledger。
-- [ ] 实现 nonce 5 分钟 TTL、条件消费和 SIWE 全字段验证；Mainnet chain ID 固定为 1。
-- [ ] 创建只存 hash 的安全 HttpOnly Cookie session；WS 从 cookie 得到 principal，不接受客户端账号字段。
-- [ ] 实现 `/api/auth/siwe/nonce`、`/api/auth/siwe/verify`、`/api/auth/session`、`/api/auth/logout`、`/api/warehouse` 和 FIFO queue API。
-- [ ] RPC 验证设置超时与并发上限；失败不得跳过验证，已有会话与比赛不依赖 RPC。
+- [x] 先做 `signinwithethereum 0.8.x + alloy` 在项目工具链上的 EOA/EIP-1271/EIP-6492 编译验证。
+- [x] 创建 additive migrations：账号/钱包、nonce/session、比赛/参与者、带 digest/config version 的 settlement/items、warehouse、ledger。
+- [x] 实现 nonce 5 分钟 TTL、条件消费和 SIWE 全字段验证；Mainnet chain ID 固定为 1。
+- [x] 创建只存 hash 的安全 HttpOnly Cookie session；WS 从 cookie 得到 principal，不接受客户端账号字段。
+- [x] 实现 `/api/auth/siwe/nonce`、`/api/auth/siwe/verify`、`/api/auth/session`、`/api/auth/logout`、`/api/warehouse` 和 FIFO queue API。
+- [x] RPC 验证设置超时与并发上限；失败不得跳过验证，已有会话与比赛不依赖 RPC。
+
+实现记录（2026-07-13）：`extraction-server` 使用独立锁文件固定 `signinwithethereum 0.8.1 + alloy` 与 SQLx/PostgreSQL 依赖；锁文件审查确认只有新增包、没有替换既有版本。上游 `alloy` 功能会开启元 crate 默认功能，进一步缩小依赖必须自行维护 EIP-6492 deployless validator 字节码与 ABI，当前保留上游安全关键路径而不复制实现。新增只增不删 migration，覆盖账号/钱包、一次性 nonce、单账号会话、比赛参与者、带幂等键与 digest/config version 的结算明细、仓库余额和资产流水。nonce 由 CSPRNG 生成并只存 SHA-256，5 分钟过期且在登录事务内原子消费；事务先取得 nonce、账号与当前活跃会话行锁，再读取权威数据库时间并同时复核 nonce 和服务端派生的 SIWE expiration/max-age 截止时间，任何锁等待跨过截止时间都会回滚且不替换旧会话。匿名 nonce/verify 入口在数据库或 RPC 前按直接 peer 做有界限流；过期 nonce 以有界批次、仓储硬上限和后台单飞任务定期清理，清理失败不阻断签发。SIWE 固定 Ethereum Mainnet，校验 domain、URI、scheme、nonce、chain、issued-at、expiration 和签名，验签及仓储返回后均使用新时钟再次检查截止时间。EOA 先本地 EIP-191 验签，EIP-1271 使用 Alloy 直接调用 `isValidSignature(bytes32,bytes)` 保留 RPC 故障分类，EIP-6492 进入 universal-validator 路径；两者均有 chain preflight、立即并发准入和 3 秒总超时，RPC 失败关闭且不参与已有会话、比赛或链下结算。
+
+会话使用 32-byte 随机不透明 token，数据库只存 hash；HTTPS 强制 `__Host- + Secure + HttpOnly + SameSite=Lax + Path=/`，只有 loopback HTTP 开发地址允许非 Secure Cookie，公开 Origin 必须与 SIWE URI 同源，且公开 `run(config)` 会在任何启动动作前复核程序化配置，认证/仓库响应禁止缓存。HTTP/WS 共用同一认证服务，WebSocket principal 只来自 Cookie 对应的服务端 `account_id/session_id`，`Connect` 返回后会再次校验同一 Cookie，避免注册竞态。活跃连接保存 `min(absolute, idle)` 精确截止时间，每 30 秒只读复核数据库且不延长 idle；客户端活动在转发二进制请求前按需刷新会话，同一未变化临近截止时间每周期最多刷新一次，撤销或过期立即以 policy close 收敛。显式 logout 和同钱包二次登录都会撤销数据库 session，并通过 `CloseAuthenticatedSession` 幂等关闭 lost、pending Join、in-world、pending rebind 及 Leave 过渡 socket；World 移除期间仍保留 pending rebind 登记到回调收敛，避免注销窗口漏关连接。会话 touch 与 nonce 消费均先取行锁、再取数据库时间，系统时钟倒退或锁等待跨过截止时间都不会错误放行；账号行锁保证同钱包并发登录按顺序替换。新登录和 matchmaking 各有独立 feature flag，关闭时返回服务不可用且不恢复 guest/shared-secret。
+
+验证记录：根 `voxelize` 42/42 lib 测试、应用默认 `--all-targets` 30/30、`engine` `--all-targets` 33/33、真实 PostgreSQL 隔离库 11/11、应用 `engine,db-tests` 全目标 Clippy `-D warnings`、应用与根定向 rustfmt、`cargo check -p voxelize --all-targets` 和 `git diff --check` 均通过。覆盖官方 EOA 向量、EIP-1271/EIP-6492、RPC HTTP/JSON-RPC 故障与无等待并发上限、错误 chain/domain/URI/signature、重复 nonce、后台单飞清理、同钱包并发登录、时间戳倒序、nonce/session 持锁等待跨 TTL、账号锁及旧会话锁等待跨 SIWE 截止时间、单调会话时间、环境与程序化 Cookie 降级拒绝、Origin/SIWE 同源校验、缓存/仓库/排队/注销、WS 注册后二次校验、持续只读复核、活动续期、临期写限频与精确过期关闭；migration 已在保留的本地隔离测试库成功执行。根引擎仍输出既有 84 条基线警告，本阶段应用代码无新增 Clippy 告警。官方客户端监听钱包地址、网络和断开事件并调用 logout 的接线保留在阶段 9，不在本阶段冒充已完成。
+
+文件规模说明：认证服务已把 nonce 清理拆到 50 行专责模块，主体为 313 行，超出 300 行软上限的部分是最终 SIWE 截止时间派生及登录/会话/注销编排，仍低于 500 行硬上限；PostgreSQL nonce/login 与 session 分别拆为 283/141 行。`server/server/websocket.rs` 为 341 行，测试已移到独立 `websocket_tests.rs`，持续会话守卫另拆为 188 行 `ws_auth.rs`；剩余主体是握手、Actor 注册、I/O select、出站控制和关闭收敛的一组状态机，低于 500 行硬上限，后续业务逻辑不得继续堆入。既有 `server/server/mod.rs` 为 1053 行，本阶段只加入公开 Actor 消息、连接状态接线和短 Handler；同目录 `SIZE_NOTES.md` 已记录原因、约束和后续拆分计划，继续为单个消息机械拆分主 Actor 会扩大无关回归范围。
 
 验收：API 测试完成 nonce -> SIWE -> session -> principal；错误链/domain/URI/签名、重复 nonce 均拒绝；RPC 故障不影响已有会话，官方客户端换地址/网络触发 logout 后旧 Cookie 被拒绝。
 

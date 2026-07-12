@@ -9,6 +9,7 @@ use futures_util::StreamExt;
 use hashbrown::HashMap;
 use log::{info, warn};
 
+use super::ws_auth::AuthenticatedSessionGuard;
 use crate::{
     decode_message, encode_message, ClientMessage, Connect, ConnectionAuthErrorKind,
     ConnectionAuthRequest, ConnectionPrincipal, Disconnect, HttpConfig, Message, MessageType,
@@ -39,7 +40,7 @@ pub(crate) async fn ws_route(
         return Ok(HttpResponse::Forbidden().finish());
     }
 
-    let principal = if config.http.requires_authentication() {
+    let (principal, reauth_request) = if config.http.requires_authentication() {
         // Public mode does not expose the legacy transport trust path.
         if options.contains_key("is_transport") {
             return Ok(HttpResponse::Forbidden().finish());
@@ -53,11 +54,13 @@ pub(crate) async fn ws_route(
 
         match tokio::time::timeout(
             config.http.auth_timeout_value(),
-            config.http.authenticate(auth_request),
+            config.http.authenticate(auth_request.clone()),
         )
         .await
         {
-            Ok(Ok(Some(principal))) if principal.is_valid() => Some(principal),
+            Ok(Ok(Some(principal))) if principal.is_valid() => {
+                (Some(principal), Some(auth_request))
+            }
             Ok(Ok(_)) => return Ok(HttpResponse::Unauthorized().finish()),
             Ok(Err(error)) => {
                 let status = match error.kind {
@@ -70,7 +73,7 @@ pub(crate) async fn ws_route(
         }
     } else {
         validate_legacy_secret(config.secret.as_deref(), &options)?;
-        None
+        (None, None)
     };
 
     let initial_id = if principal.is_none() {
@@ -94,6 +97,7 @@ pub(crate) async fn ws_route(
     actix_web::rt::spawn(handle_ws_connection(
         initial_id,
         principal,
+        reauth_request,
         is_transport,
         session,
         stream,
@@ -131,6 +135,7 @@ fn validate_legacy_secret(
 async fn handle_ws_connection(
     initial_id: Option<String>,
     principal: Option<ConnectionPrincipal>,
+    reauth_request: Option<ConnectionAuthRequest>,
     is_transport: bool,
     mut session: actix_ws::Session,
     mut stream: impl StreamExt<Item = Result<AggregatedMessage, ProtocolError>> + Unpin,
@@ -138,7 +143,13 @@ async fn handle_ws_connection(
     config: HttpConfig,
 ) {
     let (sender, receiver) = WsSender::channel(config.outbound_queue_capacity_value());
-    let (mut outbound, mut overloaded) = receiver.into_parts();
+    let (mut outbound, mut overloaded, mut policy_close) = receiver.into_parts();
+    let mut auth_guard = match (principal.clone(), reauth_request) {
+        (Some(principal), Some(request)) => {
+            Some(AuthenticatedSessionGuard::new(&config, request, principal))
+        }
+        _ => None,
+    };
     let (session_id, connection_token) = match server
         .send(Connect {
             id: initial_id,
@@ -156,9 +167,42 @@ async fn handle_ws_connection(
         }
     };
 
+    if let Some(guard) = auth_guard.as_mut() {
+        if !guard.revalidate().await {
+            // 首次握手认证和 Server 注册之间可能发生 logout；注册后再次校验，
+            // 防止已撤销的 principal 进入可操作连接状态。
+            server.do_send(Disconnect {
+                id: session_id,
+                token: connection_token,
+            });
+            let _ = session
+                .close(Some(CloseReason::from(CloseCode::Policy)))
+                .await;
+            return;
+        }
+    }
+
+    let mut revalidation_tick = tokio::time::interval(config.session_revalidation_interval_value());
+    revalidation_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    revalidation_tick.tick().await;
     let mut close_reason = None;
     loop {
+        let auth_deadline = auth_guard.as_ref().and_then(|guard| guard.deadline());
         tokio::select! {
+            _ = wait_for_auth_deadline(auth_deadline) => {
+                close_reason = Some(CloseReason::from(CloseCode::Policy));
+                break;
+            }
+            _ = revalidation_tick.tick(), if auth_guard.is_some() => {
+                let still_authenticated = match auth_guard.as_mut() {
+                    Some(guard) => guard.revalidate().await,
+                    None => true,
+                };
+                if !still_authenticated {
+                    close_reason = Some(CloseReason::from(CloseCode::Policy));
+                    break;
+                }
+            }
             Some(message) = outbound.recv() => {
                 match tokio::time::timeout(
                     config.client_message_timeout_value(),
@@ -184,9 +228,26 @@ async fn handle_ws_connection(
                     Ok(()) => {}
                 }
             }
+            changed = policy_close.changed() => {
+                match changed {
+                    Ok(()) if *policy_close.borrow() => {
+                        // 会话撤销只通知 socket 关闭，Disconnect 仍负责既有连接状态清理。
+                        close_reason = Some(CloseReason::from(CloseCode::Policy));
+                        break;
+                    }
+                    Err(_) => break,
+                    Ok(()) => {}
+                }
+            }
             message = stream.next() => {
                 match message {
                     Some(Ok(AggregatedMessage::Binary(bytes))) => {
+                        if let Some(guard) = auth_guard.as_mut() {
+                            if !guard.authorize_activity().await {
+                                close_reason = Some(CloseReason::from(CloseCode::Policy));
+                                break;
+                            }
+                        }
                         let message = match decode_message(&bytes) {
                             Ok(message) => message,
                             Err(_) => {
@@ -268,164 +329,13 @@ async fn handle_ws_connection(
     .await;
 }
 
-#[cfg(test)]
-mod tests {
-    use std::sync::{
-        atomic::{AtomicUsize, Ordering},
-        Arc,
-    };
-
-    use actix::Actor;
-    use actix_web::{http::StatusCode, test, web, App};
-    use std::time::Duration;
-
-    use crate::{ConnectionAuthError, ConnectionPrincipal, Server};
-
-    use super::*;
-
-    #[actix_web::test]
-    async fn empty_legacy_client_id_keeps_random_id_behavior() {
-        let mut options = HashMap::new();
-        options.insert("client_id".to_owned(), String::new());
-
-        assert_eq!(requested_legacy_id(&options), None);
-        options.insert("client_id".to_owned(), "legacy-player".to_owned());
-        assert_eq!(
-            requested_legacy_id(&options),
-            Some("legacy-player".to_owned())
-        );
-    }
-
-    #[actix_web::test]
-    async fn strict_origin_is_checked_before_authentication() {
-        let auth_calls = Arc::new(AtomicUsize::new(0));
-        let calls = auth_calls.clone();
-        let http = HttpConfig::authenticated(move |_| {
-            calls.fetch_add(1, Ordering::SeqCst);
-            async { Ok(ConnectionPrincipal::new("account", "session")) }
-        })
-        .allowed_origins(["https://game.example"]);
-        let server = Server::new().debug(false).build().start();
-        let app = test::init_service(
-            App::new()
-                .app_data(web::Data::new(server))
-                .app_data(web::Data::new(HandshakeConfig { secret: None, http }))
-                .route("/ws/", web::get().to(ws_route)),
-        )
-        .await;
-
-        let request = test::TestRequest::get()
-            .uri("/ws/?client_id=forged&secret=forged")
-            .insert_header((header::ORIGIN, "https://evil.example"))
-            .to_request();
-        let response = test::call_service(&app, request).await;
-
-        assert_eq!(response.status(), StatusCode::FORBIDDEN);
-        assert_eq!(auth_calls.load(Ordering::SeqCst), 0);
-    }
-
-    #[actix_web::test]
-    async fn strict_authentication_maps_failures_without_legacy_fallback() {
-        let http = HttpConfig::authenticated(|_| async {
-            Err(ConnectionAuthError::new("expired_session"))
-        })
-        .allowed_origins(["https://game.example"]);
-        let server = Server::new().debug(false).build().start();
-        let app = test::init_service(
-            App::new()
-                .app_data(web::Data::new(server))
-                .app_data(web::Data::new(HandshakeConfig {
-                    secret: Some("legacy-secret".to_owned()),
-                    http,
-                }))
-                .route("/ws/", web::get().to(ws_route)),
-        )
-        .await;
-
-        let request = test::TestRequest::get()
-            .uri("/ws/?client_id=forged&secret=legacy-secret")
-            .insert_header((header::ORIGIN, "https://game.example"))
-            .to_request();
-        let response = test::call_service(&app, request).await;
-
-        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-        assert!(test::read_body(response).await.is_empty());
-    }
-
-    #[actix_web::test]
-    async fn unavailable_authenticator_returns_service_unavailable() {
-        let http = HttpConfig::authenticated(|_| async { Err(ConnectionAuthError::unavailable()) })
-            .allowed_origins(["https://game.example"]);
-        let server = Server::new().debug(false).build().start();
-        let app = test::init_service(
-            App::new()
-                .app_data(web::Data::new(server))
-                .app_data(web::Data::new(HandshakeConfig { secret: None, http }))
-                .route("/ws/", web::get().to(ws_route)),
-        )
-        .await;
-
-        let request = test::TestRequest::get()
-            .uri("/ws/")
-            .insert_header((header::ORIGIN, "https://game.example"))
-            .to_request();
-        let response = test::call_service(&app, request).await;
-
-        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-    }
-
-    #[actix_web::test]
-    async fn authentication_timeout_fails_closed() {
-        let http = HttpConfig::authenticated(|_| async {
-            tokio::time::sleep(Duration::from_millis(25)).await;
-            Ok(ConnectionPrincipal::new("account", "session"))
-        })
-        .allowed_origins(["https://game.example"])
-        .auth_timeout(Duration::from_millis(1));
-        let server = Server::new().debug(false).build().start();
-        let app = test::init_service(
-            App::new()
-                .app_data(web::Data::new(server))
-                .app_data(web::Data::new(HandshakeConfig { secret: None, http }))
-                .route("/ws/", web::get().to(ws_route)),
-        )
-        .await;
-
-        let request = test::TestRequest::get()
-            .uri("/ws/")
-            .insert_header((header::ORIGIN, "https://game.example"))
-            .to_request();
-        let response = test::call_service(&app, request).await;
-
-        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-    }
-
-    #[actix_web::test]
-    async fn duplicate_origin_is_rejected_before_authentication() {
-        let auth_calls = Arc::new(AtomicUsize::new(0));
-        let calls = auth_calls.clone();
-        let http = HttpConfig::authenticated(move |_| {
-            calls.fetch_add(1, Ordering::SeqCst);
-            async { Ok(ConnectionPrincipal::new("account", "session")) }
-        })
-        .allowed_origins(["https://game.example"]);
-        let server = Server::new().debug(false).build().start();
-        let app = test::init_service(
-            App::new()
-                .app_data(web::Data::new(server))
-                .app_data(web::Data::new(HandshakeConfig { secret: None, http }))
-                .route("/ws/", web::get().to(ws_route)),
-        )
-        .await;
-
-        let request = test::TestRequest::get()
-            .uri("/ws/")
-            .append_header((header::ORIGIN, "https://game.example"))
-            .append_header((header::ORIGIN, "https://game.example"))
-            .to_request();
-        let response = test::call_service(&app, request).await;
-
-        assert_eq!(response.status(), StatusCode::FORBIDDEN);
-        assert_eq!(auth_calls.load(Ordering::SeqCst), 0);
+async fn wait_for_auth_deadline(deadline: Option<tokio::time::Instant>) {
+    match deadline {
+        Some(deadline) => tokio::time::sleep_until(deadline).await,
+        None => std::future::pending().await,
     }
 }
+
+#[cfg(test)]
+#[path = "websocket_tests.rs"]
+mod tests;

@@ -20,6 +20,7 @@ This directory contains guidelines for backend development. Fill in each file wi
 | [Quality Guidelines](./quality-guidelines.md) | Code standards, forbidden patterns | To fill |
 | [Logging Guidelines](./logging-guidelines.md) | Structured logging, log levels | To fill |
 | [Public Network Trust Boundary](./network-trust-boundary.md) | Authentication, Join admission, strict policy, and World lifecycle contracts | Active |
+| [Authentication Persistence](./auth-persistence.md) | SIWE, nonce/session storage, cookie, RPC, and session-revocation contracts | Active |
 
 ---
 

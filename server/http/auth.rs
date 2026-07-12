@@ -1,4 +1,4 @@
-use std::{fmt, future::Future, net::SocketAddr, pin::Pin};
+use std::{fmt, future::Future, net::SocketAddr, pin::Pin, time::SystemTime};
 
 use actix_web::http::header::HeaderMap;
 
@@ -10,6 +10,7 @@ use actix_web::http::header::HeaderMap;
 pub struct ConnectionPrincipal {
     pub account_id: String,
     pub session_id: String,
+    valid_until: Option<SystemTime>,
 }
 
 impl ConnectionPrincipal {
@@ -17,11 +18,29 @@ impl ConnectionPrincipal {
         Self {
             account_id: account_id.into(),
             session_id: session_id.into(),
+            valid_until: None,
         }
+    }
+
+    pub fn with_valid_until(mut self, valid_until: SystemTime) -> Self {
+        self.valid_until = Some(valid_until);
+        self
     }
 
     pub(crate) fn is_valid(&self) -> bool {
         !self.account_id.trim().is_empty() && !self.session_id.trim().is_empty()
+    }
+
+    pub(crate) fn valid_until(&self) -> Option<SystemTime> {
+        self.valid_until
+    }
+
+    pub(crate) fn same_identity(&self, other: &Self) -> bool {
+        self.account_id == other.account_id && self.session_id == other.session_id
+    }
+
+    pub(crate) fn is_expired_at(&self, now: SystemTime) -> bool {
+        self.valid_until.is_some_and(|deadline| deadline <= now)
     }
 }
 
@@ -40,6 +59,11 @@ pub type ConnectionAuthFuture = Pin<
 /// Object-safe asynchronous authentication boundary used by public servers.
 pub trait ConnectionAuthenticator: Send + Sync {
     fn authenticate(&self, request: ConnectionAuthRequest) -> ConnectionAuthFuture;
+
+    /// Re-check a connection without treating the check itself as user activity.
+    fn revalidate(&self, request: ConnectionAuthRequest) -> ConnectionAuthFuture {
+        self.authenticate(request)
+    }
 }
 
 impl<F, Fut> ConnectionAuthenticator for F

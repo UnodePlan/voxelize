@@ -84,8 +84,8 @@ impl Handler<RemoveWorld> for Server {
             .retain(|_, detached| detached.world_name != message.name);
         self.pending_detaches
             .retain(|_, detached| detached.world_name != message.name);
-        self.pending_rebinds
-            .retain(|_, detached| detached.world_name != message.name);
+        // 正在重绑的记录仍持有活跃 socket；移除 generation 已足以阻止回调提交，
+        // 记录必须保留到回调自行收敛，才能让会话撤销和 Disconnect 命中过渡态。
 
         let world_name = message.name;
         let stop_request = world.send(StopWorld);

@@ -1,26 +1,83 @@
+pub mod auth;
+mod bootstrap;
 mod config;
 pub mod contracts;
+#[cfg(feature = "engine")]
+mod engine;
 mod http;
+pub mod matchmaking;
+pub mod persistence;
 pub mod ports;
 
-use std::{io, sync::Arc};
+use std::io;
 
-use actix_web::{web, App, HttpServer};
+#[cfg(not(feature = "engine"))]
+use actix_cors::Cors;
+#[cfg(not(feature = "engine"))]
+use actix_web::{App, HttpServer};
 
 pub use config::{ConfigError, ServerConfig};
 pub use http::{configure_api, AppState, HealthResponse};
-use ports::BootstrapRepositoryProbe;
-
 #[cfg(feature = "engine")]
 pub use voxelize::WorldConfig as EngineWorldConfig;
 
 pub async fn run(config: ServerConfig) -> io::Result<()> {
-    let manifest = contracts::bundled_manifest()
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-    let state = web::Data::new(AppState::new(Arc::new(BootstrapRepositoryProbe), manifest));
+    config
+        .validate()
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+    let application = bootstrap::build(&config).await?;
+    run_application(config, application).await
+}
 
-    HttpServer::new(move || App::new().app_data(state.clone()).configure(configure_api))
-        .bind(config.bind_address())?
-        .run()
-        .await
+#[cfg(feature = "engine")]
+async fn run_application(
+    config: ServerConfig,
+    application: bootstrap::Application,
+) -> io::Result<()> {
+    engine::run(config, application).await
+}
+
+#[cfg(not(feature = "engine"))]
+async fn run_application(
+    config: ServerConfig,
+    application: bootstrap::Application,
+) -> io::Result<()> {
+    let origin = config.public_origin().to_owned();
+    let state = application.state;
+    HttpServer::new(move || {
+        let cors = Cors::default()
+            .allowed_origin(&origin)
+            .allowed_methods(["GET", "POST", "DELETE", "OPTIONS"])
+            .allow_any_header()
+            .supports_credentials();
+        App::new()
+            .wrap(cors)
+            .app_data(state.clone())
+            .configure(configure_api)
+    })
+    .bind(config.bind_address())?
+    .run()
+    .await
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::auth::AuthConfig;
+
+    use super::*;
+
+    #[actix_web::test]
+    async fn run_revalidates_programmatically_constructed_config() {
+        let config = ServerConfig::parse_bind_address("127.0.0.1:4200")
+            .unwrap()
+            .with_public_auth(
+                "https://game.example",
+                AuthConfig::local("game.example", "https://game.example"),
+            );
+
+        let error = run(config)
+            .await
+            .expect_err("公开 run 入口必须拒绝非 Secure HTTPS Cookie");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+    }
 }

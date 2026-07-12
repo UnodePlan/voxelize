@@ -274,6 +274,220 @@ async fn authenticated_disconnect_rebinds_existing_world_client() {
 }
 
 #[actix::test]
+async fn close_authenticated_session_actor_message_only_targets_matching_session() {
+    let (server, _) = prepared_server(WorldConfig::default()).await;
+    let (target_sender, target_receiver) = ws_sender();
+    let (target_connection, _) = server
+        .send(Connect {
+            id: None,
+            principal: Some(ConnectionPrincipal::new("target-account", "target-session")),
+            is_transport: false,
+            sender: target_sender,
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        server
+            .send(ClientMessage {
+                id: target_connection,
+                data: Message::new(&MessageType::Join)
+                    .json(r#"{"world":"arena","username":"Ignored"}"#)
+                    .build(),
+            })
+            .await
+            .unwrap(),
+        None
+    );
+
+    let (other_sender, other_receiver) = ws_sender();
+    server
+        .send(Connect {
+            id: None,
+            principal: Some(ConnectionPrincipal::new("other-account", "other-session")),
+            is_transport: false,
+            sender: other_sender,
+        })
+        .await
+        .unwrap();
+    let (legacy_sender, legacy_receiver) = ws_sender();
+    server
+        .send(Connect {
+            id: Some("legacy-player".to_owned()),
+            principal: None,
+            is_transport: false,
+            sender: legacy_sender,
+        })
+        .await
+        .unwrap();
+
+    let closed = server
+        .send(CloseAuthenticatedSession {
+            session_id: "target-session".to_owned(),
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(closed, 1);
+    assert!(target_receiver.policy_close_requested());
+    assert!(!other_receiver.policy_close_requested());
+    assert!(!legacy_receiver.policy_close_requested());
+}
+
+#[actix::test]
+async fn close_authenticated_session_preserves_state_until_disconnect_cleanup() {
+    let mut server = Server::new().debug(false).build();
+    let target = ConnectionPrincipal::new("target-account", "target-session");
+
+    let (lost_sender, lost_receiver) = ws_sender();
+    server.lost_sessions.insert(
+        "target-lost".to_owned(),
+        (lost_sender, "lost-token".to_owned()),
+    );
+    server
+        .connection_principals
+        .insert("target-lost".to_owned(), target.clone());
+
+    let (pending_sender, pending_receiver) = ws_sender();
+    server.pending_joins.insert(
+        "target-pending".to_owned(),
+        PendingJoin {
+            sender: pending_sender,
+            world_name: "arena".to_owned(),
+            token: "pending-token".to_owned(),
+            client_id: "pending-client".to_owned(),
+            attempt_id: "attempt".to_owned(),
+            world_generation: "generation".to_owned(),
+        },
+    );
+    server
+        .connection_principals
+        .insert("target-pending".to_owned(), target.clone());
+
+    let (world_sender, world_receiver) = ws_sender();
+    server.connections.insert(
+        "target-world".to_owned(),
+        (world_sender, "arena".to_owned(), "world-token".to_owned()),
+    );
+    server
+        .connection_principals
+        .insert("target-world".to_owned(), target.clone());
+
+    let (leaving_sender, leaving_receiver) = ws_sender();
+    server.leaving_sessions.insert(
+        "target-leaving".to_owned(),
+        LeavingSession {
+            sender: leaving_sender,
+            token: "leaving-token".to_owned(),
+        },
+    );
+    server
+        .connection_principals
+        .insert("target-leaving".to_owned(), target.clone());
+
+    let (rebind_sender, rebind_receiver) = ws_sender();
+    server.pending_rebinds.insert(
+        "target-account".to_owned(),
+        PendingRebind {
+            detached: DetachedConnection {
+                connection_id: "detached-connection".to_owned(),
+                world_name: "arena".to_owned(),
+                client_id: "detached-client".to_owned(),
+                world_generation: "generation".to_owned(),
+                connection_token: "detached-token".to_owned(),
+            },
+            connection_id: "target-rebinding".to_owned(),
+            connection_token: "rebind-token".to_owned(),
+            sender: rebind_sender,
+            principal: target,
+        },
+    );
+
+    let (other_sender, other_receiver) = ws_sender();
+    server
+        .lost_sessions
+        .insert("other".to_owned(), (other_sender, "other-token".to_owned()));
+    server.connection_principals.insert(
+        "other".to_owned(),
+        ConnectionPrincipal::new("other-account", "other-session"),
+    );
+    let (legacy_sender, legacy_receiver) = ws_sender();
+    server.lost_sessions.insert(
+        "legacy".to_owned(),
+        (legacy_sender, "legacy-token".to_owned()),
+    );
+
+    assert_eq!(
+        server.close_authenticated_session_sockets("target-session"),
+        5
+    );
+    server.finish_leave("target-leaving", "leaving-token");
+    assert_eq!(
+        server.close_authenticated_session_sockets("target-session"),
+        0
+    );
+    assert!(lost_receiver.policy_close_requested());
+    assert!(pending_receiver.policy_close_requested());
+    assert!(world_receiver.policy_close_requested());
+    assert!(leaving_receiver.policy_close_requested());
+    assert!(rebind_receiver.policy_close_requested());
+    assert!(!other_receiver.policy_close_requested());
+    assert!(!legacy_receiver.policy_close_requested());
+
+    assert_eq!(server.lost_sessions.len(), 4);
+    assert!(server.leaving_sessions.is_empty());
+    assert_eq!(server.pending_joins.len(), 1);
+    assert_eq!(server.pending_rebinds.len(), 1);
+    assert_eq!(server.connections.len(), 1);
+    assert_eq!(server.connection_principals.len(), 5);
+}
+
+#[actix::test]
+async fn remove_world_keeps_pending_rebind_socket_routable_until_callback() {
+    let mut server = Server::new().debug(false).build();
+    server
+        .add_world(World::new("arena", &WorldConfig::default()))
+        .unwrap();
+    server.prepare().await;
+
+    let (rebind_sender, rebind_receiver) = ws_sender();
+    server.pending_rebinds.insert(
+        "target-account".to_owned(),
+        PendingRebind {
+            detached: DetachedConnection {
+                connection_id: "detached-connection".to_owned(),
+                world_name: "arena".to_owned(),
+                client_id: "detached-client".to_owned(),
+                world_generation: "generation".to_owned(),
+                connection_token: "detached-token".to_owned(),
+            },
+            connection_id: "target-rebinding".to_owned(),
+            connection_token: "rebind-token".to_owned(),
+            sender: rebind_sender,
+            principal: ConnectionPrincipal::new("target-account", "target-session"),
+        },
+    );
+    let server = server.start();
+
+    let removed = server
+        .send(RemoveWorld {
+            name: "arena".to_owned(),
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    let closed = server
+        .send(CloseAuthenticatedSession {
+            session_id: "target-session".to_owned(),
+        })
+        .await
+        .unwrap();
+
+    assert!(removed.removed);
+    assert_eq!(closed, 1);
+    assert!(rebind_receiver.policy_close_requested());
+}
+
+#[actix::test]
 async fn remove_world_is_idempotent() {
     let (server, old_world) = prepared_server(WorldConfig::default()).await;
 

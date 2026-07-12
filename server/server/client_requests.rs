@@ -102,10 +102,15 @@ impl Server {
             return Box::pin(ready(None));
         };
 
-        self.leaving_sessions
-            .insert(connection_id.clone(), token.clone());
+        self.leaving_sessions.insert(
+            connection_id.clone(),
+            LeavingSession {
+                sender,
+                token: token.clone(),
+            },
+        );
         let Some(world) = world else {
-            self.finish_leave(&connection_id, &token, sender);
+            self.finish_leave(&connection_id, &token);
             return Box::pin(ready(None));
         };
 
@@ -114,20 +119,20 @@ impl Server {
             LeaveCleanup::Despawn(request) => Either::Right(world.send(request)),
         };
         Box::pin(cleanup.into_actor(self).map(move |_, server, _| {
-            server.finish_leave(&connection_id, &token, sender);
+            server.finish_leave(&connection_id, &token);
             None
         }))
     }
 
-    fn finish_leave(&mut self, connection_id: &str, token: &str, sender: WsSender) {
+    pub(super) fn finish_leave(&mut self, connection_id: &str, token: &str) {
         let matches = self
             .leaving_sessions
             .get(connection_id)
-            .is_some_and(|current| current == token);
+            .is_some_and(|current| current.token == token);
         if !matches {
             return;
         }
-        self.leaving_sessions.remove(connection_id);
+        let leaving = self.leaving_sessions.remove(connection_id).unwrap();
 
         let session_is_unclaimed = !self.lost_sessions.contains_key(connection_id)
             && !self.connections.contains_key(connection_id)
@@ -136,7 +141,7 @@ impl Server {
             || self.http_config.security_mode() == ConnectionSecurityMode::Legacy;
         if session_is_unclaimed && can_rejoin {
             self.lost_sessions
-                .insert(connection_id.to_owned(), (sender, token.to_owned()));
+                .insert(connection_id.to_owned(), (leaving.sender, leaving.token));
         }
     }
 

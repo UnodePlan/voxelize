@@ -1,18 +1,36 @@
+mod auth;
+mod error;
+mod health;
+mod matchmaking;
+mod session;
+mod warehouse;
+
 use std::{sync::Arc, time::Duration};
 
-use actix_web::{http::StatusCode, rt::time::timeout, web, HttpResponse};
-use serde::{Deserialize, Serialize};
+use actix_web::web;
 
-use crate::{contracts::ExtractionManifest, ports::RepositoryProbe};
+use crate::{
+    auth::{AuthService, NonceRateLimiter},
+    contracts::ExtractionManifest,
+    matchmaking::MatchmakingQueue,
+    ports::{Clock, RepositoryProbe, SystemClock},
+};
 
-const SERVICE_NAME: &str = "voxelize-extraction-server";
 const DEFAULT_READINESS_TIMEOUT: Duration = Duration::from_secs(2);
+const MAX_JSON_BODY_SIZE: usize = 16 * 1024;
 
 #[derive(Clone)]
 pub struct AppState {
     repository: Arc<dyn RepositoryProbe>,
     manifest: ExtractionManifest,
     readiness_timeout: Duration,
+    auth: Option<AuthService>,
+    matchmaking: Arc<MatchmakingQueue>,
+    clock: Arc<dyn Clock>,
+    auth_login_enabled: bool,
+    matchmaking_enabled: bool,
+    nonce_rate_limiter: NonceRateLimiter,
+    verification_rate_limiter: NonceRateLimiter,
 }
 
 impl AppState {
@@ -21,48 +39,88 @@ impl AppState {
             repository,
             manifest,
             readiness_timeout: DEFAULT_READINESS_TIMEOUT,
+            auth: None,
+            matchmaking: Arc::new(MatchmakingQueue::default()),
+            clock: Arc::new(SystemClock::default()),
+            auth_login_enabled: true,
+            matchmaking_enabled: true,
+            nonce_rate_limiter: NonceRateLimiter::default(),
+            verification_rate_limiter: NonceRateLimiter::default(),
         }
+    }
+
+    pub fn with_services(
+        mut self,
+        auth: AuthService,
+        matchmaking: Arc<MatchmakingQueue>,
+        clock: Arc<dyn Clock>,
+    ) -> Self {
+        self.auth = Some(auth);
+        self.matchmaking = matchmaking;
+        self.clock = clock;
+        self
+    }
+
+    pub fn with_feature_flags(
+        mut self,
+        auth_login_enabled: bool,
+        matchmaking_enabled: bool,
+    ) -> Self {
+        self.auth_login_enabled = auth_login_enabled;
+        self.matchmaking_enabled = matchmaking_enabled;
+        self
     }
 
     pub fn with_readiness_timeout(mut self, readiness_timeout: Duration) -> Self {
         self.readiness_timeout = readiness_timeout;
         self
     }
+
+    pub(crate) fn auth(&self) -> Option<&AuthService> {
+        self.auth.as_ref()
+    }
+
+    pub(crate) fn matchmaking(&self) -> &MatchmakingQueue {
+        &self.matchmaking
+    }
+
+    pub(crate) fn auth_login_enabled(&self) -> bool {
+        self.auth_login_enabled
+    }
+
+    pub(crate) fn matchmaking_enabled(&self) -> bool {
+        self.matchmaking_enabled
+    }
+
+    pub(crate) fn allow_nonce_request(&self, peer_addr: Option<std::net::SocketAddr>) -> bool {
+        self.nonce_rate_limiter
+            .allow(peer_addr, self.clock.monotonic_now())
+    }
+
+    pub(crate) fn allow_verification_request(
+        &self,
+        peer_addr: Option<std::net::SocketAddr>,
+    ) -> bool {
+        self.verification_rate_limiter
+            .allow(peer_addr, self.clock.monotonic_now())
+    }
+
+    pub(crate) fn utc_now(&self) -> time::OffsetDateTime {
+        self.clock.utc_now().into()
+    }
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct HealthResponse {
-    pub service: String,
-    pub status: String,
-}
+pub use health::HealthResponse;
 
 pub fn configure_api(config: &mut web::ServiceConfig) {
     config
-        .route("/health/live", web::get().to(liveness))
-        .route("/health/ready", web::get().to(readiness))
-        .route("/api/bootstrap", web::get().to(bootstrap));
-}
-
-async fn liveness() -> web::Json<HealthResponse> {
-    web::Json(HealthResponse {
-        service: SERVICE_NAME.to_owned(),
-        status: "ok".to_owned(),
-    })
-}
-
-async fn readiness(state: web::Data<AppState>) -> HttpResponse {
-    let probe = timeout(state.readiness_timeout, state.repository.check()).await;
-    let (status_code, status) = match probe {
-        Ok(Ok(())) => (StatusCode::OK, "ready"),
-        Ok(Err(_)) | Err(_) => (StatusCode::SERVICE_UNAVAILABLE, "unavailable"),
-    };
-    HttpResponse::build(status_code).json(HealthResponse {
-        service: SERVICE_NAME.to_owned(),
-        status: status.to_owned(),
-    })
-}
-
-async fn bootstrap(state: web::Data<AppState>) -> web::Json<ExtractionManifest> {
-    web::Json(state.manifest.clone())
+        .app_data(
+            web::JsonConfig::default()
+                .limit(MAX_JSON_BODY_SIZE)
+                .error_handler(|_, _| error::ApiError::request_malformed().into()),
+        )
+        .configure(health::configure)
+        .configure(auth::configure)
+        .configure(warehouse::configure)
+        .configure(matchmaking::configure);
 }

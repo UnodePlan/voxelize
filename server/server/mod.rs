@@ -4,6 +4,7 @@ mod join;
 mod models;
 mod websocket;
 mod world_lifecycle;
+mod ws_auth;
 
 #[cfg(test)]
 mod tests;
@@ -33,7 +34,7 @@ use crate::{
     WorldStatsResponse,
 };
 
-use connections::{DetachedConnection, PendingJoin};
+use connections::{DetachedConnection, LeavingSession, PendingJoin, PendingRebind};
 pub use connections::{WsReceiver, WsSendError, WsSender};
 pub use models::*;
 pub(crate) use websocket::{ws_route, HandshakeConfig};
@@ -229,7 +230,7 @@ pub struct Server {
     pending_joins: HashMap<String, PendingJoin>,
 
     /// Explicit leaves waiting for World to confirm despawn before rejoining.
-    leaving_sessions: HashMap<String, String>,
+    leaving_sessions: HashMap<String, LeavingSession>,
 
     /// World-facing client ID for each active socket connection.
     connection_client_ids: HashMap<String, String>,
@@ -240,8 +241,8 @@ pub struct Server {
     /// Disconnects awaiting confirmation that World retained the client entity.
     pending_detaches: HashMap<String, DetachedConnection>,
 
-    /// Detached seats currently being rebound, keyed by account ID.
-    pending_rebinds: HashMap<String, DetachedConnection>,
+    /// Detached seats and replacement sockets currently being rebound, keyed by account ID.
+    pending_rebinds: HashMap<String, PendingRebind>,
 
     /// Admitted client requests currently queued or executing per World instance.
     pending_world_requests: HashMap<String, usize>,
@@ -475,6 +476,43 @@ impl Server {
         self.action_handles
             .insert(action.to_lowercase(), Arc::new(handle));
     }
+
+    fn close_authenticated_session_sockets(&self, session_id: &str) -> usize {
+        let routed = self
+            .connection_principals
+            .iter()
+            .filter(|(_, principal)| principal.session_id == session_id)
+            .filter(|(connection_id, _)| {
+                self.lost_sessions
+                    .get(*connection_id)
+                    .map(|(sender, _)| sender)
+                    .or_else(|| {
+                        self.pending_joins
+                            .get(*connection_id)
+                            .map(|pending| &pending.sender)
+                    })
+                    .or_else(|| {
+                        self.connections
+                            .get(*connection_id)
+                            .map(|(sender, _, _)| sender)
+                    })
+                    .or_else(|| {
+                        self.leaving_sessions
+                            .get(*connection_id)
+                            .map(|leaving| &leaving.sender)
+                    })
+                    .is_some_and(WsSender::request_policy_close)
+            })
+            .count();
+        let rebinding = self
+            .pending_rebinds
+            .values()
+            .filter(|pending| pending.principal.session_id == session_id)
+            .filter(|pending| pending.sender.request_policy_close())
+            .count();
+
+        routed + rebinding
+    }
 }
 
 /// New chat session is created. Returns (client_id, connection_token).
@@ -495,6 +533,13 @@ pub struct Disconnect {
     /// The connection token assigned when this session was created.
     /// Used to distinguish stale disconnects from kicked sessions.
     pub token: String,
+}
+
+/// Close every active WebSocket authenticated by the given session.
+#[derive(ActixMessage)]
+#[rtype(result = "usize")]
+pub struct CloseAuthenticatedSession {
+    pub session_id: String,
 }
 
 #[derive(ActixMessage)]
@@ -607,15 +652,27 @@ impl Handler<Connect> for Server {
                         let connection_token = token.clone();
                         let rebind_world = world.clone();
                         let rebind_request = world.send(request);
-                        self.pending_rebinds
-                            .insert(account_id.clone(), detached.clone());
+                        self.pending_rebinds.insert(
+                            account_id.clone(),
+                            PendingRebind {
+                                detached: detached.clone(),
+                                connection_id: connection_id.clone(),
+                                connection_token: connection_token.clone(),
+                                sender: sender.clone(),
+                                principal: principal.clone(),
+                            },
+                        );
 
                         return Box::pin(rebind_request.into_actor(self).map(
                             move |result, server, _| {
                                 let reservation_matches = server
                                     .pending_rebinds
                                     .get(&account_id)
-                                    .is_some_and(|current| current == &detached);
+                                    .is_some_and(|current| {
+                                        current.detached == detached
+                                            && current.connection_id == connection_id
+                                            && current.connection_token == connection_token
+                                    });
                                 let world_matches = server
                                     .world_generations
                                     .get(&detached.world_name)
@@ -710,6 +767,15 @@ impl Handler<Connect> for Server {
         }
 
         Box::pin(actix::fut::ready((id, token)))
+    }
+}
+
+impl Handler<CloseAuthenticatedSession> for Server {
+    type Result = usize;
+
+    fn handle(&mut self, msg: CloseAuthenticatedSession, _: &mut Context<Self>) -> Self::Result {
+        // 不提前移除路由或 principal；socket 退出后继续走带 token 的 Disconnect 清理。
+        self.close_authenticated_session_sockets(&msg.session_id)
     }
 }
 
@@ -816,7 +882,7 @@ impl Handler<Disconnect> for Server {
         if self
             .leaving_sessions
             .get(&msg.id)
-            .is_some_and(|token| token == &msg.token)
+            .is_some_and(|leaving| leaving.token == msg.token)
         {
             self.leaving_sessions.remove(&msg.id);
             self.connection_principals.remove(&msg.id);

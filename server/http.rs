@@ -15,6 +15,7 @@ const DEFAULT_OUTBOUND_QUEUE_CAPACITY: usize = 1024;
 const DEFAULT_WORLD_REQUEST_CAPACITY: usize = 1024;
 const DEFAULT_CLIENT_MESSAGE_TIMEOUT: Duration = Duration::from_secs(1);
 const DEFAULT_AUTH_TIMEOUT: Duration = Duration::from_secs(3);
+const DEFAULT_SESSION_REVALIDATION_INTERVAL: Duration = Duration::from_secs(30);
 const PUBLIC_MAX_WS_MESSAGE_SIZE: usize = 4 * 1024 * 1024;
 const PUBLIC_OUTBOUND_QUEUE_CAPACITY: usize = 64;
 const PUBLIC_WORLD_REQUEST_CAPACITY: usize = 256;
@@ -50,6 +51,7 @@ pub struct HttpConfig {
     world_request_capacity: usize,
     client_message_timeout: Duration,
     auth_timeout: Duration,
+    session_revalidation_interval: Duration,
     expose_info: bool,
     route_configurators: Vec<RouteConfigurator>,
 }
@@ -75,6 +77,7 @@ impl HttpConfig {
             world_request_capacity: DEFAULT_WORLD_REQUEST_CAPACITY,
             client_message_timeout: DEFAULT_CLIENT_MESSAGE_TIMEOUT,
             auth_timeout: DEFAULT_AUTH_TIMEOUT,
+            session_revalidation_interval: DEFAULT_SESSION_REVALIDATION_INTERVAL,
             expose_info: true,
             route_configurators: Vec::new(),
         }
@@ -158,6 +161,11 @@ impl HttpConfig {
         self
     }
 
+    pub fn session_revalidation_interval(mut self, interval: Duration) -> Self {
+        self.session_revalidation_interval = interval;
+        self
+    }
+
     pub fn expose_info(mut self, expose: bool) -> Self {
         self.expose_info = expose;
         self
@@ -208,6 +216,10 @@ impl HttpConfig {
         self.auth_timeout
     }
 
+    pub(crate) fn session_revalidation_interval_value(&self) -> Duration {
+        self.session_revalidation_interval
+    }
+
     pub fn exposes_info(&self) -> bool {
         self.expose_info
     }
@@ -238,10 +250,13 @@ impl HttpConfig {
             ));
         }
 
-        if self.auth_timeout.is_zero() || self.client_message_timeout.is_zero() {
+        if self.auth_timeout.is_zero()
+            || self.client_message_timeout.is_zero()
+            || self.session_revalidation_interval.is_zero()
+        {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
-                "public HTTP mode requires non-zero authentication and message timeouts",
+                "public HTTP mode requires non-zero authentication, revalidation, and message timeouts",
             ));
         }
 
@@ -286,6 +301,21 @@ impl HttpConfig {
             .as_ref()
             .ok_or_else(ConnectionAuthError::unavailable)?;
         authenticator.authenticate(request).await.map(Some)
+    }
+
+    pub(crate) async fn revalidate(
+        &self,
+        request: ConnectionAuthRequest,
+    ) -> Result<Option<ConnectionPrincipal>, ConnectionAuthError> {
+        if !self.require_authentication {
+            return Ok(None);
+        }
+
+        let authenticator = self
+            .authenticator
+            .as_ref()
+            .ok_or_else(ConnectionAuthError::unavailable)?;
+        authenticator.revalidate(request).await.map(Some)
     }
 
     pub(crate) fn apply_routes(&self, config: &mut web::ServiceConfig) {

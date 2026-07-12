@@ -52,6 +52,7 @@ pub struct RandomSeedGenerator;
 
 impl SeedGenerator for RandomSeedGenerator {
     fn next_seed(&self) -> u64 {
-        Uuid::new_v4().as_u128() as u64
+        // PostgreSQL 使用有符号 BIGINT；保留 63 位随机性并保证可无损持久化。
+        (Uuid::new_v4().as_u128() as u64) & i64::MAX as u64
     }
 }
