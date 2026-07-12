@@ -10,9 +10,15 @@ use extraction_server::{
         AuthConfig, AuthRandom, AuthRandomError, AuthService, SignatureVerificationError,
         SignatureVerifier,
     },
+    matchmaking::{
+        CreatePreparingMatch, MatchVersions, MatchmakingService, ParticipantRecord, StoredMatch,
+    },
     ports::{
-        AuthRepository, AuthRepositoryError, Clock, LoginCommand, LoginResult, NewNonce,
-        RepositoryFuture, RepositoryProbe, SessionRecord, StoredNonce, WarehouseSnapshot,
+        AuthRepository, AuthRepositoryError, Clock, LoginCommand, LoginResult, MatchRepository,
+        MatchRepositoryError, MatchWorldRuntime, MatchWorldRuntimeError, MatchWorldSpec, NewNonce,
+        PreparedMatchWorld, RandomIdGenerator, RandomSeedGenerator, RepositoryFuture,
+        RepositoryProbe, SessionRecord, SettlingTrigger, StoredNonce, TransitionOutcome,
+        WarehouseSnapshot,
     },
 };
 use signinwithethereum::Message;
@@ -306,6 +312,166 @@ impl SignatureVerifier for AcceptVerifier {
     ) -> Result<(), SignatureVerificationError> {
         Ok(())
     }
+}
+
+#[allow(dead_code)]
+pub struct EmptyMatchRepository;
+
+impl RepositoryProbe for EmptyMatchRepository {
+    fn check(&self) -> RepositoryFuture<'_> {
+        Box::pin(async { Ok(()) })
+    }
+}
+
+#[async_trait]
+impl MatchRepository for EmptyMatchRepository {
+    async fn create_preparing(
+        &self,
+        _command: CreatePreparingMatch,
+    ) -> Result<StoredMatch, MatchRepositoryError> {
+        Err(MatchRepositoryError::Unavailable)
+    }
+
+    async fn find_match(
+        &self,
+        _match_id: Uuid,
+    ) -> Result<Option<StoredMatch>, MatchRepositoryError> {
+        Ok(None)
+    }
+
+    async fn find_nonterminal_by_account(
+        &self,
+        _account_id: Uuid,
+    ) -> Result<Option<StoredMatch>, MatchRepositoryError> {
+        Ok(None)
+    }
+
+    async fn abort_unrecoverable_matches(
+        &self,
+        _reason: String,
+        _at: OffsetDateTime,
+    ) -> Result<u64, MatchRepositoryError> {
+        Ok(0)
+    }
+
+    async fn activate(
+        &self,
+        _match_id: Uuid,
+        _started_at: OffsetDateTime,
+    ) -> Result<TransitionOutcome<StoredMatch>, MatchRepositoryError> {
+        Err(MatchRepositoryError::Unavailable)
+    }
+
+    async fn abort(
+        &self,
+        _match_id: Uuid,
+        _reason: String,
+        _at: OffsetDateTime,
+    ) -> Result<TransitionOutcome<StoredMatch>, MatchRepositoryError> {
+        Err(MatchRepositoryError::Unavailable)
+    }
+
+    async fn mark_disconnected(
+        &self,
+        _match_id: Uuid,
+        _account_id: Uuid,
+        _at: OffsetDateTime,
+    ) -> Result<TransitionOutcome<ParticipantRecord>, MatchRepositoryError> {
+        Err(MatchRepositoryError::Unavailable)
+    }
+
+    async fn reconnect(
+        &self,
+        _match_id: Uuid,
+        _account_id: Uuid,
+        _at: OffsetDateTime,
+    ) -> Result<TransitionOutcome<ParticipantRecord>, MatchRepositoryError> {
+        Err(MatchRepositoryError::Unavailable)
+    }
+
+    async fn time_out(
+        &self,
+        _match_id: Uuid,
+        _account_id: Uuid,
+        _at: OffsetDateTime,
+    ) -> Result<TransitionOutcome<ParticipantRecord>, MatchRepositoryError> {
+        Err(MatchRepositoryError::Unavailable)
+    }
+
+    async fn open_extraction(
+        &self,
+        _match_id: Uuid,
+        _at: OffsetDateTime,
+    ) -> Result<TransitionOutcome<StoredMatch>, MatchRepositoryError> {
+        Err(MatchRepositoryError::Unavailable)
+    }
+
+    async fn begin_settling(
+        &self,
+        _match_id: Uuid,
+        _trigger: SettlingTrigger,
+        _at: OffsetDateTime,
+    ) -> Result<TransitionOutcome<StoredMatch>, MatchRepositoryError> {
+        Err(MatchRepositoryError::Unavailable)
+    }
+
+    async fn finish(
+        &self,
+        _match_id: Uuid,
+        _at: OffsetDateTime,
+    ) -> Result<TransitionOutcome<StoredMatch>, MatchRepositoryError> {
+        Err(MatchRepositoryError::Unavailable)
+    }
+}
+
+struct EmptyWorldRuntime;
+
+#[async_trait]
+impl MatchWorldRuntime for EmptyWorldRuntime {
+    async fn prepare_world(
+        &self,
+        _spec: MatchWorldSpec,
+    ) -> Result<PreparedMatchWorld, MatchWorldRuntimeError> {
+        Ok(PreparedMatchWorld {
+            world_generation: "test-world-generation".to_owned(),
+        })
+    }
+
+    async fn stop_world(
+        &self,
+        _match_id: Uuid,
+        _world_name: &str,
+    ) -> Result<bool, MatchWorldRuntimeError> {
+        Ok(false)
+    }
+
+    async fn despawn_detached(
+        &self,
+        _world_name: &str,
+        _account_id: Uuid,
+    ) -> Result<bool, MatchWorldRuntimeError> {
+        Ok(false)
+    }
+}
+
+#[allow(dead_code)]
+pub async fn empty_matchmaking(clock: Arc<dyn Clock>) -> Arc<MatchmakingService> {
+    let service = MatchmakingService::start(
+        Arc::new(EmptyMatchRepository),
+        clock,
+        Arc::new(RandomIdGenerator),
+        Arc::new(RandomSeedGenerator),
+        MatchVersions {
+            generation: "generation-v1".to_owned(),
+            gameplay: "gameplay-v1".to_owned(),
+            config: "config-v1".to_owned(),
+        },
+    );
+    service
+        .bind_runtime(Arc::new(EmptyWorldRuntime))
+        .await
+        .unwrap();
+    service
 }
 
 pub fn service_at(now: OffsetDateTime) -> (AuthService, Arc<MemoryRepository>) {

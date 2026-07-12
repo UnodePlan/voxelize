@@ -86,6 +86,7 @@ impl Server {
                 .connection_client_ids
                 .remove(&connection_id)
                 .unwrap_or_else(|| connection_id.clone());
+            self.connection_attach_attempt_ids.remove(&connection_id);
             Some((
                 sender,
                 token,

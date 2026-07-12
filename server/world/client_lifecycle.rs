@@ -42,6 +42,21 @@ impl World {
         }
         drop(clients);
 
+        let attach_request = ClientAttachRequest {
+            kind: ClientAttachKind::Join,
+            world_name: self.name.clone(),
+            client_id: id.to_owned(),
+            attach_attempt_id: join_attempt_id.clone(),
+            principal: principal.clone(),
+        };
+        if self
+            .client_attach_guard
+            .as_ref()
+            .is_some_and(|guard| !guard(&attach_request))
+        {
+            return Err(ClientJoinError::AdmissionDenied);
+        }
+
         let body =
             RigidBody::new(&AABB::new().scale_x(0.8).scale_y(1.8).scale_z(0.8).build()).build();
         let interactor = self.physics_mut().register(&body);
@@ -79,7 +94,7 @@ impl World {
                 sender: sender.clone(),
                 principal,
                 attached: true,
-                join_attempt_id: join_attempt_id.clone(),
+                attach_attempt_id: join_attempt_id.clone(),
             },
         );
         self.entity_ids_mut().insert(id.to_owned(), entity.id());
@@ -134,6 +149,7 @@ impl World {
         id: &str,
         sender: &WsSender,
         principal: &ConnectionPrincipal,
+        attach_attempt_id: String,
     ) -> Result<ClientJoinReceipt, ClientRebindError> {
         if !self.lifecycle.accepts_clients() {
             return Err(ClientRebindError::WorldNotReady(self.lifecycle));
@@ -153,6 +169,21 @@ impl World {
             return Err(ClientRebindError::PrincipalMismatch);
         }
 
+        let attach_request = ClientAttachRequest {
+            kind: ClientAttachKind::Rebind,
+            world_name: self.name.clone(),
+            client_id: id.to_owned(),
+            attach_attempt_id: attach_attempt_id.clone(),
+            principal: Some(principal.clone()),
+        };
+        if self
+            .client_attach_guard
+            .as_ref()
+            .is_some_and(|guard| !guard(&attach_request))
+        {
+            return Err(ClientRebindError::AdmissionDenied);
+        }
+
         self.write_component::<AddrComp>()
             .insert(client.entity, AddrComp::new(sender))
             .map_err(|_| ClientRebindError::NotFound)?;
@@ -163,6 +194,7 @@ impl World {
             client.sender = sender.clone();
             client.principal = Some(principal.clone());
             client.attached = true;
+            client.attach_attempt_id = attach_attempt_id.clone();
         }
 
         let (init_message, known_entities) = self.generate_client_init(id, client.entity);
@@ -172,7 +204,8 @@ impl World {
 
         Ok(ClientJoinReceipt {
             client_id: id.to_owned(),
-            join_attempt_id: client.join_attempt_id,
+            // 保留公开回执的历史字段名，值代表本次最新 attach 租约。
+            join_attempt_id: attach_attempt_id,
         })
     }
 
@@ -180,7 +213,7 @@ impl World {
         let matches = self
             .clients()
             .get(id)
-            .is_some_and(|client| client.join_attempt_id == attempt_id);
+            .is_some_and(|client| client.attach_attempt_id == attempt_id);
         if matches {
             self.remove_client(id)
         } else {

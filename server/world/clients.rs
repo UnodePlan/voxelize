@@ -25,8 +25,8 @@ pub struct Client {
     /// Detached clients keep their entity but cannot receive or submit requests.
     pub attached: bool,
 
-    /// Admission lease that created this client entity.
-    pub(crate) join_attempt_id: String,
+    /// Admission lease that most recently attached this client entity.
+    pub(crate) attach_attempt_id: String,
 }
 
 pub type Clients = HashMap<String, Client>;

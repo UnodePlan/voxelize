@@ -4,7 +4,14 @@ mod config;
 pub mod contracts;
 #[cfg(feature = "engine")]
 mod engine;
+#[cfg(feature = "engine")]
+mod engine_connection_observer;
+#[cfg(feature = "engine")]
+mod engine_matchmaking;
+#[cfg(feature = "engine")]
+mod engine_movement;
 mod http;
+pub mod match_world;
 pub mod matchmaking;
 pub mod persistence;
 pub mod ports;
@@ -43,6 +50,7 @@ async fn run_application(
     application: bootstrap::Application,
 ) -> io::Result<()> {
     let origin = config.public_origin().to_owned();
+    let _matchmaking_process_lock = application.matchmaking_process_lock;
     let state = application.state;
     HttpServer::new(move || {
         let cors = Cors::default()

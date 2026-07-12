@@ -24,6 +24,7 @@ pub enum ClientJoinError {
     WorldFull { capacity: usize },
     DuplicateClient,
     DuplicatePrincipal,
+    AdmissionDenied,
     JoinCancelled,
 }
 
@@ -34,6 +35,7 @@ impl fmt::Display for ClientJoinError {
             Self::WorldFull { capacity } => write!(formatter, "world is full ({capacity})"),
             Self::DuplicateClient => formatter.write_str("client is already in this world"),
             Self::DuplicatePrincipal => formatter.write_str("principal is already in this world"),
+            Self::AdmissionDenied => formatter.write_str("client admission was denied"),
             Self::JoinCancelled => formatter.write_str("join attempt was cancelled"),
         }
     }
@@ -60,6 +62,7 @@ pub enum ClientRebindError {
     PrincipalMismatch,
     ClientAlreadyAttached,
     WorldNotReady(WorldLifecycleState),
+    AdmissionDenied,
 }
 
 impl fmt::Display for ClientRebindError {
@@ -71,6 +74,7 @@ impl fmt::Display for ClientRebindError {
             }
             Self::ClientAlreadyAttached => formatter.write_str("client is already attached"),
             Self::WorldNotReady(state) => write!(formatter, "world is not ready: {state:?}"),
+            Self::AdmissionDenied => formatter.write_str("client admission was denied"),
         }
     }
 }

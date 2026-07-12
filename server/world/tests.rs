@@ -92,6 +92,7 @@ fn detached_client_rebinds_only_with_the_same_principal() {
             "player-1",
             &attacker_sender,
             &ConnectionPrincipal::new("account-2", "session-2"),
+            "attacker-attempt".to_owned(),
         ),
         Err(ClientRebindError::PrincipalMismatch)
     );
@@ -102,6 +103,7 @@ fn detached_client_rebinds_only_with_the_same_principal() {
             "player-1",
             &new_sender,
             &ConnectionPrincipal::new("account-1", "session-2"),
+            "owner-rebind-attempt".to_owned(),
         )
         .is_ok());
     assert_eq!(world.clients().len(), 1);
@@ -129,6 +131,129 @@ fn stale_join_cleanup_cannot_remove_a_newer_client_lease() {
     assert_eq!(world.clients().len(), 1);
     assert!(world.remove_client_for_join_attempt("player-1", "current-attempt"));
     assert!(world.clients().is_empty());
+}
+
+#[test]
+fn stale_rebind_cleanup_cannot_remove_a_newer_attach_lease() {
+    let config = WorldConfig::new()
+        .client_disconnect_policy(ClientDisconnectPolicy::Detach)
+        .build();
+    let mut world = test_world("rebind-lease", &config);
+    world.prepare();
+    let principal = ConnectionPrincipal::new("account-1", "session-1");
+    let (sender, _receiver) = ws_sender();
+    world
+        .add_client(
+            "player-1",
+            "Player",
+            &sender,
+            ClientPreferencesPatch::default(),
+            Some(principal.clone()),
+            "join-attempt".to_owned(),
+        )
+        .unwrap();
+    assert_eq!(
+        world.detach_client("player-1"),
+        ClientDetachOutcome::Detached
+    );
+    let (first_sender, _first_receiver) = ws_sender();
+    world
+        .rebind_client(
+            "player-1",
+            &first_sender,
+            &principal,
+            "rebind-attempt-1".to_owned(),
+        )
+        .unwrap();
+    assert_eq!(
+        world.detach_client("player-1"),
+        ClientDetachOutcome::Detached
+    );
+    let (second_sender, _second_receiver) = ws_sender();
+    world
+        .rebind_client(
+            "player-1",
+            &second_sender,
+            &principal,
+            "rebind-attempt-2".to_owned(),
+        )
+        .unwrap();
+
+    assert!(!world.remove_client_for_join_attempt("player-1", "rebind-attempt-1"));
+    assert!(world.remove_client_for_join_attempt("player-1", "rebind-attempt-2"));
+}
+
+#[test]
+fn attach_guard_denies_join_before_world_state_is_written() {
+    let mut world = test_world("guarded-join", &WorldConfig::default());
+    world.prepare();
+    world.set_client_attach_guard(|request| {
+        assert_eq!(request.kind, ClientAttachKind::Join);
+        assert_eq!(request.world_name, "guarded-join");
+        assert_eq!(request.client_id, "player-1");
+        assert_eq!(request.attach_attempt_id, "guarded-attempt");
+        false
+    });
+    let (sender, _receiver) = ws_sender();
+
+    let result = world.add_client(
+        "player-1",
+        "Player",
+        &sender,
+        ClientPreferencesPatch::default(),
+        Some(ConnectionPrincipal::new("account-1", "session-1")),
+        "guarded-attempt".to_owned(),
+    );
+
+    assert_eq!(result, Err(ClientJoinError::AdmissionDenied));
+    assert!(world.clients().is_empty());
+    assert!(world.entity_ids().get("player-1").is_none());
+}
+
+#[test]
+fn attach_guard_denies_rebind_before_address_is_restored() {
+    let config = WorldConfig::new()
+        .client_disconnect_policy(ClientDisconnectPolicy::Detach)
+        .build();
+    let mut world = test_world("guarded-rebind", &config);
+    world.prepare();
+    world.set_client_attach_guard(|request| {
+        if request.kind == ClientAttachKind::Rebind {
+            assert_eq!(request.attach_attempt_id, "guarded-rebind-retry");
+            return false;
+        }
+        true
+    });
+    let principal = ConnectionPrincipal::new("account-1", "session-1");
+    let (sender, _receiver) = ws_sender();
+    world
+        .add_client(
+            "player-1",
+            "Player",
+            &sender,
+            ClientPreferencesPatch::default(),
+            Some(principal.clone()),
+            "guarded-rebind-attempt".to_owned(),
+        )
+        .unwrap();
+    assert_eq!(
+        world.detach_client("player-1"),
+        ClientDetachOutcome::Detached
+    );
+    let entity = world.clients().get("player-1").unwrap().entity;
+    assert!(world.read_component::<AddrComp>().get(entity).is_none());
+    let (replacement, _replacement_receiver) = ws_sender();
+
+    let result = world.rebind_client(
+        "player-1",
+        &replacement,
+        &principal,
+        "guarded-rebind-retry".to_owned(),
+    );
+
+    assert_eq!(result, Err(ClientRebindError::AdmissionDenied));
+    assert!(!world.clients().get("player-1").unwrap().attached);
+    assert!(world.read_component::<AddrComp>().get(entity).is_none());
 }
 
 #[test]

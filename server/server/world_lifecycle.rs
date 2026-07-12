@@ -1,8 +1,10 @@
+use std::fmt;
+
 use actix::{fut::ready, ActorFutureExt, Message as ActixMessage, ResponseActFuture, WrapFuture};
 
 use crate::{
-    errors::AddWorldError, remove_timing_data_for_world, ClientCancelJoinRequest, StopWorld, World,
-    WorldStopSummary,
+    errors::AddWorldError, remove_timing_data_for_world, ClientCancelJoinRequest, GetInfo, Prepare,
+    StopWorld, World, WorldLifecycleState, WorldStopSummary,
 };
 
 use super::*;
@@ -18,6 +20,98 @@ impl Handler<AddWorld> for Server {
 
     fn handle(&mut self, message: AddWorld, _: &mut Context<Self>) -> Self::Result {
         MessageResult(self.add_world(message.world).map(|_| ()))
+    }
+}
+
+#[derive(ActixMessage)]
+#[rtype(result = "Result<PrepareWorldOutcome, PrepareWorldError>")]
+pub struct PrepareWorld {
+    pub name: String,
+    /// 可选的比较后准备保护；首次查询 generation 时传 None。
+    pub expected_generation: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PrepareWorldOutcome {
+    pub generation: String,
+    pub lifecycle: WorldLifecycleState,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum PrepareWorldError {
+    NotFound,
+    GenerationMismatch {
+        expected: String,
+        actual: Option<String>,
+    },
+    Unavailable,
+}
+
+impl fmt::Display for PrepareWorldError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NotFound => formatter.write_str("world was not found"),
+            Self::GenerationMismatch { expected, actual } => {
+                write!(
+                    formatter,
+                    "world generation mismatch: expected {expected}, actual {actual:?}"
+                )
+            }
+            Self::Unavailable => formatter.write_str("world is unavailable"),
+        }
+    }
+}
+
+impl std::error::Error for PrepareWorldError {}
+
+impl Handler<PrepareWorld> for Server {
+    type Result = ResponseActFuture<Self, Result<PrepareWorldOutcome, PrepareWorldError>>;
+
+    fn handle(&mut self, message: PrepareWorld, _: &mut Context<Self>) -> Self::Result {
+        let Some(generation) = self.world_generations.get(&message.name).cloned() else {
+            return Box::pin(ready(Err(PrepareWorldError::NotFound)));
+        };
+        if let Some(expected) = message.expected_generation {
+            if expected != generation {
+                return Box::pin(ready(Err(PrepareWorldError::GenerationMismatch {
+                    expected,
+                    actual: Some(generation),
+                })));
+            }
+        }
+        let Some(world) = self.worlds.get(&message.name).cloned() else {
+            return Box::pin(ready(Err(PrepareWorldError::NotFound)));
+        };
+
+        let world_name = message.name;
+        let expected_callback_generation = generation.clone();
+        Box::pin(
+            async move {
+                world
+                    .send(Prepare)
+                    .await
+                    .map_err(|_| PrepareWorldError::Unavailable)?;
+                world
+                    .send(GetInfo)
+                    .await
+                    .map_err(|_| PrepareWorldError::Unavailable)
+            }
+            .into_actor(self)
+            .map(move |result, server, _| {
+                let actual = server.world_generations.get(&world_name).cloned();
+                if actual.as_ref() != Some(&expected_callback_generation) {
+                    return Err(PrepareWorldError::GenerationMismatch {
+                        expected: expected_callback_generation,
+                        actual,
+                    });
+                }
+                let info = result?;
+                Ok(PrepareWorldOutcome {
+                    generation,
+                    lifecycle: info.lifecycle,
+                })
+            }),
+        )
     }
 }
 
@@ -62,6 +156,7 @@ impl Handler<RemoveWorld> for Server {
                     .insert(connection_id.clone(), (sender, token));
             }
             self.connection_client_ids.remove(&connection_id);
+            self.connection_attach_attempt_ids.remove(&connection_id);
         }
 
         let pending_connections: Vec<_> = self

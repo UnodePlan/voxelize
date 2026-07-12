@@ -1,8 +1,20 @@
+#[cfg(feature = "engine")]
+use std::sync::Arc;
+
 use actix_web::{web, HttpRequest};
 use serde::Serialize;
 use time::format_description::well_known::Rfc3339;
+use uuid::Uuid;
+
+#[cfg(feature = "engine")]
+use actix::Addr;
+#[cfg(feature = "engine")]
+use voxelize::Server;
 
 use super::{error::ApiError, session::required_session, AppState};
+#[cfg(feature = "engine")]
+use crate::engine_matchmaking::EngineMatchWorldRuntime;
+use crate::matchmaking::{QueueSnapshot, QueueStatus};
 
 pub(super) fn configure(config: &mut web::ServiceConfig) {
     config.service(
@@ -15,24 +27,27 @@ pub(super) fn configure(config: &mut web::ServiceConfig) {
 async fn enqueue(
     request: HttpRequest,
     state: web::Data<AppState>,
+    #[cfg(feature = "engine")] server: Option<web::Data<Addr<Server>>>,
 ) -> Result<web::Json<QueueResponse>, ApiError> {
     if !state.matchmaking_enabled() {
         return Err(ApiError::service_unavailable());
     }
     let session = required_session(&request, &state).await?;
-    let queued = state
+    let matchmaking = state
         .matchmaking()
-        .enqueue(session.account_id, state.utc_now());
-    let enqueued_at = queued
-        .enqueued_at
-        .format(&Rfc3339)
-        .map_err(|_| ApiError::service_unavailable())?;
-    Ok(web::Json(QueueResponse {
-        status: "queued",
-        position: Some(queued.position),
-        enqueued_at: Some(enqueued_at),
-        removed: None,
-    }))
+        .cloned()
+        .ok_or_else(ApiError::service_unavailable)?;
+    #[cfg(feature = "engine")]
+    if let Some(server) = server {
+        matchmaking
+            .bind_runtime(Arc::new(EngineMatchWorldRuntime::new(
+                server.get_ref().clone(),
+                Arc::downgrade(&matchmaking),
+            )))
+            .await?;
+    }
+    let queued = matchmaking.enqueue(session.account_id).await?;
+    QueueResponse::try_from(queued).map(web::Json)
 }
 
 async fn dequeue(
@@ -43,13 +58,11 @@ async fn dequeue(
         return Err(ApiError::service_unavailable());
     }
     let session = required_session(&request, &state).await?;
-    let removed = state.matchmaking().dequeue(session.account_id);
-    Ok(web::Json(QueueResponse {
-        status: "idle",
-        position: None,
-        enqueued_at: None,
-        removed: Some(removed),
-    }))
+    let matchmaking = state
+        .matchmaking()
+        .ok_or_else(ApiError::service_unavailable)?;
+    let snapshot = matchmaking.cancel(session.account_id).await?;
+    QueueResponse::try_from(snapshot).map(web::Json)
 }
 
 #[derive(Serialize)]
@@ -61,5 +74,36 @@ struct QueueResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     enqueued_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    match_id: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    world_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     removed: Option<bool>,
+}
+
+impl TryFrom<QueueSnapshot> for QueueResponse {
+    type Error = ApiError;
+
+    fn try_from(snapshot: QueueSnapshot) -> Result<Self, Self::Error> {
+        let enqueued_at = snapshot
+            .enqueued_at
+            .map(|value| value.format(&Rfc3339))
+            .transpose()
+            .map_err(|_| ApiError::service_unavailable())?;
+        Ok(Self {
+            status: match snapshot.status {
+                QueueStatus::Idle => "idle",
+                QueueStatus::Queued => "queued",
+                QueueStatus::Preparing => "preparing",
+                QueueStatus::Active => "active",
+                QueueStatus::ExtractionOpen => "extractionOpen",
+                QueueStatus::Settling => "settling",
+            },
+            position: snapshot.position,
+            enqueued_at,
+            match_id: snapshot.match_id,
+            world_name: snapshot.world_name,
+            removed: snapshot.removed,
+        })
+    }
 }

@@ -12,7 +12,7 @@ use actix_web::web;
 use crate::{
     auth::{AuthService, NonceRateLimiter},
     contracts::ExtractionManifest,
-    matchmaking::MatchmakingQueue,
+    matchmaking::MatchmakingService,
     ports::{Clock, RepositoryProbe, SystemClock},
 };
 
@@ -25,7 +25,7 @@ pub struct AppState {
     manifest: ExtractionManifest,
     readiness_timeout: Duration,
     auth: Option<AuthService>,
-    matchmaking: Arc<MatchmakingQueue>,
+    matchmaking: Option<Arc<MatchmakingService>>,
     clock: Arc<dyn Clock>,
     auth_login_enabled: bool,
     matchmaking_enabled: bool,
@@ -40,7 +40,7 @@ impl AppState {
             manifest,
             readiness_timeout: DEFAULT_READINESS_TIMEOUT,
             auth: None,
-            matchmaking: Arc::new(MatchmakingQueue::default()),
+            matchmaking: None,
             clock: Arc::new(SystemClock::default()),
             auth_login_enabled: true,
             matchmaking_enabled: true,
@@ -52,11 +52,11 @@ impl AppState {
     pub fn with_services(
         mut self,
         auth: AuthService,
-        matchmaking: Arc<MatchmakingQueue>,
+        matchmaking: Arc<MatchmakingService>,
         clock: Arc<dyn Clock>,
     ) -> Self {
         self.auth = Some(auth);
-        self.matchmaking = matchmaking;
+        self.matchmaking = Some(matchmaking);
         self.clock = clock;
         self
     }
@@ -80,8 +80,8 @@ impl AppState {
         self.auth.as_ref()
     }
 
-    pub(crate) fn matchmaking(&self) -> &MatchmakingQueue {
-        &self.matchmaking
+    pub(crate) fn matchmaking(&self) -> Option<&Arc<MatchmakingService>> {
+        self.matchmaking.as_ref()
     }
 
     pub(crate) fn auth_login_enabled(&self) -> bool {
@@ -103,10 +103,6 @@ impl AppState {
     ) -> bool {
         self.verification_rate_limiter
             .allow(peer_addr, self.clock.monotonic_now())
-    }
-
-    pub(crate) fn utc_now(&self) -> time::OffsetDateTime {
-        self.clock.utc_now().into()
     }
 }
 

@@ -19,6 +19,7 @@ pub(crate) struct DetachedConnection {
     pub(crate) connection_id: String,
     pub(crate) world_name: String,
     pub(crate) client_id: String,
+    pub(crate) attach_attempt_id: String,
     pub(crate) world_generation: String,
     pub(crate) connection_token: String,
 }
@@ -30,6 +31,8 @@ pub(crate) struct PendingRebind {
     pub(crate) connection_token: String,
     pub(crate) sender: WsSender,
     pub(crate) principal: ConnectionPrincipal,
+    pub(crate) disconnected: bool,
+    pub(crate) despawn_requested: bool,
 }
 
 #[derive(Clone)]

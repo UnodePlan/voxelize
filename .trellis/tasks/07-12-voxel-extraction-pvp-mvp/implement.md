@@ -67,16 +67,22 @@
 
 ## 阶段 3：恰好 10 人比赛与 World 生命周期
 
-- [ ] 实现 FIFO queue、每账号一个非终态席位、9 人 Waiting、第 10 人原子冻结名单、第 11 人拒绝；终态后释放互斥以允许重新排队。
-- [ ] 实现 `Waiting -> Preparing -> Active -> ExtractionOpen -> Settling -> Finished|Aborted` 与参与者单向状态。
-- [ ] Preparing 断线时中止未开局批次、清理部分 World，并按原排队时间恢复其余在线玩家，不创建成绩或资产。
-- [ ] 创建独立内存 World，底层 320 范围、玩法精确 300 边界；写入 seed 和三类版本号。
-- [ ] 开局记录 `+8m`、`+12m` 绝对 deadline；全部终态可提前进入 Settling。
-- [ ] Waiting 断线离队；Active 断线 detach，60 秒内同账号 rebind，超时只死亡一次。
-- [ ] Finished/Aborted 冻结写入并清理 World、连接、pending tick 和所有局内资源。
-- [ ] 用不同永久仓库存量的账号验证固定初始装备/属性完全一致，并拒绝任何客户端仓库配装字段。
+- [x] 实现 FIFO queue、每账号一个非终态席位、9 人 Waiting、第 10 人原子冻结名单、第 11 人拒绝；终态后释放互斥以允许重新排队。
+- [x] 实现 `Waiting -> Preparing -> Active -> ExtractionOpen -> Settling -> Finished|Aborted` 与参与者单向状态。
+- [x] Preparing 断线时中止未开局批次、清理部分 World，并按原排队时间恢复其余在线玩家，不创建成绩或资产。
+- [x] 创建独立内存 World，底层 320 范围、玩法精确 300 边界；写入 seed 和三类版本号。
+- [x] 开局记录 `+8m`、`+12m` 绝对 deadline；全部终态可提前进入 Settling。
+- [x] Waiting 断线离队；Active 断线 detach，60 秒内同账号 rebind，超时只进入一次 TimedOut 并按 generation 安全 despawn；死亡掉落接入保留到阶段 7。
+- [x] Finished/Aborted 冻结生命周期写入并清理本阶段创建的 World、连接租约、pending tick/request 和协调器局内状态。
+- [ ] 把固定装备、12 格背包和 20 半心实际安装为服务端权威玩家 ECS 状态，并用不同永久仓库存量验证完全一致；当前只冻结 `MatchWorldSpec` 配置，实际组件分别在阶段 5/7 完成。
 
-验收：fake clock + 11 个轻量 Actor 客户端覆盖 9/10/11、Preparing 断线回队、迟到加入、终态重新排队、固定公平入场、60 秒重连和连续多局无泄漏。
+实现记录（2026-07-13）：新增单进程有界命令协调器，统一排序 HTTP 排队、WS 连接生命周期与 fake-clock tick；只有已认证且存在游戏 socket、已绑定 World runtime、无非终态席位的账号可以进入 FIFO。第 10 人将恰好 10 个唯一账号原子固化为 `0..9` 座位，第 11 人失败；PostgreSQL 创建按 UUID 顺序锁账号，状态写按 match 后 participant 的固定顺序加锁，一致性读取使用可重复读。Preparing 仅在 10 个 World Join 全部提交后激活，任一名单成员断线会中止、停止部分 World，并按原时间与次序恢复其他在线玩家。
+
+每局使用 `saving(false)` 的动态 World，底层 chunk 范围 `[-10,-10]..[9,9]`、玩法边界 `[-150,150)`；`MatchWorldSpec` 冻结 10 人、12 格背包、20 半心和相同初始装备，但尚未把后 3 项冒充为已安装的玩家 ECS 组件。比赛持久化 seed 与 generation/gameplay/config 三类版本，记录 `+8m`、`+12m` 和结算宽限绝对时间；数据库返回延迟不改变绝对时刻，独立 watchdog 会在协调器等待 SQL 时先关闭 gate 并停止 World。断线重连采用精确 60 秒边界，public player ID、generation 与唯一 attach attempt 共同阻止迟到 prepare/rebind/despawn 回调影响新租约或同名新 World。Settling/Aborted 先停 World 后写数据库，失败由后续 Tick 幂等重试；ticker 最多保留一个待处理 Tick。未启用引擎或尚未绑定 runtime 时排队从第 1 人开始即失败关闭。
+
+持久化创建遇到未知结果时复用完全相同的 match ID/名单/seed/version，PostgreSQL 只接受完全一致的幂等重试。服务启动先用专用 PostgreSQL 连接取得进程级 advisory lock，第二实例在执行恢复前即失败；随后用带 lock/statement timeout 的事务原子中止遗留非终态比赛和参与者，保留终态参与者及已提交 settlement，重复恢复返回 0。该失败关闭恢复提前完成了阶段 8 的启动清理子项，但不等同于结算 reconciliation。当前专用锁连接尚无存活监测，部署时数据库/网络会话丢失必须停止并重启旧实例，禁止重叠替换进程。
+
+验证记录：根引擎 lib 55/55；应用默认全目标 61/61，`engine,db-tests` 全目标 84/84，其中 `engine` lib 34/34、真实 PostgreSQL matchmaking 7/7、认证 11/11。应用全目标 Clippy `--no-deps -D warnings`、定向 rustfmt 与 `git diff --check` 均通过；根引擎仍输出既有 84 条基线 warning，本阶段应用代码无新增 Clippy 告警。覆盖 9/10/11、未知创建重试、Preparing 备用 socket 断线中止与 FIFO 保留、激活期间断线、绝对 deadline、Settling 首次写失败后的单次 World 停止、永久 pending World stop 的有限超时、60 秒重连准入与 timeout claim 两种线性化顺序、Join ABA、重复 Rebound、generation/attach attempt 隔离、进程锁和启动恢复。仍未完成真实 10/11 个网络 Actor 连续多局泄漏验收、玩家 ECS 固定装备/背包/生命，以及移动的体素碰撞 sweep/完整竖直运动权威；现有移动解析器只提供有限数、状态、300 边界和速率过滤，这些缺口不能作为 PVP 生产公平性验收。
 
 回滚：先支持单进程房间，不引入 Redis 或跨进程 World。
 
@@ -134,7 +140,7 @@
 - [ ] 异步事务原子写 settlement/items、ledger、warehouse 和 participant Extracted；World tick 不等待 SQL。
 - [ ] commit 后才确认；未知结果先查询，commit 前失败为 0，commit 后响应丢失仍为 1。
 - [ ] 实现硬截止后 30 秒写入宽限期；期满不再发起写入，仅保留有界只读 reconciliation，并允许清理玩法 World。
-- [ ] 启动时把未结束比赛标 Aborted，保留已提交收益，其他局内收益作废。
+- [x] 启动时把未结束比赛标 Aborted，保留已提交收益，其他局内收益作废；完整 settlement reconciliation 仍留在本阶段后续子项。
 - [ ] 实现仅允许本人访问的 `/api/matches/{match_id}/result` 与 `/api/matches/latest-result`，覆盖 PendingReconciliation/Extracted/Aborted。
 - [ ] 仓库只读展示数量和 settlement 聚合统计，不提供消费/交易/属性入口。
 

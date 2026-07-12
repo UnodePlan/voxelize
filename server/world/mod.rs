@@ -1,4 +1,5 @@
 mod bookkeeping;
+mod client_admission;
 mod client_lifecycle;
 mod clients;
 mod components;
@@ -64,6 +65,7 @@ use crate::{
 use super::common::ClientFilter;
 
 pub use bookkeeping::*;
+pub use client_admission::{ClientAttachKind, ClientAttachRequest};
 pub use clients::*;
 pub use components::*;
 pub use config::*;
@@ -304,6 +306,9 @@ pub struct World {
     /// Called before a client entity is removed from the world.
     client_leave_modifier: Option<Arc<dyn Fn(&mut World, Entity) + Send + Sync>>,
 
+    /// 应用层拥有的 Join/Rebind 最终准入检查。
+    client_attach_guard: Option<client_admission::ClientAttachGuard>,
+
     /// The metadata parser for clients.
     client_parser: Arc<dyn Fn(&mut World, &str, Entity) + Send + Sync>,
 
@@ -424,6 +429,7 @@ pub struct ClientRebindRequest {
     pub id: String,
     pub sender: WsSender,
     pub principal: ConnectionPrincipal,
+    pub attach_attempt_id: String,
 }
 
 #[derive(ActixMessage)]
@@ -572,12 +578,12 @@ impl Handler<ClientRebindRequest> for SyncWorld {
     type Result = MessageResult<ClientRebindRequest>;
 
     fn handle(&mut self, msg: ClientRebindRequest, _: &mut Context<Self>) -> Self::Result {
-        MessageResult(
-            self.0
-                .write()
-                .unwrap()
-                .rebind_client(&msg.id, &msg.sender, &msg.principal),
-        )
+        MessageResult(self.0.write().unwrap().rebind_client(
+            &msg.id,
+            &msg.sender,
+            &msg.principal,
+            msg.attach_attempt_id,
+        ))
     }
 }
 
@@ -822,6 +828,7 @@ impl World {
             client_parser_is_default: true,
             client_modifier: None,
             client_leave_modifier: None,
+            client_attach_guard: None,
             transport_handle: None,
             command_handle: None,
             extra_init_data: HashMap::default(),
@@ -1088,6 +1095,13 @@ impl World {
         modifier: F,
     ) {
         self.client_leave_modifier = Some(Arc::new(modifier));
+    }
+
+    pub fn set_client_attach_guard<F: Fn(&ClientAttachRequest) -> bool + Send + Sync + 'static>(
+        &mut self,
+        guard: F,
+    ) {
+        self.client_attach_guard = Some(Arc::new(guard));
     }
 
     pub fn set_client_parser<F: Fn(&mut World, &str, Entity) + Send + Sync + 'static>(

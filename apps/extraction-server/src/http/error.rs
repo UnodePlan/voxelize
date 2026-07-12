@@ -3,7 +3,7 @@ use std::fmt;
 use actix_web::{http::StatusCode, HttpResponse, ResponseError};
 use serde::Serialize;
 
-use crate::{auth::AuthError, contracts::ErrorCode};
+use crate::{auth::AuthError, contracts::ErrorCode, matchmaking::MatchmakingError};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ApiError {
@@ -43,6 +43,32 @@ impl From<AuthError> for ApiError {
             status,
             code: error.code(),
             retryable: error == AuthError::ServiceUnavailable,
+        }
+    }
+}
+
+impl From<MatchmakingError> for ApiError {
+    fn from(error: MatchmakingError) -> Self {
+        let (status, code, retryable) = match error {
+            MatchmakingError::ConnectionRequired | MatchmakingError::RosterLocked => {
+                (StatusCode::CONFLICT, ErrorCode::MatchRosterLocked, false)
+            }
+            MatchmakingError::Full => (StatusCode::CONFLICT, ErrorCode::MatchFull, false),
+            MatchmakingError::ReconnectExpired => (
+                StatusCode::CONFLICT,
+                ErrorCode::MatchReconnectExpired,
+                false,
+            ),
+            MatchmakingError::Unavailable => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                ErrorCode::ServiceUnavailable,
+                true,
+            ),
+        };
+        Self {
+            status,
+            code,
+            retryable,
         }
     }
 }

@@ -32,18 +32,28 @@ impl Server {
         {
             return Box::pin(ready(Some("World is busy, please reconnect.".to_owned())));
         }
-        let Some((sender, token)) = self.lost_sessions.remove(&connection_id) else {
+        if !self.lost_sessions.contains_key(&connection_id) {
             return Box::pin(ready(Some(
                 "Connection is already joining or joined.".to_owned(),
             )));
-        };
-
+        }
         let principal = self.connection_principals.get(&connection_id).cloned();
-        let client_id = if principal.is_some() {
-            nanoid!()
-        } else {
-            connection_id.clone()
+        let client_id = match principal.as_ref() {
+            Some(principal) => match self.authenticated_client_id_resolver.as_ref() {
+                Some(resolver) => {
+                    let Some(client_id) = resolver.resolve_client_id(&request.world, principal)
+                    else {
+                        return Box::pin(ready(Some(
+                            "Authenticated client ID is unavailable.".to_owned(),
+                        )));
+                    };
+                    client_id
+                }
+                None => nanoid!(),
+            },
+            None => connection_id.clone(),
         };
+        let (sender, token) = self.lost_sessions.remove(&connection_id).unwrap();
         let attempt_id = nanoid!();
         let world_name = request.world;
         let username = if self.http_config.security_mode() == ConnectionSecurityMode::PublicStrict {
@@ -102,13 +112,26 @@ impl Server {
             match result {
                 Ok(Ok(receipt)) if pending_matches && world_matches => {
                     let pending = server.pending_joins.remove(&connection_id).unwrap();
+                    let client_id = receipt.client_id;
                     server.connections.insert(
                         connection_id.clone(),
-                        (pending.sender, pending.world_name, pending.token),
+                        (pending.sender, pending.world_name.clone(), pending.token),
                     );
                     server
                         .connection_client_ids
-                        .insert(connection_id, receipt.client_id);
+                        .insert(connection_id.clone(), client_id.clone());
+                    server
+                        .connection_attach_attempt_ids
+                        .insert(connection_id.clone(), pending.attempt_id.clone());
+                    let principal = server.connection_principals.get(&connection_id).cloned();
+                    server.observe_connection_lifecycle(ConnectionLifecycleEvent::JoinCommitted {
+                        connection_id: connection_id.clone(),
+                        principal,
+                        world_name: pending.world_name,
+                        world_generation,
+                        client_id,
+                        attach_attempt_id: pending.attempt_id,
+                    });
                     None
                 }
                 Ok(Ok(receipt)) => {
@@ -183,6 +206,7 @@ fn join_error_message(error: ClientJoinError) -> String {
         ClientJoinError::DuplicateClient | ClientJoinError::DuplicatePrincipal => {
             "Client is already in this world.".to_owned()
         }
+        ClientJoinError::AdmissionDenied => "Client admission was denied.".to_owned(),
         ClientJoinError::JoinCancelled => "Join was cancelled.".to_owned(),
     }
 }

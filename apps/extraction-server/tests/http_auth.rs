@@ -7,24 +7,36 @@ use actix_web::{
 use extraction_server::{
     configure_api,
     contracts::bundled_manifest,
-    matchmaking::MatchmakingQueue,
-    ports::{Clock, WarehouseSnapshot, WarehouseStats},
+    matchmaking::MatchConnectionEvent,
+    ports::{Clock, MatchRepository, WarehouseSnapshot, WarehouseStats},
     AppState,
 };
 use serde_json::Value;
 use std::sync::Arc;
 use time::OffsetDateTime;
 
-use support::{service_at, siwe_message, FixedClock};
+use support::{empty_matchmaking, service_at, siwe_message, EmptyMatchRepository, FixedClock};
+
+#[actix_web::test]
+async fn empty_match_repository_has_no_startup_recovery_work() {
+    assert_eq!(
+        EmptyMatchRepository
+            .abort_unrecoverable_matches("process_restart".to_owned(), OffsetDateTime::UNIX_EPOCH,)
+            .await,
+        Ok(0)
+    );
+}
 
 #[actix_web::test]
 async fn nonce_verify_session_warehouse_queue_and_logout_form_one_flow() {
     let now = OffsetDateTime::from_unix_timestamp(1_800_000_000).unwrap();
     let (auth, repository) = service_at(now);
+    let clock = Arc::new(FixedClock { now }) as Arc<dyn Clock>;
+    let matchmaking = empty_matchmaking(clock.clone()).await;
     let state = AppState::new(repository.clone(), bundled_manifest().unwrap()).with_services(
         auth,
-        Arc::new(MatchmakingQueue::default()),
-        Arc::new(FixedClock { now }) as Arc<dyn Clock>,
+        matchmaking.clone(),
+        clock,
     );
     let app = test::init_service(
         App::new()
@@ -90,6 +102,24 @@ async fn nonce_verify_session_warehouse_queue_and_logout_form_one_flow() {
     let mut wallet_address = [0_u8; 20];
     wallet_address[19] = 1;
     let account_id = repository.account_for_wallet(1, wallet_address).unwrap();
+    let queue_without_socket = test::call_service(
+        &app,
+        test::TestRequest::post()
+            .uri("/api/matchmaking/queue")
+            .insert_header((header::COOKIE, session_cookie))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(queue_without_socket.status(), StatusCode::CONFLICT);
+    let queue_without_socket: Value = test::read_body_json(queue_without_socket).await;
+    assert_eq!(queue_without_socket["error"]["code"], "MATCH_ROSTER_LOCKED");
+    matchmaking
+        .apply_connection_event(MatchConnectionEvent::Connected {
+            connection_id: "test-game-socket".to_owned(),
+            account_id,
+        })
+        .await
+        .unwrap();
     repository.seed_warehouse(
         account_id,
         WarehouseSnapshot {
@@ -214,7 +244,7 @@ async fn malformed_verify_and_duplicate_nonce_fail_closed() {
     let (auth, repository) = service_at(now);
     let state = AppState::new(repository, bundled_manifest().unwrap()).with_services(
         auth,
-        Arc::new(MatchmakingQueue::default()),
+        empty_matchmaking(Arc::new(FixedClock { now }) as Arc<dyn Clock>).await,
         Arc::new(FixedClock { now }) as Arc<dyn Clock>,
     );
     let app = test::init_service(
@@ -291,7 +321,7 @@ async fn rollout_flags_stop_new_login_and_queue_without_reviving_legacy_auth() {
     let state = AppState::new(repository, bundled_manifest().unwrap())
         .with_services(
             auth,
-            Arc::new(MatchmakingQueue::default()),
+            empty_matchmaking(Arc::new(FixedClock { now }) as Arc<dyn Clock>).await,
             Arc::new(FixedClock { now }) as Arc<dyn Clock>,
         )
         .with_feature_flags(false, false);
@@ -349,7 +379,7 @@ async fn anonymous_auth_endpoints_are_bounded_before_database_or_rpc_work() {
     let (auth, repository) = service_at(now);
     let state = AppState::new(repository, bundled_manifest().unwrap()).with_services(
         auth,
-        Arc::new(MatchmakingQueue::default()),
+        empty_matchmaking(Arc::new(FixedClock { now }) as Arc<dyn Clock>).await,
         Arc::new(FixedClock { now }) as Arc<dyn Clock>,
     );
     let app = test::init_service(

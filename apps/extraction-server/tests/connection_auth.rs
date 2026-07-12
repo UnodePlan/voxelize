@@ -16,7 +16,6 @@ use extraction_server::{
     auth::{AuthConfig, AuthService, SessionConnectionAuthenticator},
     configure_api,
     contracts::bundled_manifest,
-    matchmaking::MatchmakingQueue,
     ports::Clock,
     AppState,
 };
@@ -28,7 +27,8 @@ use voxelize::{
 };
 
 use support::{
-    service_at, siwe_message, AcceptVerifier, FixedClock, FixedRandom, MemoryRepository,
+    empty_matchmaking, service_at, siwe_message, AcceptVerifier, FixedClock, FixedRandom,
+    MemoryRepository,
 };
 
 #[actix_web::test]
@@ -153,7 +153,7 @@ async fn second_login_closes_the_websocket_of_the_replaced_session() {
     );
     let state = AppState::new(repository, bundled_manifest().unwrap()).with_services(
         second_auth,
-        Arc::new(MatchmakingQueue::default()),
+        empty_matchmaking(Arc::new(FixedClock { now }) as Arc<dyn Clock>).await,
         Arc::new(FixedClock { now }) as Arc<dyn Clock>,
     );
     let app = test::init_service(
