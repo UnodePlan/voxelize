@@ -22,6 +22,7 @@ This directory contains guidelines for backend development. Fill in each file wi
 | [Public Network Trust Boundary](./network-trust-boundary.md) | Authentication, Join admission, strict policy, and World lifecycle contracts | Active |
 | [Authentication Persistence](./auth-persistence.md) | SIWE, nonce/session storage, cookie, RPC, and session-revocation contracts | Active |
 | [Match Lifecycle Persistence](./match-lifecycle-persistence.md) | Exact-ten matchmaking, frozen rosters, World generations, deadlines, and reconnect contracts | Active |
+| [Deterministic World Generation](./deterministic-world-generation.md) | Stable catalogs, versioned terrain, actual-Chunk fingerprints, and preload readiness | Active |
 
 ---
 

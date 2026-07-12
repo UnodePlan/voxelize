@@ -55,6 +55,7 @@ pub struct MatchWorldMetadata {
     pub generation_version: String,
     pub gameplay_version: String,
     pub config_version: String,
+    pub catalog_version: u32,
     pub loadout: FixedMatchLoadout,
 }
 

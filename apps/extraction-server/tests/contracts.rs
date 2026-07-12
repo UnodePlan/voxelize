@@ -1,6 +1,6 @@
 use extraction_server::contracts::{
-    bundled_envelope_fixture, bundled_manifest, decode_protocol_envelope, ExtractionManifest,
-    ResourceKey,
+    bundled_envelope_fixture, bundled_manifest, decode_protocol_envelope, EquipmentKey,
+    ExtractionManifest, ResourceKey,
 };
 use serde_json::json;
 
@@ -19,6 +19,29 @@ fn bundled_manifest_has_stable_resource_contracts() {
         vec![ResourceKey::Dirt, ResourceKey::Gold, ResourceKey::Diamond]
     );
     assert_eq!(weights, vec![1, 10, 100]);
+    assert_eq!(
+        manifest
+            .resources
+            .iter()
+            .map(|item| (item.key, item.voxel_id, item.item_id))
+            .collect::<Vec<_>>(),
+        vec![
+            (ResourceKey::Dirt, 1001, 2001),
+            (ResourceKey::Gold, 1002, 2002),
+            (ResourceKey::Diamond, 1003, 2003),
+        ]
+    );
+    assert_eq!(
+        manifest
+            .equipment
+            .iter()
+            .map(|item| (item.key, item.item_id))
+            .collect::<Vec<_>>(),
+        vec![
+            (EquipmentKey::BasicPickaxe, 2101),
+            (EquipmentKey::BasicMeleeWeapon, 2102),
+        ]
+    );
 }
 
 #[test]
@@ -54,6 +77,10 @@ fn rust_decoder_rejects_incomplete_manifest_versions_and_error_taxonomies() {
     let mut unknown_error = serde_json::to_value(&manifest).unwrap();
     unknown_error["errorCodes"] = json!(["CLIENT_INVENTED_ERROR"]);
     assert!(decode_manifest(unknown_error).is_err());
+
+    let mut oversized_item = serde_json::to_value(&manifest).unwrap();
+    oversized_item["resources"][0]["itemId"] = json!(2_147_483_648_u64);
+    assert!(decode_manifest(oversized_item).is_err());
 }
 
 fn decode_manifest(value: serde_json::Value) -> Result<ExtractionManifest, String> {

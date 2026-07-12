@@ -9,6 +9,8 @@ use std::{sync::Arc, time::Duration};
 
 use actix_web::web;
 
+#[cfg(feature = "engine")]
+use crate::engine_catalog::EngineCatalog;
 use crate::{
     auth::{AuthService, NonceRateLimiter},
     contracts::ExtractionManifest,
@@ -31,6 +33,8 @@ pub struct AppState {
     matchmaking_enabled: bool,
     nonce_rate_limiter: NonceRateLimiter,
     verification_rate_limiter: NonceRateLimiter,
+    #[cfg(feature = "engine")]
+    engine_catalog: Option<Arc<EngineCatalog>>,
 }
 
 impl AppState {
@@ -46,6 +50,8 @@ impl AppState {
             matchmaking_enabled: true,
             nonce_rate_limiter: NonceRateLimiter::default(),
             verification_rate_limiter: NonceRateLimiter::default(),
+            #[cfg(feature = "engine")]
+            engine_catalog: None,
         }
     }
 
@@ -71,6 +77,12 @@ impl AppState {
         self
     }
 
+    #[cfg(feature = "engine")]
+    pub(crate) fn with_engine_catalog(mut self, catalog: Arc<EngineCatalog>) -> Self {
+        self.engine_catalog = Some(catalog);
+        self
+    }
+
     pub fn with_readiness_timeout(mut self, readiness_timeout: Duration) -> Self {
         self.readiness_timeout = readiness_timeout;
         self
@@ -90,6 +102,11 @@ impl AppState {
 
     pub(crate) fn matchmaking_enabled(&self) -> bool {
         self.matchmaking_enabled
+    }
+
+    #[cfg(feature = "engine")]
+    pub(crate) fn engine_catalog(&self) -> Option<&Arc<EngineCatalog>> {
+        self.engine_catalog.as_ref()
     }
 
     pub(crate) fn allow_nonce_request(&self, peer_addr: Option<std::net::SocketAddr>) -> bool {

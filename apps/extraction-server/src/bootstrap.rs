@@ -2,6 +2,8 @@ use std::{io, sync::Arc};
 
 use actix_web::web;
 
+#[cfg(feature = "engine")]
+use crate::engine_catalog::EngineCatalog;
 use crate::{
     auth::{AuthService, SecureAuthRandom, SiweSignatureVerifier},
     contracts,
@@ -19,6 +21,8 @@ const STARTUP_ABORT_REASON: &str = "process_restart";
 pub(crate) struct Application {
     pub state: web::Data<AppState>,
     pub matchmaking_process_lock: MatchmakingProcessLock,
+    #[cfg(feature = "engine")]
+    pub engine_catalog: Arc<EngineCatalog>,
     #[cfg(feature = "engine")]
     pub matchmaking: Arc<MatchmakingService>,
     #[cfg(feature = "engine")]
@@ -62,6 +66,11 @@ pub(crate) async fn build(config: &ServerConfig) -> io::Result<Application> {
     );
     let manifest = contracts::bundled_manifest()
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    #[cfg(feature = "engine")]
+    let engine_catalog = Arc::new(
+        EngineCatalog::from_manifest(&manifest)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?,
+    );
     let matchmaking = MatchmakingService::start(
         match_repository,
         clock.clone(),
@@ -77,9 +86,13 @@ pub(crate) async fn build(config: &ServerConfig) -> io::Result<Application> {
     let state = AppState::new(repository_probe, manifest)
         .with_services(auth.clone(), matchmaking.clone(), clock)
         .with_feature_flags(config.auth_login_enabled(), config.matchmaking_enabled());
+    #[cfg(feature = "engine")]
+    let state = state.with_engine_catalog(engine_catalog.clone());
     Ok(Application {
         state: web::Data::new(state),
         matchmaking_process_lock,
+        #[cfg(feature = "engine")]
+        engine_catalog,
         #[cfg(feature = "engine")]
         matchmaking,
         #[cfg(feature = "engine")]

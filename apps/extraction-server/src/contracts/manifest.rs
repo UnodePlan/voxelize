@@ -61,14 +61,24 @@ impl ExtractionManifest {
             if resource.max_stack != 64 || resource.score_weight == 0 {
                 return Err(ContractError::new("资源堆叠或统计权重无效"));
             }
-            if resource.item_id == 0 || !item_ids.insert(resource.item_id) {
-                return Err(ContractError::new("资源 itemId 必须非零且唯一"));
+            if resource.item_id == 0
+                || resource.item_id > i32::MAX as u32
+                || !item_ids.insert(resource.item_id)
+            {
+                return Err(ContractError::new(
+                    "资源 itemId 必须在 1..=2147483647 且唯一",
+                ));
             }
         }
 
         for equipment in &self.equipment {
-            if equipment.item_id == 0 || !item_ids.insert(equipment.item_id) {
-                return Err(ContractError::new("装备 itemId 必须非零且全局唯一"));
+            if equipment.item_id == 0
+                || equipment.item_id > i32::MAX as u32
+                || !item_ids.insert(equipment.item_id)
+            {
+                return Err(ContractError::new(
+                    "装备 itemId 必须在 1..=2147483647 且全局唯一",
+                ));
             }
         }
         Ok(())
@@ -92,6 +102,18 @@ pub enum ResourceKey {
     Diamond,
 }
 
+impl ResourceKey {
+    pub const ALL: [Self; 3] = [Self::Dirt, Self::Gold, Self::Diamond];
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Dirt => "dirt",
+            Self::Gold => "gold",
+            Self::Diamond => "diamond",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ResourceDefinition {
@@ -107,6 +129,17 @@ pub struct ResourceDefinition {
 pub enum EquipmentKey {
     BasicPickaxe,
     BasicMeleeWeapon,
+}
+
+impl EquipmentKey {
+    pub const ALL: [Self; 2] = [Self::BasicPickaxe, Self::BasicMeleeWeapon];
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::BasicPickaxe => "basic_pickaxe",
+            Self::BasicMeleeWeapon => "basic_melee_weapon",
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

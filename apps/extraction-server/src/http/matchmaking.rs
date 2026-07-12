@@ -39,10 +39,15 @@ async fn enqueue(
         .ok_or_else(ApiError::service_unavailable)?;
     #[cfg(feature = "engine")]
     if let Some(server) = server {
+        let catalog = state
+            .engine_catalog()
+            .cloned()
+            .ok_or_else(ApiError::service_unavailable)?;
         matchmaking
             .bind_runtime(Arc::new(EngineMatchWorldRuntime::new(
                 server.get_ref().clone(),
                 Arc::downgrade(&matchmaking),
+                catalog,
             )))
             .await?;
     }

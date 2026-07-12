@@ -19,6 +19,7 @@ import {
 } from "./types";
 
 const MAX_VOXEL_ID = 65_535;
+const MAX_ITEM_ID = 2_147_483_647;
 
 export function decodeExtractionManifest(value: unknown): ExtractionManifest {
   const source = readRecord(value, "manifest");
@@ -113,7 +114,7 @@ function decodeResource(value: unknown, index: number): ResourceDefinition {
   return {
     key,
     voxelId,
-    itemId: readPositiveInteger(source.itemId, "resource.itemId"),
+    itemId: readItemId(source.itemId, "resource.itemId"),
     maxStack,
     scoreWeight: readPositiveInteger(
       source.scoreWeight,
@@ -127,6 +128,14 @@ function decodeEquipment(value: unknown, index: number): EquipmentDefinition {
   assertOnlyKeys(source, ["key", "itemId"], "equipment");
   return {
     key: readEnum(source.key, EQUIPMENT_KEYS, "equipment.key"),
-    itemId: readPositiveInteger(source.itemId, "equipment.itemId"),
+    itemId: readItemId(source.itemId, "equipment.itemId"),
   };
+}
+
+function readItemId(value: unknown, path: string): number {
+  const itemId = readPositiveInteger(value, path);
+  if (itemId > MAX_ITEM_ID) {
+    throw new Error(`${path}: outside 1..=2147483647`);
+  }
+  return itemId;
 }

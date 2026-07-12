@@ -5,11 +5,15 @@ pub mod contracts;
 #[cfg(feature = "engine")]
 mod engine;
 #[cfg(feature = "engine")]
+mod engine_catalog;
+#[cfg(feature = "engine")]
 mod engine_connection_observer;
 #[cfg(feature = "engine")]
 mod engine_matchmaking;
 #[cfg(feature = "engine")]
 mod engine_movement;
+#[cfg(feature = "engine")]
+mod generation;
 mod http;
 pub mod match_world;
 pub mod matchmaking;

@@ -46,6 +46,10 @@ describe("extraction contract fixtures", () => {
         scoreWeight: 100,
       },
     ]);
+    expect(manifest.equipment).toEqual([
+      { key: "basic_pickaxe", itemId: 2101 },
+      { key: "basic_melee_weapon", itemId: 2102 },
+    ]);
   });
 
   it("rejects incomplete manifest versions and error taxonomies", () => {
@@ -59,6 +63,15 @@ describe("extraction contract fixtures", () => {
       decodeExtractionManifest({
         ...manifestJson,
         errorCodes: ["CLIENT_INVENTED_ERROR"],
+      }),
+    ).toThrow();
+    expect(() =>
+      decodeExtractionManifest({
+        ...manifestJson,
+        equipment: [
+          { ...manifestJson.equipment[0], itemId: 2_147_483_648 },
+          manifestJson.equipment[1],
+        ],
       }),
     ).toThrow();
   });
