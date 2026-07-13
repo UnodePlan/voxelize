@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -31,6 +31,15 @@ pub struct InventoryState {
     pub slots: [Option<ResourceStackState>; RESOURCE_BACKPACK_SLOTS],
     pub revision: u32,
     pub frozen: bool,
+    #[serde(deserialize_with = "deserialize_required_nullable_u32")]
+    pub last_drop_sequence: Option<u32>,
+}
+
+fn deserialize_required_nullable_u32<'de, D>(deserializer: D) -> Result<Option<u32>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Option::<u32>::deserialize(deserializer)
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -38,6 +47,79 @@ pub struct InventoryState {
 pub struct FixedEquipmentState {
     pub pickaxe: EquipmentKey,
     pub melee_weapon: EquipmentKey,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct InventoryStateData {
+    pub inventory: InventoryState,
+    pub equipment: FixedEquipmentState,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum InventoryStateKind {
+    State,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum InventoryStateStream {
+    Inventory,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct InventoryStateEnvelope {
+    protocol_version: u32,
+    #[serde(rename = "type")]
+    kind: InventoryStateKind,
+    pub match_id: Uuid,
+    stream: InventoryStateStream,
+    pub revision: u32,
+    pub data: InventoryStateData,
+}
+
+impl InventoryStateEnvelope {
+    pub fn new(
+        manifest: &ExtractionManifest,
+        match_id: Uuid,
+        revision: u32,
+        data: InventoryStateData,
+    ) -> Result<Self, ContractError> {
+        let state = Self {
+            protocol_version: manifest.protocol_version,
+            kind: InventoryStateKind::State,
+            match_id,
+            stream: InventoryStateStream::Inventory,
+            revision,
+            data,
+        };
+        state.validate(manifest)?;
+        Ok(state)
+    }
+
+    fn validate(&self, manifest: &ExtractionManifest) -> Result<(), ContractError> {
+        if self.protocol_version != manifest.protocol_version
+            || self.match_id.is_nil()
+            || self.revision != self.data.inventory.revision
+        {
+            return Err(ContractError::new(
+                "inventory state envelope 身份、版本或 revision 无效",
+            ));
+        }
+        validate_inventory_assets(&self.data.inventory, self.data.equipment, manifest)
+    }
+}
+
+pub fn decode_inventory_state(
+    value: Value,
+    manifest: &ExtractionManifest,
+) -> Result<InventoryStateEnvelope, ContractError> {
+    let state = serde_json::from_value::<InventoryStateEnvelope>(value)
+        .map_err(|error| ContractError::new(format!("inventory state JSON 无效: {error}")))?;
+    state.validate(manifest)?;
+    Ok(state)
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -79,20 +161,7 @@ impl GameplayStateData {
         if let Some(result) = &self.death_result {
             result.validate(manifest)?;
         }
-        if self.equipment.pickaxe != EquipmentKey::BasicPickaxe
-            || self.equipment.melee_weapon != EquipmentKey::BasicMeleeWeapon
-        {
-            return Err(ContractError::new("get-state 固定装备无效"));
-        }
-        if self
-            .inventory
-            .slots
-            .iter()
-            .flatten()
-            .any(|stack| stack.quantity == 0 || stack.quantity > 64)
-        {
-            return Err(ContractError::new("get-state 背包堆叠数量无效"));
-        }
+        validate_inventory_assets(&self.inventory, self.equipment, manifest)?;
 
         // 死亡是终态：快照必须同时冻结并清空临时背包，避免重连后复活或复制物资。
         if self.health.is_dead() {
@@ -113,6 +182,29 @@ impl GameplayStateData {
         }
         Ok(())
     }
+}
+
+fn validate_inventory_assets(
+    inventory: &InventoryState,
+    equipment: FixedEquipmentState,
+    manifest: &ExtractionManifest,
+) -> Result<(), ContractError> {
+    if equipment.pickaxe != EquipmentKey::BasicPickaxe
+        || equipment.melee_weapon != EquipmentKey::BasicMeleeWeapon
+    {
+        return Err(ContractError::new("inventory state 固定装备无效"));
+    }
+    if inventory.slots.iter().flatten().any(|stack| {
+        let max_stack = manifest
+            .resources
+            .iter()
+            .find(|resource| resource.key == stack.resource)
+            .map(|resource| resource.max_stack);
+        stack.quantity == 0 || max_stack.is_none_or(|limit| stack.quantity > limit)
+    }) {
+        return Err(ContractError::new("inventory state 背包堆叠数量无效"));
+    }
+    Ok(())
 }
 
 pub fn decode_gameplay_state(

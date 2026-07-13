@@ -1,6 +1,6 @@
 use tokio::sync::mpsc;
 
-use super::{command::Command, coordinator::Coordinator, MatchmakingError};
+use super::{command::Command, coordinator::Coordinator, MatchmakingError, QueueSnapshot};
 
 impl Coordinator {
     pub(super) async fn run(mut self, mut receiver: mpsc::Receiver<Command>) {
@@ -19,6 +19,12 @@ impl Coordinator {
                 Command::Cancel { account_id, reply } => {
                     let result = self.cancel(account_id).await;
                     let _ = reply.send(result);
+                }
+                Command::FindQueueSnapshot { account_id, reply } => {
+                    let snapshot = self
+                        .snapshot_for(account_id)
+                        .unwrap_or_else(|| QueueSnapshot::idle(false));
+                    let _ = reply.send(Ok(snapshot));
                 }
                 Command::FindMatchResult {
                     match_id,

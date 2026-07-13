@@ -1,0 +1,255 @@
+.hud-layer {
+  position: absolute;
+  z-index: 5;
+  inset: var(--topbar-height) 0 0;
+  pointer-events: none;
+}
+
+.match-status-strip {
+  position: absolute;
+  top: 14px;
+  left: 16px;
+  display: grid;
+  width: calc(100% - 32px);
+  grid-template-columns: minmax(120px, 1fr) auto minmax(120px, 1fr);
+  align-items: start;
+  gap: 12px;
+}
+
+.connection-state,
+.phase-clock,
+.match-code {
+  min-height: 34px;
+  border: 1px solid var(--color-line);
+  background: oklch(15% 0.014 165 / 84%);
+  backdrop-filter: blur(10px);
+}
+
+.connection-state {
+  display: flex;
+  width: fit-content;
+  align-items: center;
+  gap: 8px;
+  padding: 0 11px;
+  font-size: 11px;
+}
+
+.connection-state > span {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--color-danger);
+}
+
+.connection-state[data-connection="online"] > span {
+  background: var(--color-action);
+}
+
+.connection-state[data-connection="connecting"] > span,
+.connection-state[data-connection="reconnecting"] > span {
+  background: var(--color-warning);
+}
+
+.phase-clock {
+  display: grid;
+  min-width: 210px;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+}
+
+.phase-clock span {
+  color: var(--color-ink-muted);
+  font-size: 11px;
+}
+
+.phase-clock strong,
+.match-code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.match-code {
+  justify-self: end;
+  padding: 9px 11px;
+  color: var(--color-ink-muted);
+}
+
+.crosshair {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 22px;
+  height: 22px;
+  transform: translate(-50%, -50%);
+}
+
+.crosshair span {
+  position: absolute;
+  top: 10px;
+  left: 4px;
+  width: 14px;
+  height: 2px;
+  background: var(--color-ink);
+  box-shadow: 0 0 0 1px oklch(8% 0.01 165 / 72%);
+}
+
+.crosshair span:last-child {
+  transform: rotate(90deg);
+}
+
+.action-progress {
+  position: absolute;
+  top: calc(50% + 34px);
+  left: 50%;
+  display: grid;
+  width: min(280px, calc(100% - 48px));
+  gap: 8px;
+  transform: translateX(-50%);
+  padding: 11px 12px;
+  border: 1px solid var(--color-line);
+  background: oklch(15% 0.014 165 / 88%);
+}
+
+.action-progress > div {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+}
+
+.progress-track {
+  display: block;
+  height: 3px;
+  background: var(--color-line);
+}
+
+.progress-track > span {
+  display: block;
+  height: 100%;
+  background: var(--color-action);
+}
+
+.player-hud {
+  position: absolute;
+  bottom: max(18px, env(safe-area-inset-bottom));
+  left: 50%;
+  display: grid;
+  width: min(900px, calc(100% - 32px));
+  gap: 9px;
+  transform: translateX(-50%);
+  justify-items: center;
+}
+
+.player-hud-loading {
+  display: flex;
+  min-height: 42px;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border: 1px solid var(--color-line);
+  color: var(--color-ink-muted);
+  background: oklch(15% 0.014 165 / 82%);
+  font-size: 12px;
+}
+
+.health-row {
+  display: grid;
+  grid-template-columns: repeat(10, 22px);
+  gap: 2px;
+  min-height: 24px;
+  padding: 3px 8px;
+  border: 1px solid var(--color-line);
+  background: oklch(15% 0.014 165 / 82%);
+}
+
+.heart {
+  position: relative;
+  display: block;
+  width: 22px;
+  height: 22px;
+  color: var(--color-danger);
+}
+
+.heart > svg,
+.heart-fill,
+.heart-fill svg {
+  position: absolute;
+  top: 1px;
+  left: 1px;
+  width: 20px;
+  height: 20px;
+}
+
+.heart-outline {
+  color: oklch(84% 0.03 25);
+  fill: oklch(19% 0.02 25);
+}
+
+.heart-fill {
+  overflow: hidden;
+}
+
+.heart-fill svg {
+  top: 0;
+  left: 0;
+  fill: currentColor;
+}
+
+.loadout-row {
+  display: flex;
+  align-items: end;
+  justify-content: center;
+  gap: 6px;
+}
+
+.equipment-slot,
+.inventory-slot {
+  width: 46px;
+  height: 46px;
+  border: 1px solid var(--color-line-strong);
+  background: oklch(17% 0.014 165 / 88%);
+}
+
+.equipment-slot {
+  display: grid;
+  grid-template-rows: 24px auto;
+  place-items: center;
+  padding-top: 4px;
+  color: var(--color-action);
+}
+
+.equipment-slot span {
+  color: var(--color-ink-muted);
+  font-size: 9px;
+}
+
+.inventory-grid {
+  display: grid;
+  grid-template-columns: repeat(12, 46px);
+  gap: 3px;
+}
+
+.inventory-slot {
+  position: relative;
+  display: grid;
+  place-items: center;
+}
+
+.inventory-slot .resource-cube {
+  width: 25px;
+  height: 25px;
+}
+
+.inventory-slot strong {
+  position: absolute;
+  right: 3px;
+  bottom: 1px;
+  color: var(--color-ink);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-shadow: 0 1px 2px var(--color-void);
+}

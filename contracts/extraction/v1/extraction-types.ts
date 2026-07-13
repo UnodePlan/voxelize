@@ -5,7 +5,11 @@ export interface ExtractionZoneState {
 }
 
 export type ExtractionStateData =
-  | { status: "hidden" }
+  | {
+      status: "hidden";
+      extractionOpenAtUnixSeconds: number;
+      hardDeadlineUnixSeconds: number;
+    }
   | {
       status: "open";
       zone: ExtractionZoneState;

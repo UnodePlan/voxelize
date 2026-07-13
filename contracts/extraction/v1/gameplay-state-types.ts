@@ -17,11 +17,26 @@ export interface InventoryState {
   slots: Array<ResourceStackState | null>;
   revision: number;
   frozen: boolean;
+  lastDropSequence: number | null;
 }
 
 export interface FixedEquipmentState {
   pickaxe: "basic_pickaxe";
   meleeWeapon: "basic_melee_weapon";
+}
+
+export interface InventoryStateData {
+  inventory: InventoryState;
+  equipment: FixedEquipmentState;
+}
+
+export interface InventoryStateEnvelope {
+  protocolVersion: number;
+  type: "state";
+  matchId: string;
+  stream: "inventory";
+  revision: number;
+  data: InventoryStateData;
 }
 
 export interface AttackCursorState {

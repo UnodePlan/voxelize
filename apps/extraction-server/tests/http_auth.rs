@@ -102,6 +102,35 @@ async fn nonce_verify_session_warehouse_queue_and_logout_form_one_flow() {
     let mut wallet_address = [0_u8; 20];
     wallet_address[19] = 1;
     let account_id = repository.account_for_wallet(1, wallet_address).unwrap();
+    let anonymous_queue = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri("/api/matchmaking/queue")
+            .to_request(),
+    )
+    .await;
+    assert_eq!(anonymous_queue.status(), StatusCode::UNAUTHORIZED);
+
+    let idle_queue = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri("/api/matchmaking/queue")
+            .insert_header((header::COOKIE, session_cookie))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(idle_queue.status(), StatusCode::OK);
+    assert!(idle_queue
+        .headers()
+        .get(header::CACHE_CONTROL)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .contains("no-store"));
+    let idle_queue: Value = test::read_body_json(idle_queue).await;
+    assert_eq!(idle_queue["status"], "idle");
+    assert_eq!(idle_queue["removed"], false);
+
     let queue_without_socket = test::call_service(
         &app,
         test::TestRequest::post()
@@ -189,7 +218,22 @@ async fn nonce_verify_session_warehouse_queue_and_logout_form_one_flow() {
     .await;
     assert_eq!(queued.status(), StatusCode::OK);
     let queued: Value = test::read_body_json(queued).await;
+    assert_eq!(queued["status"], "queued");
     assert_eq!(queued["position"], 1);
+
+    let restored_queue = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri("/api/matchmaking/queue?accountId=00000000-0000-0000-0000-000000000999")
+            .insert_header((header::COOKIE, session_cookie))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(restored_queue.status(), StatusCode::OK);
+    let restored_queue: Value = test::read_body_json(restored_queue).await;
+    assert_eq!(restored_queue["status"], "queued");
+    assert_eq!(restored_queue["position"], 1);
+    assert_eq!(restored_queue["enqueuedAt"], queued["enqueuedAt"]);
 
     let dequeued = test::call_service(
         &app,

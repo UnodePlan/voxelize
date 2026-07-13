@@ -20,7 +20,7 @@ Wire state:
 ```text
 server -> client: pvp:v1:extraction-state
 
-hidden {}
+hidden { extractionOpenAtUnixSeconds, hardDeadlineUnixSeconds }
 open { zone, inside, elapsedMs, requiredMs, hardDeadlineUnixSeconds }
 pending { zone, qualifiedAtUnixSeconds }
 closed {}
@@ -75,7 +75,10 @@ survived_ms BIGINT NULL CHECK (survived_ms BETWEEN 0 AND 4294967295)
 ### 3. Contracts
 
 - Extraction remains hidden before `started_at + 8m`. One seed-selected zone is
-  published when the persisted match reaches `ExtractionOpen`.
+  published when the persisted match reaches `ExtractionOpen`. Hidden state
+  exposes the authoritative extraction-open and hard-deadline Unix seconds so
+  clients can render countdowns without learning zone coordinates; both values
+  are positive and extraction-open is strictly earlier than hard deadline.
 - Qualification requires one continuous server-observed eight-second window.
   Leaving the cylinder, dying, or detaching clears the unfinished window.
 - The hard deadline is `started_at + 12m` and is inclusive: a qualification
@@ -149,6 +152,7 @@ close gate
 | Condition | Required result |
 | --- | --- |
 | Zone hidden before eight minutes | No zone coordinates in the payload |
+| Hidden deadlines are missing, zero, or not strictly ordered | Reject at the decoder boundary |
 | Leave, death, or detach during hold | Reset progress; require a new full eight seconds |
 | Qualification exactly at hard deadline | Accept once and freeze inventory |
 | Qualification requiring time after hard deadline | Reject and hard-terminalize |
@@ -193,7 +197,8 @@ close gate
 - HTTP tests cover authentication, malformed UUID, no-store, account isolation,
   all five statuses, terminal shape validation, and hidden internal fields.
 - Shared Rust/TypeScript fixtures cover hidden/open/pending/closed strict shapes,
-  nested match IDs, revisions, and frozen/dead gameplay snapshots.
+  hidden absolute deadline ordering, nested match IDs, revisions, and
+  frozen/dead gameplay snapshots.
 - Run server format, engine all-target tests, `engine,db-tests` check/Clippy,
   client tests/build/lint, E2E actor tests, and `git diff --check`.
 

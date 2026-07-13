@@ -88,7 +88,9 @@ impl MatchResultResponse {
         record: MatchResultRecord,
         account_id: Uuid,
     ) -> Result<Option<Self>, ApiError> {
-        let status = result_status(record.participant_state, record.match_state);
+        let Some(status) = result_status(record.participant_state, record.match_state) else {
+            return Ok(None);
+        };
         let terminal_at = record
             .terminal_at
             .map(|value| value.format(&Rfc3339))
@@ -163,15 +165,18 @@ fn validate_terminal_shape(
         .ok_or_else(ApiError::service_unavailable)
 }
 
-fn result_status(participant: ParticipantState, match_state: MatchState) -> MatchResultStatus {
+fn result_status(
+    participant: ParticipantState,
+    match_state: MatchState,
+) -> Option<MatchResultStatus> {
     match participant {
-        ParticipantState::SettlementPending => MatchResultStatus::PendingReconciliation,
-        ParticipantState::Extracted => MatchResultStatus::Extracted,
-        ParticipantState::Dead => MatchResultStatus::Dead,
-        ParticipantState::TimedOut => MatchResultStatus::TimedOut,
-        ParticipantState::Aborted => MatchResultStatus::Aborted,
-        _ if match_state == MatchState::Aborted => MatchResultStatus::Aborted,
-        _ => MatchResultStatus::PendingReconciliation,
+        ParticipantState::SettlementPending => Some(MatchResultStatus::PendingReconciliation),
+        ParticipantState::Extracted => Some(MatchResultStatus::Extracted),
+        ParticipantState::Dead => Some(MatchResultStatus::Dead),
+        ParticipantState::TimedOut => Some(MatchResultStatus::TimedOut),
+        ParticipantState::Aborted => Some(MatchResultStatus::Aborted),
+        _ if match_state == MatchState::Aborted => Some(MatchResultStatus::Aborted),
+        _ => None,
     }
 }
 

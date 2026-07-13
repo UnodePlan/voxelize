@@ -1,7 +1,10 @@
 #[cfg(feature = "engine")]
 use std::sync::Arc;
 
-use actix_web::{web, HttpRequest};
+use actix_web::{
+    http::header::{CacheControl, CacheDirective},
+    web, HttpRequest, HttpResponse,
+};
 use serde::Serialize;
 use time::format_description::well_known::Rfc3339;
 use uuid::Uuid;
@@ -19,9 +22,25 @@ use crate::matchmaking::{QueueSnapshot, QueueStatus};
 pub(super) fn configure(config: &mut web::ServiceConfig) {
     config.service(
         web::resource("/api/matchmaking/queue")
+            .route(web::get().to(queue_snapshot))
             .route(web::post().to(enqueue))
             .route(web::delete().to(dequeue)),
     );
+}
+
+async fn queue_snapshot(
+    request: HttpRequest,
+    state: web::Data<AppState>,
+) -> Result<HttpResponse, ApiError> {
+    let session = required_session(&request, &state).await?;
+    let matchmaking = state
+        .matchmaking()
+        .ok_or_else(ApiError::service_unavailable)?;
+    let snapshot = matchmaking.queue_snapshot(session.account_id).await?;
+    let response = QueueResponse::try_from(snapshot)?;
+    Ok(HttpResponse::Ok()
+        .insert_header(CacheControl(vec![CacheDirective::NoStore]))
+        .json(response))
 }
 
 async fn enqueue(

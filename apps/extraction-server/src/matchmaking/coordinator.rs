@@ -112,7 +112,11 @@ impl Coordinator {
         if let Some(current) = self
             .current
             .as_ref()
-            .filter(|item| item.participants.contains_key(&account_id))
+            .filter(|item| {
+                item.participants
+                    .get(&account_id)
+                    .is_some_and(|participant| !participant.state.is_terminal())
+            })
         {
             return Some(current.snapshot());
         }
@@ -201,6 +205,8 @@ impl LiveMatch {
             extraction_open: self.state == MatchState::ExtractionOpen,
             #[cfg(feature = "engine")]
             hard_deadline: self.hard_deadline,
+            #[cfg(feature = "engine")]
+            extraction_open_at_utc: self.extraction_open_at_utc,
             #[cfg(feature = "engine")]
             hard_deadline_utc: self.hard_deadline_utc,
             participants: self

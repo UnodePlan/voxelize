@@ -15,6 +15,8 @@ import type {
   FixedEquipmentState,
   GameplayStateData,
   InventoryState,
+  InventoryStateData,
+  InventoryStateEnvelope,
   ResourceStackState,
   DecodedGetStateIntent,
 } from "./gameplay-state-types";
@@ -34,6 +36,63 @@ export function decodeGetStateIntent(
     requestId: envelope.requestId,
     sequence: envelope.sequence,
     payload: {},
+  };
+}
+
+export function decodeInventoryStateEnvelope(
+  value: unknown,
+  manifest: ExtractionManifest,
+): InventoryStateEnvelope {
+  const source = readRecord(value, "inventoryState");
+  assertOnlyKeys(
+    source,
+    ["protocolVersion", "type", "matchId", "stream", "revision", "data"],
+    "inventoryState",
+  );
+  const protocolVersion = readUnsignedInteger(
+    source.protocolVersion,
+    "inventoryState.protocolVersion",
+  );
+  if (protocolVersion !== manifest.protocolVersion || source.type !== "state") {
+    throw new Error("inventoryState: incompatible envelope");
+  }
+  if (source.stream !== "inventory") {
+    throw new Error("inventoryState: invalid stream");
+  }
+  const revision = readUnsignedInteger(
+    source.revision,
+    "inventoryState.revision",
+  );
+  const data = decodeInventoryStateData(source.data, manifest);
+  if (revision !== data.inventory.revision) {
+    throw new Error("inventoryState: envelope revision mismatch");
+  }
+  return {
+    protocolVersion,
+    type: "state",
+    matchId: readUuid(source.matchId, "inventoryState.matchId"),
+    stream: "inventory",
+    revision,
+    data,
+  };
+}
+
+function decodeInventoryStateData(
+  value: unknown,
+  manifest: ExtractionManifest,
+): InventoryStateData {
+  const source = readRecord(value, "inventoryState.data");
+  assertOnlyKeys(source, ["inventory", "equipment"], "inventoryState.data");
+  return {
+    inventory: decodeInventory(
+      source.inventory,
+      manifest,
+      "inventoryState.data.inventory",
+    ),
+    equipment: decodeEquipment(
+      source.equipment,
+      "inventoryState.data.equipment",
+    ),
   };
 }
 
@@ -57,8 +116,15 @@ export function decodeGameplayStateData(
     "gameplayState",
   );
   const matchId = readUuid(source.matchId, "gameplayState.matchId");
-  const inventory = decodeInventory(source.inventory, manifest);
-  const equipment = decodeEquipment(source.equipment);
+  const inventory = decodeInventory(
+    source.inventory,
+    manifest,
+    "gameplayState.inventory",
+  );
+  const equipment = decodeEquipment(
+    source.equipment,
+    "gameplayState.equipment",
+  );
   const mining = decodeMiningStateEnvelope(source.mining, manifest);
   const extraction = decodeExtractionStateEnvelope(source.extraction, manifest);
   const health = decodeHealthStateEnvelope(source.health, manifest);
@@ -110,32 +176,33 @@ export function decodeGameplayStateData(
 function decodeInventory(
   value: unknown,
   manifest: ExtractionManifest,
+  path: string,
 ): InventoryState {
-  const source = readRecord(value, "gameplayState.inventory");
+  const source = readRecord(value, path);
   assertOnlyKeys(
     source,
-    ["slots", "revision", "frozen"],
-    "gameplayState.inventory",
+    ["slots", "revision", "frozen", "lastDropSequence"],
+    path,
   );
-  const slots = readArray(source.slots, "gameplayState.inventory.slots");
+  const slots = readArray(source.slots, `${path}.slots`);
   if (slots.length !== RESOURCE_BACKPACK_SLOTS) {
-    throw new Error("gameplayState.inventory.slots: expected 12 slots");
+    throw new Error(`${path}.slots: expected 12 slots`);
   }
   return {
     slots: slots.map((slot, index) =>
       slot === null
         ? null
-        : decodeResourceStack(
-            slot,
-            manifest,
-            `gameplayState.inventory.slots[${index}]`,
+        : decodeResourceStack(slot, manifest, `${path}.slots[${index}]`),
+    ),
+    revision: readUnsignedInteger(source.revision, `${path}.revision`),
+    frozen: readBoolean(source.frozen, `${path}.frozen`),
+    lastDropSequence:
+      source.lastDropSequence === null
+        ? null
+        : readUnsignedInteger(
+            source.lastDropSequence,
+            `${path}.lastDropSequence`,
           ),
-    ),
-    revision: readUnsignedInteger(
-      source.revision,
-      "gameplayState.inventory.revision",
-    ),
-    frozen: readBoolean(source.frozen, "gameplayState.inventory.frozen"),
   };
 }
 
@@ -157,21 +224,17 @@ function decodeResourceStack(
   return { resource, quantity };
 }
 
-function decodeEquipment(value: unknown): FixedEquipmentState {
-  const source = readRecord(value, "gameplayState.equipment");
-  assertOnlyKeys(source, ["pickaxe", "meleeWeapon"], "gameplayState.equipment");
-  const pickaxe = readEnum(
-    source.pickaxe,
-    EQUIPMENT_KEYS,
-    "gameplayState.equipment.pickaxe",
-  );
+function decodeEquipment(value: unknown, path: string): FixedEquipmentState {
+  const source = readRecord(value, path);
+  assertOnlyKeys(source, ["pickaxe", "meleeWeapon"], path);
+  const pickaxe = readEnum(source.pickaxe, EQUIPMENT_KEYS, `${path}.pickaxe`);
   const meleeWeapon = readEnum(
     source.meleeWeapon,
     EQUIPMENT_KEYS,
-    "gameplayState.equipment.meleeWeapon",
+    `${path}.meleeWeapon`,
   );
   if (pickaxe !== "basic_pickaxe" || meleeWeapon !== "basic_melee_weapon") {
-    throw new Error("gameplayState.equipment: invalid fixed equipment");
+    throw new Error(`${path}: invalid fixed equipment`);
   }
   return { pickaxe, meleeWeapon };
 }

@@ -11,7 +11,8 @@ use super::{
 };
 use crate::contracts::{
     AttackCursorState, DeathResultEnvelope, ErrorCode, ExtractionManifest, ExtractionStateEnvelope,
-    HealthStateData, HealthStateEnvelope, MiningStateEnvelope, ProtocolEnvelope,
+    FixedEquipmentState, HealthStateData, HealthStateEnvelope, InventoryState, InventoryStateData,
+    InventoryStateEnvelope, MiningStateEnvelope, ProtocolEnvelope, ResourceStackState,
 };
 
 const RESULT_METHOD: &str = "pvp:v1:result";
@@ -22,26 +23,10 @@ const DEATH_RESULT_METHOD: &str = "pvp:v1:death-result";
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct PlayerInventoryState {
-    inventory: crate::gameplay::inventory::InventorySnapshot,
-    equipment: crate::gameplay::equipment::FixedEquipmentSnapshot,
-}
-
-impl PlayerInventoryState {
-    pub(super) fn new(inventory: &ResourceInventoryComp, equipment: &FixedEquipmentComp) -> Self {
-        Self {
-            inventory: inventory.snapshot(),
-            equipment: equipment.snapshot(),
-        }
-    }
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
 pub(super) struct PlayerGameplayState {
     match_id: Uuid,
     #[serde(flatten)]
-    assets: PlayerInventoryState,
+    assets: InventoryStateData,
     mining: MiningStateEnvelope,
     extraction: ExtractionStateEnvelope,
     health: HealthStateEnvelope,
@@ -64,7 +49,7 @@ impl PlayerGameplayState {
     pub(super) fn new(access: PlayerGameplayStateAccess<'_>) -> Option<Self> {
         Some(Self {
             match_id: access.context.match_id,
-            assets: PlayerInventoryState::new(access.inventory, access.equipment),
+            assets: player_inventory_state(access.inventory, access.equipment),
             mining: mining_state(access.context, access.mining)?,
             extraction: access.extraction,
             health: health_state(access.context, access.health)?,
@@ -107,10 +92,41 @@ pub(super) fn queue_error(
 
 pub(super) fn queue_inventory_state(
     queues: &mut MessageQueues,
+    context: &GameplayRuntimeContext,
     client_id: &str,
-    state: &PlayerInventoryState,
+    state: InventoryStateData,
 ) {
-    queue_method(queues, client_id, INVENTORY_STATE_METHOD, state);
+    let revision = state.inventory.revision;
+    if let Ok(envelope) =
+        InventoryStateEnvelope::new(&context.manifest, context.match_id, revision, state)
+    {
+        queue_method(queues, client_id, INVENTORY_STATE_METHOD, &envelope);
+    }
+}
+
+pub(super) fn player_inventory_state(
+    inventory: &ResourceInventoryComp,
+    equipment: &FixedEquipmentComp,
+) -> InventoryStateData {
+    let inventory = inventory.snapshot();
+    let equipment = equipment.snapshot();
+    InventoryStateData {
+        inventory: InventoryState {
+            slots: inventory.slots.map(|slot| {
+                slot.map(|stack| ResourceStackState {
+                    resource: stack.resource,
+                    quantity: stack.quantity,
+                })
+            }),
+            revision: inventory.revision,
+            frozen: inventory.frozen,
+            last_drop_sequence: inventory.last_drop_sequence,
+        },
+        equipment: FixedEquipmentState {
+            pickaxe: equipment.pickaxe,
+            melee_weapon: equipment.melee_weapon,
+        },
+    }
 }
 
 pub(super) fn queue_mining_state(
@@ -197,4 +213,39 @@ pub(super) fn queue_method<T: Serialize>(
             .build(),
         ClientFilter::Direct(client_id.to_owned()),
     ));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        contracts::ResourceKey,
+        gameplay::inventory::{DropSlotIntent, InventoryError, MatchInventory},
+    };
+
+    #[test]
+    fn inventory_snapshot_exposes_the_last_consumed_drop_sequence() {
+        let mut inventory = MatchInventory::new(64).unwrap();
+        inventory.insert(ResourceKey::Gold, 1).unwrap();
+        assert_eq!(
+            inventory.propose_drop(
+                23,
+                DropSlotIntent {
+                    slot: 0,
+                    expected_revision: inventory.revision() + 1,
+                },
+            ),
+            Err(InventoryError::RevisionMismatch)
+        );
+        let inventory = ResourceInventoryComp::new(inventory);
+        let equipment = FixedEquipmentComp::standard();
+
+        let state = player_inventory_state(&inventory, &equipment);
+
+        assert_eq!(state.inventory.last_drop_sequence, Some(23));
+        assert_eq!(
+            serde_json::to_value(state).unwrap()["inventory"]["lastDropSequence"],
+            23
+        );
+    }
 }

@@ -19,6 +19,7 @@ impl AttachGate {
         Some(GameplayTimeline {
             extraction_open: snapshot.extraction_open,
             hard_deadline: snapshot.hard_deadline?,
+            extraction_open_at_utc: snapshot.extraction_open_at_utc?,
             hard_deadline_utc: snapshot.hard_deadline_utc?,
         })
     }

@@ -131,6 +131,8 @@ impl GameplayAuthority {
             return Some(GameplayTimeline {
                 extraction_open: true,
                 hard_deadline: Duration::from_secs(720),
+                extraction_open_at_utc: OffsetDateTime::UNIX_EPOCH
+                    .checked_add(time::Duration::seconds(480))?,
                 hard_deadline_utc: OffsetDateTime::UNIX_EPOCH
                     .checked_add(time::Duration::seconds(720))?,
             });

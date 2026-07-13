@@ -46,6 +46,14 @@ pvp:v1:drop-slot
 pvp:v1:get-state
 ```
 
+Private inventory updates use this Direct state envelope:
+
+```text
+server -> client: pvp:v1:inventory-state
+{ protocolVersion, type: "state", matchId, stream: "inventory", revision,
+  data: { inventory: { slots, revision, frozen, lastDropSequence }, equipment } }
+```
+
 ### 3. Contracts
 
 - `MatchInventory` has exactly 12 private resource slots. A slot is empty or one `ResourceStack { resource, quantity }`; each resource stack is capped at 64.
@@ -60,29 +68,48 @@ pvp:v1:get-state
 - World loot has no TTL. Unprotected compatible loot may merge only in the same versioned spatial bucket. Active protected loot cannot merge; expired protection may be cleared by a later merge.
 - Automatic pickup sorts World drops by stable `DropId`. For each drop it sorts eligible players by squared distance and then stable `SeatId`. A full nearest player does not block the next candidate. Each accepted quantity is added to one inventory and subtracted from the same loot in one mutable ECS critical section.
 - Private inventory/equipment state is sent only with `ClientFilter::Direct`. It never enters `MetadataComp`; public loot metadata contains only renderable drop ID, contents, and revision.
+- Every incremental inventory Direct uses the inventory revision as both the
+  envelope `revision` and `data.inventory.revision`. Rust and TypeScript strict
+  decoders reject mismatches or unknown fields; the client reducer ignores a
+  different match and any revision less than or equal to the accepted revision.
+- `lastDropSequence: u32 | null` is required in every inventory snapshot. It is
+  the last fresh manual-drop sequence consumed by authority, including a fresh
+  sequence rejected for stale inventory revision, an empty slot, or frozen
+  state. Missing, oversized, or client-invented cursor fields are malformed.
+- A full `pvp:v1:get-state` response is the reconnect/reload cursor source. The
+  official client seeds its global outgoing gameplay cursor with the maximum
+  of `attack.acceptedSequence`, `mining.data.acceptedSequence`, and
+  `inventory.lastDropSequence`; the next attack, mining, or drop intent uses
+  exactly `max + 1`. A gameplay intent sent after the state request is retained
+  by taking the maximum with the current local gameplay cursor when the reply
+  arrives. Get-state uses a separate query sequence because its sequence is not
+  an accepted gameplay cursor; `u32::MAX` gameplay exhaustion fails locally
+  instead of wrapping.
 - Dynamic Worlds compose player initialization with `add_client_modifier`, preserving Stage 4 spawn assignment. Rebind retains the original entity and does not install a second inventory.
 - Stage 5 appends one aggregate gameplay system after all default dispatcher leaves through `extend_dispatcher`. Direct messages and entity projection may appear on the following World tick. Stage 6 mining still requires an explicit pre-`ChunkUpdatingSystem` integration point; do not claim the append-only hook solves that order.
 - Match World removal owns final cleanup. Dropping the World releases inventories, pending assets, spawned-ID sets, loot entities, and intent queues together; code must not add a TTL or cross-match singleton.
 
 ### 4. Validation & Error Matrix
 
-| Condition | Required result |
-| --- | --- |
-| Unsupported gameplay/config pair or loadout/catalog stack mismatch | Reject before `AddWorld` |
-| Client is detached, unauthenticated, not Active, or not joined | `GAME_INVALID_STATE`; no queue or asset mutation |
-| Envelope has a valid request ID but malformed structure, unknown payload fields, or slot outside `0..11` | `REQUEST_MALFORMED`; no intent queue entry |
-| Envelope uses an unsupported protocol version and has a valid request ID | `PROTOCOL_UNSUPPORTED_VERSION`; no intent queue entry |
-| Raw JSON or request ID cannot be parsed | No protocol result can be correlated; silently reject before the intent queue |
-| Intent queue is full | `SERVICE_UNAVAILABLE`, retryable; no asset mutation |
-| Sequence is duplicate, older, or already produced a deterministic drop | `GAME_STALE_SEQUENCE`; never create another asset |
-| Expected revision differs from current inventory revision | Consume the new sequence, return `GAME_STALE_REVISION`, keep inventory unchanged |
-| Slot is empty or outside the resource inventory | `INVENTORY_SLOT_INVALID`; fixed equipment is not addressable |
-| Inventory has partial capacity | Accept only capacity and retain exact loot remainder |
-| Inventory has no capacity | No revision change; leave all loot on the ground |
-| Owner pickup at `1.999s` / exactly `2.000s` | Reject before boundary / allow at boundary |
-| Two pending entries have one ID but different payloads | Conflict; never overwrite or sum them |
-| ECS drop creation fails | Re-enqueue the same pending asset; do not mark its ID spawned |
-| Loot quantity or revision would overflow | Fail before mutation; preserve both owners |
+| Condition                                                                                                | Required result                                                                  |
+| -------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| Unsupported gameplay/config pair or loadout/catalog stack mismatch                                       | Reject before `AddWorld`                                                         |
+| Client is detached, unauthenticated, not Active, or not joined                                           | `GAME_INVALID_STATE`; no queue or asset mutation                                 |
+| Envelope has a valid request ID but malformed structure, unknown payload fields, or slot outside `0..11` | `REQUEST_MALFORMED`; no intent queue entry                                       |
+| Envelope uses an unsupported protocol version and has a valid request ID                                 | `PROTOCOL_UNSUPPORTED_VERSION`; no intent queue entry                            |
+| Raw JSON or request ID cannot be parsed                                                                  | No protocol result can be correlated; silently reject before the intent queue    |
+| Intent queue is full                                                                                     | `SERVICE_UNAVAILABLE`, retryable; no asset mutation                              |
+| Sequence is duplicate, older, or already produced a deterministic drop                                   | `GAME_STALE_SEQUENCE`; never create another asset                                |
+| Expected revision differs from current inventory revision                                                | Consume the new sequence, return `GAME_STALE_REVISION`, keep inventory unchanged |
+| Slot is empty or outside the resource inventory                                                          | `INVENTORY_SLOT_INVALID`; fixed equipment is not addressable                     |
+| Inventory has partial capacity                                                                           | Accept only capacity and retain exact loot remainder                             |
+| Inventory has no capacity                                                                                | No revision change; leave all loot on the ground                                 |
+| Inventory envelope belongs to another match or has an old/equal revision                                 | Decode valid shape, then ignore in the current-match reducer                     |
+| Envelope revision differs from nested inventory revision                                                 | Reject at the decoder boundary                                                   |
+| Owner pickup at `1.999s` / exactly `2.000s`                                                              | Reject before boundary / allow at boundary                                       |
+| Two pending entries have one ID but different payloads                                                   | Conflict; never overwrite or sum them                                            |
+| ECS drop creation fails                                                                                  | Re-enqueue the same pending asset; do not mark its ID spawned                    |
+| Loot quantity or revision would overflow                                                                 | Fail before mutation; preserve both owners                                       |
 
 ### 5. Good / Base / Bad Cases
 
@@ -98,7 +125,12 @@ pvp:v1:get-state
 - Pending/loot tests assert identical-ID idempotency, conflicting-ID rejection, stable drain order, protected merge rejection, merge after expiry, spatial bucket validation, no TTL, and checked quantity overflow.
 - ECS tests run the real Specs gameplay system and assert `inventory + pending + LootDropComp` conservation after pending spawn, automatic pickup, manual drop, and duplicate sequence.
 - Core tests assert dispatcher extension preserves the current factory and invalidates the built cache, and client modifier extension runs after the existing modifier.
-- Shared Rust/TypeScript fixture tests assert slot `0/11/12`, `u32::MAX`, oversized sequence, missing revision, and client-invented quantity behavior.
+- Shared Rust/TypeScript fixture tests assert slot `0/11/12`, `u32::MAX`, oversized sequence, missing revision, client-invented quantity behavior, strict inventory envelope fields, and matching nested revision. Client reducer tests assert cross-match and stale/equal revision rejection.
+- Reconnect tests must cover a fresh client and an automatic rebind, seed from
+  all three accepted cursor fields, and assert the first post-snapshot gameplay
+  intent uses the maximum cursor plus one. A delayed state response must not
+  rewind an intent sent after its request. Invalid cursor snapshots reject the
+  pending state request and do not reseed local intent generation.
 - Run extraction-server default and `engine` all-target tests, application Clippy with `--no-deps -D warnings`, root World tests, extraction-client tests/build, and `git diff --check`.
 
 ### 7. Wrong vs Correct

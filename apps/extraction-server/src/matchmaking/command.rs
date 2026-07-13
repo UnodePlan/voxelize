@@ -21,6 +21,10 @@ pub(super) enum Command {
         account_id: Uuid,
         reply: oneshot::Sender<Result<QueueSnapshot, MatchmakingError>>,
     },
+    FindQueueSnapshot {
+        account_id: Uuid,
+        reply: oneshot::Sender<Result<QueueSnapshot, MatchmakingError>>,
+    },
     FindMatchResult {
         match_id: Uuid,
         account_id: Uuid,

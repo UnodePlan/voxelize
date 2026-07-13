@@ -191,8 +191,9 @@ fn sync_dirty<'a>(
             {
                 queue_inventory_state(
                     queues,
+                    context,
                     &client_id,
-                    &super::messaging::PlayerInventoryState::new(inventory, equipment),
+                    super::messaging::player_inventory_state(inventory, equipment),
                 );
             }
         }

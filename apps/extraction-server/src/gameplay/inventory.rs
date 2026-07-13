@@ -47,6 +47,7 @@ pub(crate) struct InventorySnapshot {
     pub slots: [Option<ResourceStack>; RESOURCE_BACKPACK_SLOTS],
     pub revision: u32,
     pub frozen: bool,
+    pub last_drop_sequence: Option<u32>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -77,6 +78,7 @@ impl MatchInventory {
             slots: self.slots,
             revision: self.revision,
             frozen: self.frozen,
+            last_drop_sequence: self.last_drop_sequence,
         }
     }
 

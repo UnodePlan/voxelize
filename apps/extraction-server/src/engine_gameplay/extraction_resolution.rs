@@ -8,7 +8,7 @@ use super::{
         MiningComp, ResourceInventoryComp,
     },
     extraction_messaging::{extraction_state, queue_extraction_state, ExtractionStateAccess},
-    messaging::{queue_inventory_state, PlayerInventoryState},
+    messaging::{player_inventory_state, queue_inventory_state},
     runtime::GameplayRuntimeContext,
 };
 use crate::{
@@ -151,11 +151,9 @@ pub(super) fn process_extractions(access: ExtractionResolutionAccess<'_, '_>) {
                         .inventories
                         .get(entity)
                         .zip(access.equipment.get(entity))
-                        .map(|(inventory, equipment)| {
-                            PlayerInventoryState::new(inventory, equipment)
-                        })
+                        .map(|(inventory, equipment)| player_inventory_state(inventory, equipment))
                     {
-                        queue_inventory_state(access.queues, &client_id, &state);
+                        queue_inventory_state(access.queues, access.context, &client_id, state);
                     }
                 }
                 Ok(_) => {}

@@ -7,12 +7,25 @@
     "dev": "vite --clearScreen false",
     "typecheck": "tsc --noEmit",
     "test": "vitest --run",
-    "build": "tsc --noEmit && vite build",
+    "build": "tsc --noEmit && vite build && node scripts/assert-production-boundary.mjs",
     "preview": "vite preview"
   },
   "devDependencies": {
+    "@types/three": "0.182.0",
     "typescript": "^5.8.2",
     "vite": "^5.4.14",
     "vitest": "^1.6.1"
+  },
+  "dependencies": {
+    "@ethersproject/sha2": "5.8.0",
+    "@reown/appkit": "1.8.22",
+    "@reown/appkit-adapter-ethers": "1.8.22",
+    "@reown/appkit-siwe": "1.8.22",
+    "@voxelize/core": "workspace:*",
+    "@voxelize/protocol": "workspace:*",
+    "ethers": "6.17.0",
+    "lucide": "1.24.0",
+    "siwe": "3.0.0",
+    "three": "0.183.0"
   }
 }

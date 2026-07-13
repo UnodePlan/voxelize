@@ -24,7 +24,12 @@ impl ExtractionZoneState {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "status", rename_all = "camelCase", deny_unknown_fields)]
 pub enum ExtractionStateData {
-    Hidden {},
+    Hidden {
+        #[serde(rename = "extractionOpenAtUnixSeconds")]
+        extraction_open_at_unix_seconds: u32,
+        #[serde(rename = "hardDeadlineUnixSeconds")]
+        hard_deadline_unix_seconds: u32,
+    },
     Open {
         zone: ExtractionZoneState,
         inside: bool,
@@ -46,7 +51,18 @@ pub enum ExtractionStateData {
 impl ExtractionStateData {
     fn validate(self) -> Result<(), ContractError> {
         match self {
-            Self::Hidden {} | Self::Closed {} => Ok(()),
+            Self::Hidden {
+                extraction_open_at_unix_seconds,
+                hard_deadline_unix_seconds,
+            } => {
+                if extraction_open_at_unix_seconds == 0
+                    || extraction_open_at_unix_seconds >= hard_deadline_unix_seconds
+                {
+                    return Err(ContractError::new("extraction state 隐藏阶段绝对时间无效"));
+                }
+                Ok(())
+            }
+            Self::Closed {} => Ok(()),
             Self::Open {
                 zone,
                 elapsed_ms,

@@ -170,6 +170,14 @@ impl MatchmakingService {
             .await
     }
 
+    pub async fn queue_snapshot(
+        &self,
+        account_id: Uuid,
+    ) -> Result<QueueSnapshot, MatchmakingError> {
+        self.query(|reply| Command::FindQueueSnapshot { account_id, reply })
+            .await
+    }
+
     pub async fn apply_connection_event(
         &self,
         event: MatchConnectionEvent,

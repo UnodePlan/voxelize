@@ -23,6 +23,8 @@ fn hard_deadline_closure_cannot_be_reopened_by_stale_sync() {
         #[cfg(feature = "engine")]
         hard_deadline: Some(Duration::from_secs(720)),
         #[cfg(feature = "engine")]
+        extraction_open_at_utc: Some(OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(480)),
+        #[cfg(feature = "engine")]
         hard_deadline_utc: Some(OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(720)),
         participants: HashMap::from([(
             account_id,
@@ -69,6 +71,8 @@ fn rebind_admission_and_timeout_claim_are_linearized() {
         extraction_open: false,
         #[cfg(feature = "engine")]
         hard_deadline: Some(Duration::from_secs(720)),
+        #[cfg(feature = "engine")]
+        extraction_open_at_utc: Some(OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(480)),
         #[cfg(feature = "engine")]
         hard_deadline_utc: Some(OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(720)),
         participants: HashMap::from([(
@@ -136,6 +140,8 @@ fn stale_join_commit_cannot_consume_a_newer_attempt() {
         extraction_open: false,
         #[cfg(feature = "engine")]
         hard_deadline: None,
+        #[cfg(feature = "engine")]
+        extraction_open_at_utc: None,
         #[cfg(feature = "engine")]
         hard_deadline_utc: None,
         participants: HashMap::from([(

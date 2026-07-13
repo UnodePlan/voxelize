@@ -109,6 +109,46 @@ async fn stale_world_disconnect_removes_last_connection_from_waiting_queue() {
 }
 
 #[tokio::test]
+async fn queue_snapshot_reads_idle_queued_and_active_state_without_mutation() {
+    let harness = Harness::new().await;
+    let accounts = accounts(MATCH_SIZE);
+
+    assert_eq!(
+        harness.service.queue_snapshot(accounts[0]).await.unwrap(),
+        QueueSnapshot::idle(false)
+    );
+
+    harness.connect_all(&accounts).await;
+    let queued = harness.service.enqueue(accounts[0]).await.unwrap();
+    assert_eq!(
+        harness.service.queue_snapshot(accounts[0]).await.unwrap(),
+        queued
+    );
+    assert_eq!(
+        harness.service.queue_snapshot(accounts[0]).await.unwrap(),
+        queued
+    );
+
+    for account_id in accounts.iter().skip(1) {
+        harness.service.enqueue(*account_id).await.unwrap();
+    }
+    let spec = harness.runtime.only_spec();
+    harness.join_all(&accounts, &spec.world_name).await;
+
+    assert_eq!(
+        harness.service.queue_snapshot(accounts[0]).await.unwrap(),
+        QueueSnapshot {
+            status: QueueStatus::Active,
+            position: None,
+            enqueued_at: None,
+            match_id: Some(spec.match_id),
+            world_name: Some(spec.world_name),
+            removed: None,
+        }
+    );
+}
+
+#[tokio::test]
 async fn exact_ten_freeze_and_eleventh_rejection_are_serialized() {
     let harness = Harness::new().await;
     let accounts = accounts(11);
@@ -1253,6 +1293,10 @@ async fn dead_participant_can_queue_and_cancel_without_restoring_old_seat() {
         world_generation: TEST_WORLD_GENERATION.to_owned(),
         death: participant_death(&spec, accounts[0], accounts[1]),
     }));
+    assert_eq!(
+        harness.service.queue_snapshot(accounts[0]).await.unwrap(),
+        QueueSnapshot::idle(false)
+    );
     let queued = harness.service.enqueue(accounts[0]).await.unwrap();
     assert_eq!(queued.status, QueueStatus::Queued);
     assert_eq!(queued.position, Some(1));

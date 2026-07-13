@@ -25,8 +25,9 @@ pub use gameplay::{
     MiningIdleReason, MiningPayload, MiningStateData, MiningStateEnvelope,
 };
 pub use gameplay_state::{
-    decode_gameplay_state, decode_get_state_intent, AttackCursorState, FixedEquipmentState,
-    GameplayStateData, GetStatePayload, InventoryState, ResourceStackState,
+    decode_gameplay_state, decode_get_state_intent, decode_inventory_state, AttackCursorState,
+    FixedEquipmentState, GameplayStateData, GetStatePayload, InventoryState, InventoryStateData,
+    InventoryStateEnvelope, ResourceStackState,
 };
 pub use manifest::{
     EquipmentDefinition, EquipmentKey, ErrorCode, ExtractionManifest, ResourceDefinition,
@@ -46,6 +47,8 @@ const COMBAT_STATES_JSON: &str =
     include_str!("../../../../contracts/extraction/v1/fixtures/combat-states.json");
 const GET_STATE_RESULTS_JSON: &str =
     include_str!("../../../../contracts/extraction/v1/fixtures/get-state-results.json");
+const INVENTORY_STATES_JSON: &str =
+    include_str!("../../../../contracts/extraction/v1/fixtures/inventory-states.json");
 
 pub fn bundled_manifest() -> Result<ExtractionManifest, ContractError> {
     let manifest: ExtractionManifest = serde_json::from_str(MANIFEST_JSON)
@@ -82,6 +85,11 @@ pub fn bundled_combat_state_fixture() -> Result<EnvelopeFixture, ContractError> 
 pub fn bundled_get_state_fixture() -> Result<EnvelopeFixture, ContractError> {
     serde_json::from_str(GET_STATE_RESULTS_JSON)
         .map_err(|error| ContractError::new(format!("get-state fixture JSON 无效: {error}")))
+}
+
+pub fn bundled_inventory_state_fixture() -> Result<EnvelopeFixture, ContractError> {
+    serde_json::from_str(INVENTORY_STATES_JSON)
+        .map_err(|error| ContractError::new(format!("inventory state fixture JSON 无效: {error}")))
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

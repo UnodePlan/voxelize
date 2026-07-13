@@ -25,6 +25,8 @@ pub(super) struct GateSnapshot {
     #[cfg(feature = "engine")]
     pub hard_deadline: Option<Duration>,
     #[cfg(feature = "engine")]
+    pub extraction_open_at_utc: Option<OffsetDateTime>,
+    #[cfg(feature = "engine")]
     pub hard_deadline_utc: Option<OffsetDateTime>,
     pub participants: HashMap<Uuid, GateParticipant>,
 }
@@ -34,6 +36,7 @@ pub(super) struct GateSnapshot {
 pub(crate) struct GameplayTimeline {
     pub extraction_open: bool,
     pub hard_deadline: Duration,
+    pub extraction_open_at_utc: OffsetDateTime,
     pub hard_deadline_utc: OffsetDateTime,
 }
 

@@ -1,4 +1,7 @@
-import type { GameplayStateData } from "../../../contracts/extraction/v1/typescript";
+import type {
+  GameplayStateData,
+  InventoryStateEnvelope,
+} from "../../../contracts/extraction/v1/typescript";
 
 export interface GameplayViewState {
   snapshot: GameplayStateData | null;
@@ -35,4 +38,29 @@ export function reduceGameplayState(
     return state;
   }
   return { snapshot: incoming };
+}
+
+export function reduceInventoryState(
+  state: GameplayViewState,
+  incoming: InventoryStateEnvelope,
+  activeMatchId: string,
+): GameplayViewState {
+  const current = state.snapshot;
+  if (
+    incoming.matchId !== activeMatchId ||
+    current === null ||
+    current.matchId !== incoming.matchId ||
+    current.health.data.status === "dead" ||
+    current.inventory.frozen ||
+    incoming.revision <= current.inventory.revision
+  ) {
+    return state;
+  }
+  return {
+    snapshot: {
+      ...current,
+      inventory: incoming.data.inventory,
+      equipment: incoming.data.equipment,
+    },
+  };
 }

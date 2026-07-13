@@ -96,7 +96,8 @@ export function decodeDeathResultEnvelope(
   const data = decodeDeathResultData(source.data);
   const killerIsValid =
     (data.cause === "melee" && data.killerPublicPlayerId !== null) ||
-    (data.cause === "reconnectTimeout" && data.killerPublicPlayerId === null);
+    ((data.cause === "reconnectTimeout" || data.cause === "hardDeadline") &&
+      data.killerPublicPlayerId === null);
   if (!killerIsValid) {
     throw new Error("deathResult.data: killer does not match cause");
   }

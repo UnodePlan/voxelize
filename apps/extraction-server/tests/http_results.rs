@@ -65,6 +65,12 @@ async fn result_routes_bind_queries_to_the_authenticated_account() {
         MatchState::Active,
     );
     result_repository.seed_match_result(account_id, active.clone());
+    let disconnected = result_record(
+        Uuid::from_u128(9107),
+        ParticipantState::Disconnected,
+        MatchState::Active,
+    );
+    result_repository.seed_match_result(account_id, disconnected.clone());
     let corrupt_match_id = Uuid::from_u128(9106);
     result_repository.seed_match_result(
         account_id,
@@ -143,7 +149,13 @@ async fn result_routes_bind_queries_to_the_authenticated_account() {
         &format!("/api/matches/{}/result", active.match_id),
         &cookie
     );
-    assert_eq!(active_result["status"], "pendingReconciliation");
+    assert!(active_result.is_null());
+    let disconnected_result = request_json!(
+        &app,
+        &format!("/api/matches/{}/result", disconnected.match_id),
+        &cookie
+    );
+    assert!(disconnected_result.is_null());
 
     let expected_statuses = [
         "pendingReconciliation",

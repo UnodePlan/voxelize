@@ -1,6 +1,10 @@
 export const ATTACK_WEAPON_SLOTS = ["melee"] as const;
 export const ATTACK_RESOLUTIONS = ["miss", "hit", "kill"] as const;
-export const DEATH_CAUSES = ["melee", "reconnectTimeout"] as const;
+export const DEATH_CAUSES = [
+  "melee",
+  "reconnectTimeout",
+  "hardDeadline",
+] as const;
 
 export type AttackWeaponSlot = (typeof ATTACK_WEAPON_SLOTS)[number];
 export type AttackResolution = (typeof ATTACK_RESOLUTIONS)[number];

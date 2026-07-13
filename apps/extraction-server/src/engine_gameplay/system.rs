@@ -18,7 +18,7 @@ use super::{
     extraction_outbox::{flush_extraction_notices, terminal_outboxes_are_flushed},
     intents::DropSlotIntentQueue,
     manual_drop::{process_manual_drops, ManualDropAccess},
-    messaging::{queue_inventory_state, PlayerInventoryState},
+    messaging::{player_inventory_state, queue_inventory_state},
     runtime::GameplayRuntimeContext,
     HardDeadlineControl,
 };
@@ -157,9 +157,9 @@ impl<'a> System<'a> for GameplayRuntimeSystem {
             if let Some(state) = inventories
                 .get(entity)
                 .zip(equipment.get(entity))
-                .map(|(inventory, equipment)| PlayerInventoryState::new(inventory, equipment))
+                .map(|(inventory, equipment)| player_inventory_state(inventory, equipment))
             {
-                queue_inventory_state(&mut queues, &client_id, &state);
+                queue_inventory_state(&mut queues, &context, &client_id, state);
             }
         }
     }

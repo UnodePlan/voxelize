@@ -42,7 +42,11 @@
         "matchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
         "stream": "health",
         "revision": 0,
-        "data": { "status": "alive", "currentHalfHearts": 20, "maxHalfHearts": 20 }
+        "data": {
+          "status": "alive",
+          "currentHalfHearts": 20,
+          "maxHalfHearts": 20
+        }
       }
     },
     {
@@ -55,7 +59,11 @@
         "matchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
         "stream": "health",
         "revision": 9,
-        "data": { "status": "alive", "currentHalfHearts": 1, "maxHalfHearts": 20 }
+        "data": {
+          "status": "alive",
+          "currentHalfHearts": 1,
+          "maxHalfHearts": 20
+        }
       }
     },
     {
@@ -68,7 +76,11 @@
         "matchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
         "stream": "health",
         "revision": 10,
-        "data": { "status": "dead", "currentHalfHearts": 0, "maxHalfHearts": 20 }
+        "data": {
+          "status": "dead",
+          "currentHalfHearts": 0,
+          "maxHalfHearts": 20
+        }
       }
     },
     {
@@ -81,7 +93,11 @@
         "matchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
         "stream": "health",
         "revision": 10,
-        "data": { "status": "alive", "currentHalfHearts": 0, "maxHalfHearts": 20 }
+        "data": {
+          "status": "alive",
+          "currentHalfHearts": 0,
+          "maxHalfHearts": 20
+        }
       }
     },
     {
@@ -94,7 +110,11 @@
         "matchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
         "stream": "health",
         "revision": 1,
-        "data": { "status": "alive", "currentHalfHearts": 20, "maxHalfHearts": 40 }
+        "data": {
+          "status": "alive",
+          "currentHalfHearts": 20,
+          "maxHalfHearts": 40
+        }
       }
     },
     {
@@ -107,7 +127,11 @@
         "matchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
         "stream": "health",
         "revision": 10,
-        "data": { "status": "dead", "currentHalfHearts": 1, "maxHalfHearts": 20 }
+        "data": {
+          "status": "dead",
+          "currentHalfHearts": 1,
+          "maxHalfHearts": 20
+        }
       }
     },
     {
@@ -151,6 +175,26 @@
       }
     },
     {
+      "name": "valid-hard-deadline-death-result",
+      "route": "pvp:v1:death-result",
+      "accept": true,
+      "value": {
+        "protocolVersion": 1,
+        "type": "state",
+        "matchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "stream": "deathResult",
+        "revision": 11,
+        "data": {
+          "cause": "hardDeadline",
+          "killerPublicPlayerId": null,
+          "survivedMs": 720000,
+          "mined": { "dirt": 8, "gold": 3, "diamond": 1 },
+          "pickedUp": { "dirt": 2, "gold": 0, "diamond": 0 },
+          "lost": { "dirt": 10, "gold": 3, "diamond": 1 }
+        }
+      }
+    },
+    {
       "name": "melee-death-requires-killer",
       "route": "pvp:v1:death-result",
       "accept": false,
@@ -184,6 +228,26 @@
           "cause": "reconnectTimeout",
           "killerPublicPlayerId": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
           "survivedMs": 1,
+          "mined": { "dirt": 0, "gold": 0, "diamond": 0 },
+          "pickedUp": { "dirt": 0, "gold": 0, "diamond": 0 },
+          "lost": { "dirt": 0, "gold": 0, "diamond": 0 }
+        }
+      }
+    },
+    {
+      "name": "hard-deadline-death-cannot-have-killer",
+      "route": "pvp:v1:death-result",
+      "accept": false,
+      "value": {
+        "protocolVersion": 1,
+        "type": "state",
+        "matchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "stream": "deathResult",
+        "revision": 11,
+        "data": {
+          "cause": "hardDeadline",
+          "killerPublicPlayerId": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+          "survivedMs": 720000,
           "mined": { "dirt": 0, "gold": 0, "diamond": 0 },
           "pickedUp": { "dirt": 0, "gold": 0, "diamond": 0 },
           "lost": { "dirt": 0, "gold": 0, "diamond": 0 }

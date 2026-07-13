@@ -32,6 +32,7 @@ fn timeline(open: bool) -> GameplayTimeline {
     GameplayTimeline {
         extraction_open: open,
         hard_deadline: Duration::from_secs(720),
+        extraction_open_at_utc: OffsetDateTime::from_unix_timestamp(1_799_999_760).unwrap(),
         hard_deadline_utc: OffsetDateTime::from_unix_timestamp(1_800_000_000).unwrap(),
     }
 }
@@ -52,7 +53,13 @@ fn extraction_state_hides_zone_then_publishes_progress_and_pending() {
         extraction: &extraction,
     })
     .unwrap();
-    assert!(matches!(hidden.data, ExtractionStateData::Hidden {}));
+    assert!(matches!(
+        hidden.data,
+        ExtractionStateData::Hidden {
+            extraction_open_at_unix_seconds: 1_799_999_760,
+            hard_deadline_unix_seconds: 1_800_000_000,
+        }
+    ));
     assert!(serde_json::to_value(hidden).unwrap()["data"]
         .get("zone")
         .is_none());

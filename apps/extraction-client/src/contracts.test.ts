@@ -4,6 +4,7 @@ import combatStateFixtureJson from "../../../contracts/extraction/v1/fixtures/co
 import envelopeFixtureJson from "../../../contracts/extraction/v1/fixtures/envelopes.json";
 import gameplayIntentFixtureJson from "../../../contracts/extraction/v1/fixtures/gameplay-intents.json";
 import getStateFixtureJson from "../../../contracts/extraction/v1/fixtures/get-state-results.json";
+import inventoryStateFixtureJson from "../../../contracts/extraction/v1/fixtures/inventory-states.json";
 import miningStateFixtureJson from "../../../contracts/extraction/v1/fixtures/mining-states.json";
 import manifestJson from "../../../contracts/extraction/v1/manifest.json";
 import {
@@ -16,6 +17,7 @@ import {
   decodeGameplayStateData,
   decodeGetStateIntent,
   decodeHealthStateEnvelope,
+  decodeInventoryStateEnvelope,
   decodeMiningIntent,
   decodeMiningStateEnvelope,
   decodeProtocolEnvelope,
@@ -34,6 +36,9 @@ describe("extraction contract fixtures", () => {
     combatStateFixtureJson as unknown,
   );
   const getStateFixture = decodeEnvelopeFixture(getStateFixtureJson as unknown);
+  const inventoryStateFixture = decodeEnvelopeFixture(
+    inventoryStateFixtureJson as unknown,
+  );
 
   it("keeps stable resources, stack limits, IDs and score weights", () => {
     expect(
@@ -163,6 +168,19 @@ describe("extraction contract fixtures", () => {
       expect(decode).toThrow();
     }
   });
+
+  it.each(inventoryStateFixture.cases)(
+    "matches inventory state $name",
+    (fixtureCase) => {
+      const decode = () =>
+        decodeInventoryStateEnvelope(fixtureCase.value, manifest);
+      if (fixtureCase.accept) {
+        expect(decode).not.toThrow();
+      } else {
+        expect(decode).toThrow();
+      }
+    },
+  );
 
   it.each(miningStateFixture.cases)(
     "matches mining state $name",

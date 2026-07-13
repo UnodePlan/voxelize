@@ -1,0 +1,227 @@
+{
+  "fixtureVersion": 1,
+  "cases": [
+    {
+      "name": "valid-authoritative-inventory-state",
+      "route": "pvp:v1:inventory-state",
+      "accept": true,
+      "value": {
+        "protocolVersion": 1,
+        "type": "state",
+        "matchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "stream": "inventory",
+        "revision": 5,
+        "data": {
+          "inventory": {
+            "slots": [
+              { "resource": "gold", "quantity": 4 },
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null
+            ],
+            "revision": 5,
+            "frozen": false,
+            "lastDropSequence": 7
+          },
+          "equipment": {
+            "pickaxe": "basic_pickaxe",
+            "meleeWeapon": "basic_melee_weapon"
+          }
+        }
+      }
+    },
+    {
+      "name": "inventory-envelope-rejects-revision-mismatch",
+      "route": "pvp:v1:inventory-state",
+      "accept": false,
+      "value": {
+        "protocolVersion": 1,
+        "type": "state",
+        "matchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "stream": "inventory",
+        "revision": 4,
+        "data": {
+          "inventory": {
+            "slots": [
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null
+            ],
+            "revision": 5,
+            "frozen": false,
+            "lastDropSequence": null
+          },
+          "equipment": {
+            "pickaxe": "basic_pickaxe",
+            "meleeWeapon": "basic_melee_weapon"
+          }
+        }
+      }
+    },
+    {
+      "name": "inventory-envelope-rejects-private-owner-field",
+      "route": "pvp:v1:inventory-state",
+      "accept": false,
+      "value": {
+        "protocolVersion": 1,
+        "type": "state",
+        "matchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "stream": "inventory",
+        "revision": 5,
+        "data": {
+          "inventory": {
+            "slots": [
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null
+            ],
+            "revision": 5,
+            "frozen": false,
+            "lastDropSequence": null
+          },
+          "equipment": {
+            "pickaxe": "basic_pickaxe",
+            "meleeWeapon": "basic_melee_weapon"
+          },
+          "ownerAccountId": "private-account"
+        }
+      }
+    },
+    {
+      "name": "inventory-envelope-rejects-stack-over-manifest-limit",
+      "route": "pvp:v1:inventory-state",
+      "accept": false,
+      "value": {
+        "protocolVersion": 1,
+        "type": "state",
+        "matchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "stream": "inventory",
+        "revision": 5,
+        "data": {
+          "inventory": {
+            "slots": [
+              { "resource": "diamond", "quantity": 65 },
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null
+            ],
+            "revision": 5,
+            "frozen": false,
+            "lastDropSequence": null
+          },
+          "equipment": {
+            "pickaxe": "basic_pickaxe",
+            "meleeWeapon": "basic_melee_weapon"
+          }
+        }
+      }
+    },
+    {
+      "name": "inventory-envelope-rejects-oversized-drop-cursor",
+      "route": "pvp:v1:inventory-state",
+      "accept": false,
+      "value": {
+        "protocolVersion": 1,
+        "type": "state",
+        "matchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "stream": "inventory",
+        "revision": 0,
+        "data": {
+          "inventory": {
+            "slots": [
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null
+            ],
+            "revision": 0,
+            "frozen": false,
+            "lastDropSequence": 4294967296
+          },
+          "equipment": {
+            "pickaxe": "basic_pickaxe",
+            "meleeWeapon": "basic_melee_weapon"
+          }
+        }
+      }
+    },
+    {
+      "name": "inventory-envelope-requires-explicit-drop-cursor",
+      "route": "pvp:v1:inventory-state",
+      "accept": false,
+      "value": {
+        "protocolVersion": 1,
+        "type": "state",
+        "matchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "stream": "inventory",
+        "revision": 0,
+        "data": {
+          "inventory": {
+            "slots": [
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null
+            ],
+            "revision": 0,
+            "frozen": false
+          },
+          "equipment": {
+            "pickaxe": "basic_pickaxe",
+            "meleeWeapon": "basic_melee_weapon"
+          }
+        }
+      }
+    }
+  ]
+}

@@ -181,11 +181,21 @@ PostgreSQL 结算使用数据库事务时间、5 秒锁超时、15 秒语句超�
 ## 阶段 9：产品客户端与 Reown/UI
 
 - [ ] 实现实际登录/大厅/比赛/结果/仓库首屏流程，不制作营销落地页。
-- [ ] 集成 AppKit Ethers adapter、Mainnet 和 SIWE；连接钱包但未认证不能查仓库或排队。
-- [ ] HUD 显示稳定 10 心/半心、12 格背包、固定装备、阶段倒计时、挖掘和撤离进度。
-- [ ] 死亡结果显示击杀者/存活/资源得失；撤离仅在 commit 后显示永久入账；重新登录可恢复待核对或异常比赛结果。
-- [ ] 重连恢复全量 revision；换钱包/网络调用服务端 logout、关闭 WS 并清理控制状态。
-- [ ] 单一 typed decoder/reducer 拥有状态；测试 bridge 只进入测试构建。
+- [x] 集成 AppKit Ethers adapter、Mainnet 和 SIWE；连接钱包但未认证不能查仓库或排队。
+- [x] HUD 显示稳定 10 心/半心、12 格背包、固定装备、阶段倒计时、挖掘和撤离进度。
+- [x] 死亡结果显示击杀者/存活/资源得失；撤离仅在 commit 后显示永久入账；重新登录可恢复待核对或异常比赛结果。
+- [x] 重连恢复全量 revision；换钱包/网络调用服务端 logout、关闭 WS 并清理控制状态。
+- [x] 单一 typed decoder/reducer 拥有状态；测试 bridge 只进入测试构建。
+
+实现记录（2026-07-13）：产品客户端已落地钱包登录、大厅匹配、HUD、结果和仓库首屏；AppKit 仅启用 Ethereum Mainnet + SIWE 身份链路，关闭交易、Swap、Onramp、Send/Receive、Email 和 Social 功能。服务端会话与当前钱包地址、链严格绑定，慢签名不被 15 秒误取消；换钱包、换链和退出均先使当前认证 generation 失效，再调用服务端 logout 并关闭 WebSocket。登录、排队、比赛恢复和结果轮询都使用 generation 防止旧响应污染新会话或新比赛。
+
+实时状态由严格 decoder、单一 reducer 和 revision 单调规则拥有；重连只使用服务端自动 rebind，不重复 JOIN，并在 60 秒内恢复完整玩法快照。攻击、挖掘和丢弃共享服务端确认的全局 sequence cursor；背包快照增加必填 nullable `lastDropSequence`，刷新后从三类权威游标最大值继续。终态结果单调，旧比赛迟到结果不能中断新比赛；在线/断线非终态不会被误显示为 Aborted。
+
+响应式验收覆盖 1440x900、390x844、320x844、568x320 和 667x375：10 颗心、12 格背包与固定装备不越界，短横屏准星不覆盖生命条，登录/大厅/结果面板末端操作可滚动触达；canvas 非空且连续帧发生变化。`state.ts` 为 310 行，仅超过 300 行软上限且低于 500 行硬上限；它集中定义同一 reducer 的完整判别联合与转换，当前拆分会分散状态所有权，因此暂不拆分。
+
+当前明确阻断：生产客户端仍未消费 Voxelize 压缩 INIT/UPDATE/LOAD，也没有把键鼠、指针锁、移动、瞄准、挖掘、攻击和丢弃接到真实 300x300 服务端 World。现有 Three 场景只用于 UI 与视觉验证，不能称为实际可玩的对局；第一项必须在阶段 11 的真实世界接入和权威移动闭环完成后才能勾选。
+
+验证记录：客户端 Vitest 22 个文件、154/154 通过；TypeScript、全 extraction ESLint、生产 build 与测试后门扫描通过。Rust `cargo fmt --all -- --check` 与应用 `engine` Clippy `--no-deps -D warnings` 通过；根 Voxelize 仍只有既有 84 条 warning。浏览器逐视口检查无页面横向溢出或不可达操作。真实 PostgreSQL 未配置且未执行 migration。
 
 验收：Vitest 覆盖钱包/换链注销、revision、心形 HUD、待核对/异常结果；模拟 EIP-1193 provider 断言闭环中从不调用交易方法；生产 build 不含测试后门。
 

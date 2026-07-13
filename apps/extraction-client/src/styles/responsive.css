@@ -1,0 +1,234 @@
+@media (max-width: 760px) {
+  .game-shell {
+    min-height: 620px;
+  }
+
+  .game-topbar {
+    padding: 0 12px;
+  }
+
+  .product-identity span,
+  .wallet-address {
+    display: none;
+  }
+
+  .network-chip {
+    max-width: 128px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .access-panel,
+  .lobby-panel {
+    width: 100%;
+    height: auto;
+    max-height: 100%;
+    align-self: end;
+    padding: 26px 18px max(20px, env(safe-area-inset-bottom));
+    border-top: 1px solid var(--color-line-strong);
+    border-left: 0;
+  }
+
+  .panel-heading {
+    margin-bottom: 22px;
+  }
+
+  .panel-heading h1,
+  .queue-panel h1 {
+    font-size: 26px;
+  }
+
+  .warehouse-stats {
+    padding-bottom: 14px;
+  }
+
+  .queue-panel {
+    grid-template-columns: 1fr;
+    gap: 16px;
+    padding: 22px 18px;
+  }
+
+  .queue-panel .radar-mark {
+    justify-self: center;
+  }
+
+  .queue-panel .secondary-command {
+    grid-column: auto;
+  }
+
+  .result-panel {
+    padding: 22px 18px max(24px, env(safe-area-inset-bottom));
+  }
+
+  .result-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .match-status-strip {
+    grid-template-columns: 1fr auto;
+  }
+
+  .phase-clock {
+    min-width: 170px;
+  }
+
+  .match-code {
+    display: none;
+  }
+
+  .player-hud {
+    bottom: max(10px, env(safe-area-inset-bottom));
+  }
+
+  .health-row {
+    grid-template-columns: repeat(10, 19px);
+  }
+
+  .heart {
+    width: 19px;
+    height: 20px;
+  }
+
+  .heart > svg,
+  .heart-fill,
+  .heart-fill svg {
+    width: 18px;
+    height: 18px;
+  }
+
+  .loadout-row {
+    display: grid;
+    grid-template-columns: repeat(2, 42px) minmax(0, 267px);
+    align-items: start;
+  }
+
+  .equipment-slot,
+  .inventory-slot {
+    width: 42px;
+    height: 42px;
+  }
+
+  .inventory-grid {
+    grid-template-columns: repeat(6, 42px);
+  }
+}
+
+@media (max-width: 410px) {
+  .network-chip {
+    display: none;
+  }
+
+  .resource-balances {
+    grid-template-columns: repeat(3, minmax(76px, 1fr));
+  }
+
+  .loadout-row {
+    grid-template-columns: repeat(2, 38px) minmax(0, 243px);
+    gap: 4px;
+  }
+
+  .equipment-slot,
+  .inventory-slot {
+    width: 38px;
+    height: 38px;
+  }
+
+  .inventory-grid {
+    grid-template-columns: repeat(6, 38px);
+  }
+
+  .phase-clock {
+    min-width: 150px;
+    padding: 0 8px;
+  }
+}
+
+@media (max-width: 340px) {
+  .player-hud {
+    width: calc(100% - 16px);
+  }
+
+  .loadout-row {
+    width: 100%;
+    grid-template-columns: 36px 36px minmax(0, 1fr);
+  }
+
+  .equipment-slot {
+    width: 36px;
+    height: 36px;
+    grid-template-rows: 20px auto;
+    padding-top: 3px;
+  }
+
+  .equipment-slot svg {
+    width: 20px;
+    height: 20px;
+  }
+
+  .equipment-slot span {
+    font-size: 9px;
+    line-height: 1.1;
+  }
+
+  .inventory-grid {
+    width: 100%;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap: 2px;
+  }
+
+  .inventory-slot {
+    width: 100%;
+    height: auto;
+    aspect-ratio: 1;
+  }
+
+  .inventory-slot .resource-cube {
+    width: 22px;
+    height: 22px;
+  }
+}
+
+@media (max-height: 619px) {
+  .game-shell {
+    min-height: 0;
+  }
+
+  .crosshair {
+    top: 40%;
+  }
+
+  .access-panel,
+  .lobby-panel,
+  .queue-panel,
+  .result-panel {
+    max-height: 100%;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  .player-hud {
+    bottom: max(6px, env(safe-area-inset-bottom));
+  }
+
+  .action-progress {
+    top: auto;
+    bottom: 112px;
+  }
+}
+
+@media (max-width: 760px) and (max-height: 619px) {
+  .action-progress {
+    bottom: 146px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}

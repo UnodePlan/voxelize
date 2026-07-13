@@ -11,7 +11,11 @@
         "matchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
         "stream": "extraction",
         "revision": 0,
-        "data": { "status": "hidden" }
+        "data": {
+          "status": "hidden",
+          "extractionOpenAtUnixSeconds": 1783900560,
+          "hardDeadlineUnixSeconds": 1783900800
+        }
       }
     },
     {
@@ -84,11 +88,30 @@
         "revision": 0,
         "data": {
           "status": "hidden",
+          "extractionOpenAtUnixSeconds": 1783900560,
+          "hardDeadlineUnixSeconds": 1783900800,
           "zone": {
             "center": [17, 42, -8],
             "radiusBlocks": 4,
             "halfHeightBlocks": 3
           }
+        }
+      }
+    },
+    {
+      "name": "hidden-zone-rejects-inverted-deadlines",
+      "route": "pvp:v1:extraction-state",
+      "accept": false,
+      "value": {
+        "protocolVersion": 1,
+        "type": "state",
+        "matchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "stream": "extraction",
+        "revision": 0,
+        "data": {
+          "status": "hidden",
+          "extractionOpenAtUnixSeconds": 1783900800,
+          "hardDeadlineUnixSeconds": 1783900800
         }
       }
     },

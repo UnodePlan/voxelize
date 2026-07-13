@@ -41,6 +41,10 @@ pub(super) fn extraction_state(
         half_height_blocks: exact_positive_blocks(access.context.config.extraction_half_height)?,
     };
     let progress_revision = access.extraction.progress().revision();
+    let extraction_open_at_unix_seconds =
+        u32::try_from(access.timeline.extraction_open_at_utc.unix_timestamp()).ok()?;
+    let hard_deadline_unix_seconds =
+        u32::try_from(access.timeline.hard_deadline_utc.unix_timestamp()).ok()?;
     let (phase_revision, data) = if let Some(record) = access.extraction.record() {
         let qualified_at_unix_seconds =
             u32::try_from(record.qualification.qualified_at.unix_timestamp()).ok()?;
@@ -54,7 +58,13 @@ pub(super) fn extraction_state(
     } else if !access.alive || access.eliminated || access.now > access.timeline.hard_deadline {
         (3, ExtractionStateData::Closed {})
     } else if !access.timeline.extraction_open {
-        (0, ExtractionStateData::Hidden {})
+        (
+            0,
+            ExtractionStateData::Hidden {
+                extraction_open_at_unix_seconds,
+                hard_deadline_unix_seconds,
+            },
+        )
     } else {
         let required_ms =
             u32::try_from(access.context.config.extraction_hold_duration.as_millis()).ok()?;
@@ -67,8 +77,6 @@ pub(super) fn extraction_state(
                 .as_millis(),
         )
         .ok()?;
-        let hard_deadline_unix_seconds =
-            u32::try_from(access.timeline.hard_deadline_utc.unix_timestamp()).ok()?;
         (
             1,
             ExtractionStateData::Open {

@@ -55,9 +55,32 @@ function decodeExtractionStateData(value: unknown): ExtractionStateData {
     EXTRACTION_STATUSES,
     "extractionState.data.status",
   );
-  if (status === "hidden" || status === "closed") {
+  if (status === "closed") {
     assertOnlyKeys(source, ["status"], "extractionState.data");
     return { status };
+  }
+  if (status === "hidden") {
+    assertOnlyKeys(
+      source,
+      ["status", "extractionOpenAtUnixSeconds", "hardDeadlineUnixSeconds"],
+      "extractionState.data",
+    );
+    const extractionOpenAtUnixSeconds = readPositiveInteger(
+      source.extractionOpenAtUnixSeconds,
+      "extractionState.data.extractionOpenAtUnixSeconds",
+    );
+    const hardDeadlineUnixSeconds = readPositiveInteger(
+      source.hardDeadlineUnixSeconds,
+      "extractionState.data.hardDeadlineUnixSeconds",
+    );
+    if (extractionOpenAtUnixSeconds >= hardDeadlineUnixSeconds) {
+      throw new Error("extractionState.data: invalid hidden phase deadlines");
+    }
+    return {
+      status,
+      extractionOpenAtUnixSeconds,
+      hardDeadlineUnixSeconds,
+    };
   }
   if (status === "pending") {
     assertOnlyKeys(
