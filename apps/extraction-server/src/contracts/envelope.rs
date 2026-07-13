@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{Map, Value};
 use uuid::Uuid;
 
@@ -7,6 +7,13 @@ use super::{ContractError, ErrorCode, ExtractionManifest};
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(transparent)]
 pub struct ProtocolEnvelope(WireProtocolEnvelope);
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Intent<T> {
+    pub request_id: Uuid,
+    pub sequence: u32,
+    pub payload: T,
+}
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "lowercase", deny_unknown_fields)]
@@ -52,6 +59,66 @@ impl WireProtocolEnvelope {
             }
         }
         Ok(())
+    }
+}
+
+impl ProtocolEnvelope {
+    pub fn request_id(&self) -> Uuid {
+        match &self.0 {
+            WireProtocolEnvelope::Intent { request_id, .. }
+            | WireProtocolEnvelope::Result { request_id, .. } => *request_id,
+        }
+    }
+
+    pub fn decode_intent<T: DeserializeOwned>(&self) -> Result<Intent<T>, ContractError> {
+        let WireProtocolEnvelope::Intent {
+            request_id,
+            sequence,
+            payload,
+            ..
+        } = &self.0
+        else {
+            return Err(ContractError::new("期望 intent envelope"));
+        };
+        let payload = serde_json::from_value(Value::Object(payload.clone()))
+            .map_err(|error| ContractError::new(format!("intent payload JSON 无效: {error}")))?;
+        Ok(Intent {
+            request_id: *request_id,
+            sequence: *sequence,
+            payload,
+        })
+    }
+
+    pub fn ok<T: Serialize>(
+        manifest: &ExtractionManifest,
+        request_id: Uuid,
+        data: T,
+    ) -> Result<Self, ContractError> {
+        let data = serde_json::to_value(data)
+            .map_err(|error| ContractError::new(format!("result data JSON 无效: {error}")))?;
+        Ok(Self(WireProtocolEnvelope::Result {
+            protocol_version: manifest.protocol_version,
+            request_id,
+            outcome: Outcome::Ok { data },
+        }))
+    }
+
+    pub fn error(
+        manifest: &ExtractionManifest,
+        request_id: Uuid,
+        code: ErrorCode,
+        retryable: bool,
+    ) -> Result<Self, ContractError> {
+        if !manifest.error_codes.contains(&code) {
+            return Err(ContractError::new("结果包含未知错误码"));
+        }
+        Ok(Self(WireProtocolEnvelope::Result {
+            protocol_version: manifest.protocol_version,
+            request_id,
+            outcome: Outcome::Error {
+                error: ErrorBody { code, retryable },
+            },
+        }))
     }
 }
 

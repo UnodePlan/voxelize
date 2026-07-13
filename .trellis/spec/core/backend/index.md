@@ -23,6 +23,7 @@ This directory contains guidelines for backend development. Fill in each file wi
 | [Authentication Persistence](./auth-persistence.md) | SIWE, nonce/session storage, cookie, RPC, and session-revocation contracts | Active |
 | [Match Lifecycle Persistence](./match-lifecycle-persistence.md) | Exact-ten matchmaking, frozen rosters, World generations, deadlines, and reconnect contracts | Active |
 | [Deterministic World Generation](./deterministic-world-generation.md) | Stable catalogs, versioned terrain, actual-Chunk fingerprints, and preload readiness | Active |
+| [Authoritative Match Inventory and Loot](./authoritative-match-assets.md) | Private inventory, pending ownership, deterministic drops, auto-pickup, and Direct state | Active |
 
 ---
 

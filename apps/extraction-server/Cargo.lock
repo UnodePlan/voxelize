@@ -6731,6 +6731,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "signinwithethereum",
+ "specs",
  "sqlx",
  "time",
  "tokio",

@@ -9,9 +9,13 @@ mod engine_catalog;
 #[cfg(feature = "engine")]
 mod engine_connection_observer;
 #[cfg(feature = "engine")]
+mod engine_gameplay;
+#[cfg(feature = "engine")]
 mod engine_matchmaking;
 #[cfg(feature = "engine")]
 mod engine_movement;
+#[cfg(any(feature = "engine", test))]
+mod gameplay;
 #[cfg(feature = "engine")]
 mod generation;
 mod http;

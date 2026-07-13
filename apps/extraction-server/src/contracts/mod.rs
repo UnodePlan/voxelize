@@ -1,11 +1,14 @@
 mod envelope;
+mod gameplay;
 mod manifest;
 
 use std::{error::Error, fmt};
 
 pub use envelope::{
-    decode_protocol_envelope, EnvelopeFixture, EnvelopeFixtureCase, Outcome, ProtocolEnvelope,
+    decode_protocol_envelope, EnvelopeFixture, EnvelopeFixtureCase, Intent, Outcome,
+    ProtocolEnvelope,
 };
+pub use gameplay::{decode_drop_slot_intent, DropSlotPayload};
 pub use manifest::{
     EquipmentDefinition, EquipmentKey, ErrorCode, ExtractionManifest, ResourceDefinition,
     ResourceKey,
@@ -14,6 +17,8 @@ pub use manifest::{
 const MANIFEST_JSON: &str = include_str!("../../../../contracts/extraction/v1/manifest.json");
 const ENVELOPES_JSON: &str =
     include_str!("../../../../contracts/extraction/v1/fixtures/envelopes.json");
+const GAMEPLAY_INTENTS_JSON: &str =
+    include_str!("../../../../contracts/extraction/v1/fixtures/gameplay-intents.json");
 
 pub fn bundled_manifest() -> Result<ExtractionManifest, ContractError> {
     let manifest: ExtractionManifest = serde_json::from_str(MANIFEST_JSON)
@@ -25,6 +30,11 @@ pub fn bundled_manifest() -> Result<ExtractionManifest, ContractError> {
 pub fn bundled_envelope_fixture() -> Result<EnvelopeFixture, ContractError> {
     serde_json::from_str(ENVELOPES_JSON)
         .map_err(|error| ContractError::new(format!("envelope fixture JSON 无效: {error}")))
+}
+
+pub fn bundled_gameplay_intent_fixture() -> Result<EnvelopeFixture, ContractError> {
+    serde_json::from_str(GAMEPLAY_INTENTS_JSON)
+        .map_err(|error| ContractError::new(format!("gameplay intent fixture JSON 无效: {error}")))
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

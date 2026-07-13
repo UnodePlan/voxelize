@@ -1,0 +1,81 @@
+{
+  "fixtureVersion": 1,
+  "cases": [
+    {
+      "name": "valid-drop-slot",
+      "route": "pvp:v1:drop-slot",
+      "accept": true,
+      "value": {
+        "protocolVersion": 1,
+        "type": "intent",
+        "requestId": "11111111-1111-4111-8111-111111111111",
+        "sequence": 7,
+        "payload": { "slot": 0, "expectedInventoryRevision": 3 }
+      }
+    },
+    {
+      "name": "valid-last-slot-and-u32-sequence",
+      "route": "pvp:v1:drop-slot",
+      "accept": true,
+      "value": {
+        "protocolVersion": 1,
+        "type": "intent",
+        "requestId": "11111111-1111-4111-8111-111111111111",
+        "sequence": 4294967295,
+        "payload": { "slot": 11, "expectedInventoryRevision": 4294967295 }
+      }
+    },
+    {
+      "name": "slot-out-of-range",
+      "route": "pvp:v1:drop-slot",
+      "accept": false,
+      "value": {
+        "protocolVersion": 1,
+        "type": "intent",
+        "requestId": "11111111-1111-4111-8111-111111111111",
+        "sequence": 8,
+        "payload": { "slot": 12, "expectedInventoryRevision": 3 }
+      }
+    },
+    {
+      "name": "missing-revision",
+      "route": "pvp:v1:drop-slot",
+      "accept": false,
+      "value": {
+        "protocolVersion": 1,
+        "type": "intent",
+        "requestId": "11111111-1111-4111-8111-111111111111",
+        "sequence": 9,
+        "payload": { "slot": 1 }
+      }
+    },
+    {
+      "name": "client-invented-quantity",
+      "route": "pvp:v1:drop-slot",
+      "accept": false,
+      "value": {
+        "protocolVersion": 1,
+        "type": "intent",
+        "requestId": "11111111-1111-4111-8111-111111111111",
+        "sequence": 10,
+        "payload": {
+          "slot": 1,
+          "expectedInventoryRevision": 3,
+          "quantity": 64
+        }
+      }
+    },
+    {
+      "name": "sequence-must-be-top-level-u32",
+      "route": "pvp:v1:drop-slot",
+      "accept": false,
+      "value": {
+        "protocolVersion": 1,
+        "type": "intent",
+        "requestId": "11111111-1111-4111-8111-111111111111",
+        "sequence": 4294967296,
+        "payload": { "slot": 1, "expectedInventoryRevision": 3 }
+      }
+    }
+  ]
+}

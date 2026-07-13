@@ -1,6 +1,6 @@
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
-    Arc,
+    Arc, Mutex,
 };
 
 use crate::EventProtocol;
@@ -280,6 +280,73 @@ fn prepared_world_ticks_without_dispatcher_dependency_panic() {
 
     assert!(world.started);
     assert_eq!(world.lifecycle, WorldLifecycleState::Ready);
+}
+
+struct CountingSystem(Arc<AtomicUsize>);
+
+impl<'a> specs::System<'a> for CountingSystem {
+    type SystemData = ();
+
+    fn run(&mut self, _: Self::SystemData) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+#[test]
+fn dispatcher_extension_preserves_the_current_factory() {
+    let base_calls = Arc::new(AtomicUsize::new(0));
+    let extension_calls = Arc::new(AtomicUsize::new(0));
+    let mut world = test_world("dispatcher-extension", &WorldConfig::default());
+
+    let base_calls_for_factory = base_calls.clone();
+    world.set_dispatcher(move || {
+        TimedDispatcherBuilder::new().with(
+            CountingSystem(base_calls_for_factory.clone()),
+            "base-system",
+            &[],
+        )
+    });
+    world.prepare();
+    world.tick();
+
+    let extension_calls_for_factory = extension_calls.clone();
+    world.extend_dispatcher(move |builder| {
+        builder.with(
+            CountingSystem(extension_calls_for_factory.clone()),
+            "extension-system",
+            &["base-system"],
+        )
+    });
+    world.tick();
+
+    assert_eq!(base_calls.load(Ordering::SeqCst), 2);
+    assert_eq!(extension_calls.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn client_modifier_extension_runs_after_the_existing_modifier() {
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let mut world = test_world("client-modifier-extension", &WorldConfig::default());
+
+    let first_calls = calls.clone();
+    world.set_client_modifier(move |_, _| first_calls.lock().unwrap().push("first"));
+    let second_calls = calls.clone();
+    world.add_client_modifier(move |_, _| second_calls.lock().unwrap().push("second"));
+    world.prepare();
+    let (sender, _receiver) = ws_sender();
+
+    world
+        .add_client(
+            "player-1",
+            "Player",
+            &sender,
+            ClientPreferencesPatch::default(),
+            None,
+            "modifier-attempt".to_owned(),
+        )
+        .unwrap();
+
+    assert_eq!(*calls.lock().unwrap(), vec!["first", "second"]);
 }
 
 #[test]

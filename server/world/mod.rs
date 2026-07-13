@@ -1081,6 +1081,25 @@ impl World {
         dispatch: F,
     ) {
         self.dispatcher = Arc::new(move || dispatch().into_inner());
+        *self.built_dispatcher.lock().unwrap() = None;
+    }
+
+    /// Appends systems to the current dispatcher factory without replacing it.
+    pub fn extend_dispatcher<
+        F: Fn(TimedDispatcherBuilder<'static, 'static>) -> TimedDispatcherBuilder<'static, 'static>
+            + Send
+            + Sync
+            + 'static,
+    >(
+        &mut self,
+        extend: F,
+    ) {
+        let current = self.dispatcher.clone();
+        self.dispatcher = Arc::new(move || {
+            let builder = TimedDispatcherBuilder::from_inner(current());
+            extend(builder).into_inner()
+        });
+        *self.built_dispatcher.lock().unwrap() = None;
     }
 
     pub fn set_client_modifier<F: Fn(&mut World, Entity) + Send + Sync + 'static>(
@@ -1088,6 +1107,21 @@ impl World {
         modifier: F,
     ) {
         self.client_modifier = Some(Arc::new(modifier));
+    }
+
+    /// Appends a client modifier after the currently configured modifier.
+    pub fn add_client_modifier<F: Fn(&mut World, Entity) + Send + Sync + 'static>(
+        &mut self,
+        modifier: F,
+    ) {
+        let modifier = Arc::new(modifier);
+        self.client_modifier = match self.client_modifier.take() {
+            Some(current) => Some(Arc::new(move |world, entity| {
+                current(world, entity);
+                modifier(world, entity);
+            })),
+            None => Some(modifier),
+        };
     }
 
     pub fn set_client_leave_modifier<F: Fn(&mut World, Entity) + Send + Sync + 'static>(

@@ -1,8 +1,18 @@
 use extraction_server::contracts::{
-    bundled_envelope_fixture, bundled_manifest, decode_protocol_envelope, EquipmentKey,
-    ExtractionManifest, ResourceKey,
+    bundled_envelope_fixture, bundled_gameplay_intent_fixture, bundled_manifest,
+    decode_drop_slot_intent, decode_protocol_envelope, EquipmentKey, ErrorCode, ExtractionManifest,
+    ProtocolEnvelope, ResourceKey,
 };
+use serde::{Deserialize, Serialize};
 use serde_json::json;
+use uuid::Uuid;
+
+#[derive(Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct DropSlotPayload {
+    slot: usize,
+    expected_inventory_revision: u32,
+}
 
 #[test]
 fn bundled_manifest_has_stable_resource_contracts() {
@@ -81,6 +91,84 @@ fn rust_decoder_rejects_incomplete_manifest_versions_and_error_taxonomies() {
     let mut oversized_item = serde_json::to_value(&manifest).unwrap();
     oversized_item["resources"][0]["itemId"] = json!(2_147_483_648_u64);
     assert!(decode_manifest(oversized_item).is_err());
+}
+
+#[test]
+fn typed_intent_owns_top_level_sequence_and_rejects_unknown_payload_fields() {
+    let manifest = bundled_manifest().unwrap();
+    let request_id = Uuid::from_u128(1);
+    let envelope = decode_protocol_envelope(
+        json!({
+            "protocolVersion": 1,
+            "type": "intent",
+            "requestId": request_id,
+            "sequence": 42,
+            "payload": {
+                "slot": 3,
+                "expectedInventoryRevision": 7
+            }
+        }),
+        &manifest,
+    )
+    .unwrap();
+    let intent = envelope.decode_intent::<DropSlotPayload>().unwrap();
+    assert_eq!(intent.request_id, request_id);
+    assert_eq!(intent.sequence, 42);
+    assert_eq!(
+        intent.payload,
+        DropSlotPayload {
+            slot: 3,
+            expected_inventory_revision: 7,
+        }
+    );
+
+    let envelope = decode_protocol_envelope(
+        json!({
+            "protocolVersion": 1,
+            "type": "intent",
+            "requestId": request_id,
+            "sequence": 43,
+            "payload": {
+                "slot": 3,
+                "expectedInventoryRevision": 7,
+                "quantity": 999
+            }
+        }),
+        &manifest,
+    )
+    .unwrap();
+    assert!(envelope.decode_intent::<DropSlotPayload>().is_err());
+}
+
+#[test]
+fn result_helpers_emit_valid_shared_envelopes() {
+    let manifest = bundled_manifest().unwrap();
+    let request_id = Uuid::from_u128(2);
+    let ok = ProtocolEnvelope::ok(&manifest, request_id, json!({ "revision": 9 })).unwrap();
+    let error = ProtocolEnvelope::error(&manifest, request_id, ErrorCode::GameStaleRevision, false)
+        .unwrap();
+
+    for result in [ok, error] {
+        let value = serde_json::to_value(result).unwrap();
+        assert!(decode_protocol_envelope(value, &manifest).is_ok());
+    }
+}
+
+#[test]
+fn rust_drop_slot_decoder_matches_shared_gameplay_cases() {
+    let manifest = bundled_manifest().unwrap();
+    let fixture = bundled_gameplay_intent_fixture().unwrap();
+    for fixture_case in fixture.cases {
+        let decoded = decode_protocol_envelope(fixture_case.value, &manifest)
+            .and_then(|envelope| decode_drop_slot_intent(&envelope));
+        assert_eq!(
+            decoded.is_ok(),
+            fixture_case.accept,
+            "gameplay fixture case {} did not match: {:?}",
+            fixture_case.name,
+            decoded.err()
+        );
+    }
 }
 
 fn decode_manifest(value: serde_json::Value) -> Result<ExtractionManifest, String> {

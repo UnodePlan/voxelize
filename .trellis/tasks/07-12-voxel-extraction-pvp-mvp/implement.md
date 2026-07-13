@@ -74,15 +74,15 @@
 - [x] 开局记录 `+8m`、`+12m` 绝对 deadline；全部终态可提前进入 Settling。
 - [x] Waiting 断线离队；Active 断线 detach，60 秒内同账号 rebind，超时只进入一次 TimedOut 并按 generation 安全 despawn；死亡掉落接入保留到阶段 7。
 - [x] Finished/Aborted 冻结生命周期写入并清理本阶段创建的 World、连接租约、pending tick/request 和协调器局内状态。
-- [ ] 把固定装备、12 格背包和 20 半心实际安装为服务端权威玩家 ECS 状态，并用不同永久仓库存量验证完全一致；当前只冻结 `MatchWorldSpec` 配置，实际组件分别在阶段 5/7 完成。
+- [ ] 把 20 半心实际安装为服务端权威玩家 ECS 状态，并用不同永久仓库存量验证入场状态完全一致；固定装备和 12 格背包已在阶段 5 完成，生命组件留在阶段 7。
 
 实现记录（2026-07-13）：新增单进程有界命令协调器，统一排序 HTTP 排队、WS 连接生命周期与 fake-clock tick；只有已认证且存在游戏 socket、已绑定 World runtime、无非终态席位的账号可以进入 FIFO。第 10 人将恰好 10 个唯一账号原子固化为 `0..9` 座位，第 11 人失败；PostgreSQL 创建按 UUID 顺序锁账号，状态写按 match 后 participant 的固定顺序加锁，一致性读取使用可重复读。Preparing 仅在 10 个 World Join 全部提交后激活，任一名单成员断线会中止、停止部分 World，并按原时间与次序恢复其他在线玩家。
 
-每局使用 `saving(false)` 的动态 World，底层 chunk 范围 `[-10,-10]..[9,9]`、玩法边界 `[-150,150)`；`MatchWorldSpec` 冻结 10 人、12 格背包、20 半心和相同初始装备，但尚未把后 3 项冒充为已安装的玩家 ECS 组件。比赛持久化 seed 与 generation/gameplay/config 三类版本，记录 `+8m`、`+12m` 和结算宽限绝对时间；数据库返回延迟不改变绝对时刻，独立 watchdog 会在协调器等待 SQL 时先关闭 gate 并停止 World。断线重连采用精确 60 秒边界，public player ID、generation 与唯一 attach attempt 共同阻止迟到 prepare/rebind/despawn 回调影响新租约或同名新 World。Settling/Aborted 先停 World 后写数据库，失败由后续 Tick 幂等重试；ticker 最多保留一个待处理 Tick。未启用引擎或尚未绑定 runtime 时排队从第 1 人开始即失败关闭。
+每局使用 `saving(false)` 的动态 World，底层 chunk 范围 `[-10,-10]..[9,9]`、玩法边界 `[-150,150)`；`MatchWorldSpec` 冻结 10 人、12 格背包、20 半心和相同初始装备，固定装备与背包已在阶段 5 安装为玩家 ECS 组件，生命组件仍留在阶段 7。比赛持久化 seed 与 generation/gameplay/config 三类版本，记录 `+8m`、`+12m` 和结算宽限绝对时间；数据库返回延迟不改变绝对时刻，独立 watchdog 会在协调器等待 SQL 时先关闭 gate 并停止 World。断线重连采用精确 60 秒边界，public player ID、generation 与唯一 attach attempt 共同阻止迟到 prepare/rebind/despawn 回调影响新租约或同名新 World。Settling/Aborted 先停 World 后写数据库，失败由后续 Tick 幂等重试；ticker 最多保留一个待处理 Tick。未启用引擎或尚未绑定 runtime 时排队从第 1 人开始即失败关闭。
 
 持久化创建遇到未知结果时复用完全相同的 match ID/名单/seed/version，PostgreSQL 只接受完全一致的幂等重试。服务启动先用专用 PostgreSQL 连接取得进程级 advisory lock，第二实例在执行恢复前即失败；随后用带 lock/statement timeout 的事务原子中止遗留非终态比赛和参与者，保留终态参与者及已提交 settlement，重复恢复返回 0。该失败关闭恢复提前完成了阶段 8 的启动清理子项，但不等同于结算 reconciliation。当前专用锁连接尚无存活监测，部署时数据库/网络会话丢失必须停止并重启旧实例，禁止重叠替换进程。
 
-验证记录：根引擎 lib 55/55；应用默认全目标 61/61，`engine,db-tests` 全目标 84/84，其中 `engine` lib 34/34、真实 PostgreSQL matchmaking 7/7、认证 11/11。应用全目标 Clippy `--no-deps -D warnings`、定向 rustfmt 与 `git diff --check` 均通过；根引擎仍输出既有 84 条基线 warning，本阶段应用代码无新增 Clippy 告警。覆盖 9/10/11、未知创建重试、Preparing 备用 socket 断线中止与 FIFO 保留、激活期间断线、绝对 deadline、Settling 首次写失败后的单次 World 停止、永久 pending World stop 的有限超时、60 秒重连准入与 timeout claim 两种线性化顺序、Join ABA、重复 Rebound、generation/attach attempt 隔离、进程锁和启动恢复。仍未完成真实 10/11 个网络 Actor 连续多局泄漏验收、玩家 ECS 固定装备/背包/生命，以及移动的体素碰撞 sweep/完整竖直运动权威；现有移动解析器只提供有限数、状态、300 边界和速率过滤，这些缺口不能作为 PVP 生产公平性验收。
+验证记录：根引擎 lib 55/55；应用默认全目标 61/61，`engine,db-tests` 全目标 84/84，其中 `engine` lib 34/34、真实 PostgreSQL matchmaking 7/7、认证 11/11。应用全目标 Clippy `--no-deps -D warnings`、定向 rustfmt 与 `git diff --check` 均通过；根引擎仍输出既有 84 条基线 warning，本阶段应用代码无新增 Clippy 告警。覆盖 9/10/11、未知创建重试、Preparing 备用 socket 断线中止与 FIFO 保留、激活期间断线、绝对 deadline、Settling 首次写失败后的单次 World 停止、永久 pending World stop 的有限超时、60 秒重连准入与 timeout claim 两种线性化顺序、Join ABA、重复 Rebound、generation/attach attempt 隔离、进程锁和启动恢复。仍未完成真实 10/11 个网络 Actor 连续多局泄漏验收、玩家 ECS 生命，以及移动的体素碰撞 sweep/完整竖直运动权威；固定装备和背包已在阶段 5 补齐，现有移动解析器仍只提供有限数、状态、300 边界和速率过滤，这些缺口不能作为 PVP 生产公平性验收。
 
 回滚：先支持单进程房间，不引入 Redis 或跨进程 World。
 
@@ -103,15 +103,19 @@
 
 ## 阶段 5：权威背包、掉落与自动拾取
 
-- [ ] 实现 12 格私有 `MatchInventory`、固定装备、64 堆叠和单调 revision。
-- [ ] 所有增减走领域方法，按已有堆叠/空格顺序返回 accepted/remainder。
-- [ ] 实现确定性 Drop ID、`PendingDropQueue`、世界 Loot、空间桶合并和比赛结束清理；掉落不按 TTL 删除。
-- [ ] 自动拾取在服务端按距离/seat 稳定排序，原子更新背包和掉落剩余。
-- [ ] 整组丢弃校验 sequence/slot/revision，丢弃者屏蔽 2 秒；不支持拆分或固定装备。
+- [x] 实现 12 格私有 `MatchInventory`、固定装备、64 堆叠和单调 revision。
+- [x] 所有增减走领域方法，按已有堆叠/空格顺序返回 accepted/remainder。
+- [x] 实现确定性 Drop ID、`PendingDropQueue`、世界 Loot、空间桶合并和比赛结束清理；掉落不按 TTL 删除。
+- [x] 自动拾取在服务端按距离/seat 稳定排序，原子更新背包和掉落剩余。
+- [x] 整组丢弃校验 sequence/slot/revision，丢弃者屏蔽 2 秒；不支持拆分或固定装备。
 
 验收：64/65、满包、部分接纳、双人争抢、整组丢弃及 `背包 + pending + 地面` 守恒测试通过。
 
 回滚：发现复制风险时先关闭新匹配，不用负余额或删流水补偿。
+
+实现记录（2026-07-13）：动态比赛 World 在出生点 modifier 后组合安装稳定 seat/account/public ID、独立固定镐/近战装备与空 12 格资源背包；rebind 保留原实体和 revision。资源只以 `ResourceKey` 存入私有领域容器，批量拾取先在副本试装再一次提交；局内所有资源始终由背包、按 Drop ID 有序的 pending 队列或 `LootDropComp` 保管。手动丢弃从顶层协议 envelope 取得 u32 sequence，payload 只允许 slot/revision，先转 pending 再清整槽；确定性 ID 绑定 match/seat/sequence，本人精确屏蔽 2 秒。玩法系统在默认 dispatcher 全部叶节点后按手动丢弃、pending 生成/合并、自动拾取和 Direct 私有同步执行；掉落实体无 TTL，World 移除时整体清理。
+
+验证记录：纯领域 16 项覆盖 64/65、满包/部分接纳、多资源一次 revision、距离/seat 双人争抢、满包候选跳过、整槽丢弃、2 秒边界、pending 冲突、保护合并和溢出不变；Engine 定向 4 项包含 2 项真实 ECS、1 项 authority 失败关闭和 1 项 envelope 错误分类，覆盖 pending -> 世界 Loot -> 自动拾取、整槽保护、重复 sequence 幂等及错误版本/坏结构回包。Rust 共享契约 6 项、TypeScript 共享契约/客户端 18 项、应用默认全目标与 Engine 全目标、根引擎 57 项、客户端生产 build、应用 `--no-deps -D warnings` Clippy 和 `git diff --check` 均通过；根引擎仍只有既有 84 条 warning 基线。所有新增生产文件低于 300 行，测试文件适用规模例外。
 
 ## 阶段 6：服务端权威挖掘
 

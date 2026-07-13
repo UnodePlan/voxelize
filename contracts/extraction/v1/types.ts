@@ -72,6 +72,17 @@ export interface ResultEnvelope {
       };
 }
 
+export interface DropSlotPayload {
+  slot: number;
+  expectedInventoryRevision: number;
+}
+
+export interface DecodedDropSlotIntent {
+  requestId: string;
+  sequence: number;
+  payload: DropSlotPayload;
+}
+
 export interface EnvelopeFixtureCase {
   name: string;
   route: string;

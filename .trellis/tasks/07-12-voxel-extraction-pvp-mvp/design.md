@@ -126,7 +126,8 @@ Active 后断线只 detach 网络，角色、生命、位置和背包留场且�
 ```text
 pvp:v1:attack      { sequence, weaponSlot }
 pvp:v1:mining      { sequence, action: start|maintain|cancel, voxel? }
-pvp:v1:drop-slot   { sequence, slot, expectedInventoryRevision }
+ProtocolEnvelope   { sequence, payload }
+pvp:v1:drop-slot   { slot, expectedInventoryRevision }
 pvp:v1:get-state   {}
 ```
 
@@ -134,20 +135,13 @@ pvp:v1:get-state   {}
 
 ### ECS 顺序
 
-`set_dispatcher` 会整体替换默认链，应用必须复制全部核心系统并插入：
+`set_dispatcher` 会整体替换默认链，因此核心提供 `extend_dispatcher` 组合当前 factory，并提供 `add_client_modifier` 组合出生点与玩法组件安装。阶段 5 在默认链全部叶节点后追加一个聚合玩法系统，内部固定执行：
 
 ```text
-UpdateStats -> CurrentChunk
--> MiningResolution -> ChunkUpdating -> ChunkRequests/Generating/Sending/Saving
--> Physics -> MovementValidation
--> CombatResolution -> DeathResolution -> ManualDropResolution
--> DropSpawn -> AutoPickup
--> ExtractionResolution -> MatchTransition
--> GameplayPrivateSync / GameplayPublicMeta
--> EntitiesSending / PeersSending -> Broadcast -> Cleanup -> Events
+ManualDropResolution -> DropSpawn -> AutoPickup -> GameplayPrivateSync
 ```
 
-每次升级 Voxelize 都要与默认 dispatcher 做结构比较测试。同 tick 采用死亡优先于拾取和撤离完成，避免死亡玩家同时捡物或撤离。
+组合 API 必须测试默认 factory、既有扩展和已构建 dispatcher 缓存均被正确保留/更新。该追加点不解决阶段 6 的 `MiningResolution -> ChunkUpdating` 前置顺序；挖掘阶段必须增加显式命名 hook 或受结构测试保护的完整调度链。同 tick 最终仍需保证死亡优先于拾取和撤离完成，避免死亡玩家同时捡物或撤离。
 
 ### 挖掘
 

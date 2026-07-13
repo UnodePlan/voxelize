@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import envelopeFixtureJson from "../../../contracts/extraction/v1/fixtures/envelopes.json";
+import gameplayIntentFixtureJson from "../../../contracts/extraction/v1/fixtures/gameplay-intents.json";
 import manifestJson from "../../../contracts/extraction/v1/manifest.json";
 import {
   decodeEnvelopeFixture,
+  decodeDropSlotIntent,
   decodeExtractionManifest,
   decodeProtocolEnvelope,
 } from "../../../contracts/extraction/v1/typescript";
@@ -11,6 +13,9 @@ import {
 describe("extraction contract fixtures", () => {
   const manifest = decodeExtractionManifest(manifestJson as unknown);
   const envelopeFixture = decodeEnvelopeFixture(envelopeFixtureJson as unknown);
+  const gameplayIntentFixture = decodeEnvelopeFixture(
+    gameplayIntentFixtureJson as unknown,
+  );
 
   it("keeps stable resources, stack limits, IDs and score weights", () => {
     expect(
@@ -78,6 +83,18 @@ describe("extraction contract fixtures", () => {
 
   it.each(envelopeFixture.cases)("matches $name", (fixtureCase) => {
     const decode = () => decodeProtocolEnvelope(fixtureCase.value, manifest);
+    if (fixtureCase.accept) {
+      expect(decode).not.toThrow();
+    } else {
+      expect(decode).toThrow();
+    }
+  });
+
+  it.each(gameplayIntentFixture.cases)("matches gameplay $name", (fixtureCase) => {
+    const decode = () =>
+      decodeDropSlotIntent(
+        decodeProtocolEnvelope(fixtureCase.value, manifest),
+      );
     if (fixtureCase.accept) {
       expect(decode).not.toThrow();
     } else {

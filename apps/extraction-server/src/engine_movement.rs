@@ -7,7 +7,10 @@ use std::{
 use serde::Deserialize;
 use voxelize::{DirectionComp, PositionComp, RigidBodyComp, Vec3, World};
 
-use crate::{match_world::PlayableBounds, matchmaking::MatchmakingService};
+use crate::{
+    engine_gameplay::GameplayAuthority, match_world::PlayableBounds,
+    matchmaking::MatchmakingService,
+};
 
 const MAX_HORIZONTAL_SPEED: f32 = 12.0;
 const MOVEMENT_BURST: f32 = 3.0;
@@ -56,42 +59,14 @@ pub(crate) fn install_bounded_movement(
     // 本阶段仅拒绝越界、非有限数、非参赛状态和突发位移。
     // 体素碰撞 sweep、重力与跳跃权威必须在 PVP 公平性验收前补齐。
     let budgets = Arc::new(Mutex::new(HashMap::<u32, MovementBudget>::new()));
+    let authority = GameplayAuthority::new(matchmaking, generations, world_name);
     world.set_client_parser(move |world, metadata, entity| {
         let Ok(update) = serde_json::from_str::<MovementUpdate>(metadata) else {
             return;
         };
-        let client = world
-            .clients()
-            .values()
-            .find(|client| client.entity == entity)
-            .and_then(|client| {
-                client
-                    .principal
-                    .as_ref()
-                    .map(|principal| (client.id.clone(), principal.account_id.clone()))
-            });
-        let Some((client_id, account_id)) = client else {
+        let Some((_account_id, now)) = authority.authorize_entity(world, entity) else {
             return;
         };
-        let Some(service) = matchmaking.upgrade() else {
-            return;
-        };
-        let Ok(account_id) = uuid::Uuid::parse_str(&account_id) else {
-            service.fail_closed();
-            return;
-        };
-        let Some(world_generation) = generations
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .get(&world_name)
-            .cloned()
-        else {
-            return;
-        };
-        if !service.allows_gameplay(&world_name, &world_generation, &client_id, account_id) {
-            return;
-        }
-        let now = service.monotonic_now();
 
         if let Some(position) = update.position {
             let requested = [position.0, position.1, position.2];

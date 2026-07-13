@@ -14,6 +14,7 @@ use voxelize::{
 
 use crate::{
     engine_catalog::EngineCatalog,
+    engine_gameplay::{install_gameplay_runtime, GameplayAuthority},
     engine_movement::install_bounded_movement,
     generation::{install_generation_stage, install_spawn_assignment, GenerationPlan},
     match_world::{engine_seed_v1, MatchWorldMetadata},
@@ -110,7 +111,11 @@ impl MatchWorldRuntime for EngineMatchWorldRuntime {
         );
         let config = WorldConfig::new()
             .max_clients(spec.roster.iter().len())
-            .request_policy(WorldRequestPolicy::strict().allow_method("pvp:v1:get-state"))
+            .request_policy(
+                WorldRequestPolicy::strict()
+                    .allow_method("pvp:v1:drop-slot")
+                    .allow_method("pvp:v1:get-state"),
+            )
             .client_disconnect_policy(ClientDisconnectPolicy::Detach)
             .min_chunk(spec.engine_min_chunk)
             .max_chunk(spec.engine_max_chunk)
@@ -129,6 +134,13 @@ impl MatchWorldRuntime for EngineMatchWorldRuntime {
         world.ecs_mut().insert(spec.roster.clone());
         world.ecs_mut().insert(plan.resources());
         world.ecs_mut().insert(plan.layout().selected_extraction());
+        let gameplay_authority = GameplayAuthority::new(
+            self.matchmaking.clone(),
+            self.generations.clone(),
+            spec.world_name.clone(),
+        );
+        install_gameplay_runtime(&mut world, &spec, gameplay_authority)
+            .map_err(|_| MatchWorldRuntimeError::Conflict)?;
         world.ecs_mut().insert(MatchWorldMetadata {
             match_id: spec.match_id,
             seed: plan.seed(),

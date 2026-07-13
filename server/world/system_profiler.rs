@@ -230,6 +230,14 @@ impl<'a, 'b> TimedDispatcherBuilder<'a, 'b> {
         }
     }
 
+    /// Continues building from an existing specs dispatcher.
+    ///
+    /// Systems appended through [`Self::with`] remain timed while the caller
+    /// retains every system and dependency already registered on `inner`.
+    pub fn from_inner(inner: DispatcherBuilder<'a, 'b>) -> Self {
+        Self { inner }
+    }
+
     pub fn with<T>(mut self, system: T, name: &'static str, dep: &[&str]) -> Self
     where
         T: for<'c> System<'c> + Send + 'a,
