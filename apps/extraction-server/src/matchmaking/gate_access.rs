@@ -1,8 +1,28 @@
 use uuid::Uuid;
 
-use super::{gate::AttachGate, MatchState, ParticipantState};
+use super::{gate::AttachGate, gate_types::GameplayTimeline, MatchState, ParticipantState};
 
 impl AttachGate {
+    pub(super) fn gameplay_timeline(
+        &self,
+        world_name: &str,
+        world_generation: &str,
+    ) -> Option<GameplayTimeline> {
+        let snapshots = self
+            .snapshot
+            .read()
+            .unwrap_or_else(|error| error.into_inner());
+        let snapshot = snapshots.as_ref().filter(|snapshot| {
+            snapshot.world_name == world_name
+                && snapshot.world_generation.as_deref() == Some(world_generation)
+        })?;
+        Some(GameplayTimeline {
+            extraction_open: snapshot.extraction_open,
+            hard_deadline: snapshot.hard_deadline?,
+            hard_deadline_utc: snapshot.hard_deadline_utc?,
+        })
+    }
+
     pub(super) fn public_player_id(&self, world_name: &str, account_id: Uuid) -> Option<String> {
         if self.is_failed_closed() {
             return None;

@@ -2,6 +2,7 @@ mod auth;
 mod error;
 mod health;
 mod matchmaking;
+mod results;
 mod session;
 mod warehouse;
 
@@ -135,5 +136,6 @@ pub fn configure_api(config: &mut web::ServiceConfig) {
         .configure(health::configure)
         .configure(auth::configure)
         .configure(warehouse::configure)
-        .configure(matchmaking::configure);
+        .configure(matchmaking::configure)
+        .configure(results::configure);
 }

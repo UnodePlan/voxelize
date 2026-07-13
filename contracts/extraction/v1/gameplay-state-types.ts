@@ -1,4 +1,5 @@
 import type { DeathResultEnvelope, HealthStateEnvelope } from "./combat-types";
+import type { ExtractionStateEnvelope } from "./extraction-types";
 import type { MiningStateEnvelope, ResourceKey } from "./types";
 
 export interface DecodedGetStateIntent {
@@ -33,6 +34,7 @@ export interface GameplayStateData {
   inventory: InventoryState;
   equipment: FixedEquipmentState;
   mining: MiningStateEnvelope;
+  extraction: ExtractionStateEnvelope;
   health: HealthStateEnvelope;
   attack: AttackCursorState;
   deathResult: DeathResultEnvelope | null;

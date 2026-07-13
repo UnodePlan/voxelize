@@ -2,6 +2,11 @@ mod auth;
 mod matchmaking;
 mod process_lock;
 mod session;
+mod settlement_assets;
+mod settlement_commit;
+mod settlement_read;
+mod settlement_results;
+mod settlement_write;
 mod warehouse;
 
 use std::time::Duration;
@@ -11,11 +16,15 @@ use sqlx::{migrate::Migrator, postgres::PgPoolOptions, PgPool};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
+use crate::matchmaking::{
+    CommitSettlement, ExtractionQualification, MatchResultRecord, SettlementRecord,
+};
 use crate::matchmaking::{CreatePreparingMatch, ParticipantDeath, ParticipantRecord, StoredMatch};
 use crate::ports::{
     AuthRepository, AuthRepositoryError, LoginCommand, LoginResult, MatchRepository,
     MatchRepositoryError, NewNonce, RepositoryError, RepositoryFuture, RepositoryProbe,
-    SessionRecord, SettlingTrigger, StoredNonce, TransitionOutcome, WarehouseSnapshot,
+    SessionRecord, SettlementRepository, SettlementRepositoryError, SettlingTrigger, StoredNonce,
+    TransitionOutcome, WarehouseSnapshot,
 };
 
 static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
@@ -199,9 +208,8 @@ impl MatchRepository for PgRepository {
     async fn mark_timed_out(
         &self,
         timeout: crate::matchmaking::ParticipantTimeout,
-        at: OffsetDateTime,
     ) -> Result<TransitionOutcome<ParticipantRecord>, MatchRepositoryError> {
-        matchmaking::mark_timed_out(&self.pool, timeout, at).await
+        matchmaking::mark_timed_out(&self.pool, timeout).await
     }
 
     async fn open_extraction(
@@ -227,5 +235,54 @@ impl MatchRepository for PgRepository {
         at: OffsetDateTime,
     ) -> Result<TransitionOutcome<StoredMatch>, MatchRepositoryError> {
         matchmaking::finish(&self.pool, match_id, at).await
+    }
+}
+
+#[async_trait]
+impl SettlementRepository for PgRepository {
+    async fn mark_settlement_pending(
+        &self,
+        qualification: ExtractionQualification,
+    ) -> Result<TransitionOutcome<ParticipantRecord>, SettlementRepositoryError> {
+        settlement_write::mark_pending(&self.pool, qualification).await
+    }
+
+    async fn commit_settlement(
+        &self,
+        command: CommitSettlement,
+    ) -> Result<TransitionOutcome<SettlementRecord>, SettlementRepositoryError> {
+        settlement_commit::commit(&self.pool, command).await
+    }
+
+    async fn find_settlement(
+        &self,
+        match_id: Uuid,
+        account_id: Uuid,
+    ) -> Result<Option<SettlementRecord>, SettlementRepositoryError> {
+        settlement_read::find_settlement(&self.pool, match_id, account_id).await
+    }
+
+    async fn abort_pending_settlement(
+        &self,
+        match_id: Uuid,
+        account_id: Uuid,
+        at: OffsetDateTime,
+    ) -> Result<TransitionOutcome<ParticipantRecord>, SettlementRepositoryError> {
+        settlement_write::abort_pending(&self.pool, match_id, account_id, at).await
+    }
+
+    async fn find_match_result(
+        &self,
+        match_id: Uuid,
+        account_id: Uuid,
+    ) -> Result<Option<MatchResultRecord>, SettlementRepositoryError> {
+        settlement_results::find_match_result(&self.pool, match_id, account_id).await
+    }
+
+    async fn find_latest_match_result(
+        &self,
+        account_id: Uuid,
+    ) -> Result<Option<MatchResultRecord>, SettlementRepositoryError> {
+        settlement_results::find_latest_match_result(&self.pool, account_id).await
     }
 }

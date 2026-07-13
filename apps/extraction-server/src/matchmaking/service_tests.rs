@@ -18,7 +18,8 @@ use crate::{
     ports::{
         Clock, IdGenerator, MatchRepository, MatchRepositoryError, MatchWorldRuntime,
         MatchWorldRuntimeError, MatchWorldSpec, PreparedMatchWorld, RepositoryFuture,
-        RepositoryProbe, SeedGenerator, SettlingTrigger, TransitionOutcome,
+        RepositoryProbe, SeedGenerator, SettlementRepository, SettlementRepositoryError,
+        SettlingTrigger, TransitionOutcome,
     },
 };
 
@@ -391,7 +392,7 @@ async fn preparing_lobby_socket_disconnect_does_not_abort_match_socket() {
 }
 
 #[tokio::test]
-async fn settling_persistence_failure_keeps_world_closed_and_retries_once() {
+async fn hard_deadline_settling_failure_aborts_after_world_is_sealed() {
     let harness = Harness::new().await;
     let accounts = accounts(10);
     harness.connect_all(&accounts).await;
@@ -403,21 +404,47 @@ async fn settling_persistence_failure_keeps_world_closed_and_retries_once() {
 
     harness.clock.advance(StdDuration::from_secs(12 * 60));
     harness.repository.fail_next_begin_settling();
+    harness.service.tick().await.unwrap();
+    harness.wait_for_match_state(MatchState::Aborted).await;
+    assert_eq!(harness.runtime.stop_count(), 1);
     assert_eq!(
-        harness.service.tick().await,
+        harness.service.enqueue(accounts[0]).await,
         Err(MatchmakingError::Unavailable)
     );
     assert_eq!(harness.runtime.stop_count(), 1);
     assert_eq!(
-        harness.service.enqueue(accounts[0]).await.unwrap().status,
-        QueueStatus::Settling
+        harness.repository.only_match().record.state,
+        MatchState::Aborted
     );
+}
 
+#[tokio::test]
+async fn hard_deadline_seal_false_aborts_without_finishing() {
+    let harness = Harness::new().await;
+    let accounts = accounts(MATCH_SIZE);
+    harness.connect_all(&accounts).await;
+    for account_id in &accounts {
+        harness.service.enqueue(*account_id).await.unwrap();
+    }
+    let spec = harness.runtime.only_spec();
+    harness.join_all(&accounts, &spec.world_name).await;
+
+    harness.runtime.reject_next_hard_deadline_seal();
+    harness.clock.set(StdDuration::from_secs(12 * 60));
     harness.service.tick().await.unwrap();
+    harness.wait_for_match_state(MatchState::Aborted).await;
+
+    let stored = harness.repository.only_match();
+    assert_eq!(stored.record.state, MatchState::Aborted);
+    assert!(stored
+        .participants
+        .iter()
+        .all(|participant| participant.state == ParticipantState::Aborted));
+    assert_eq!(harness.runtime.hard_deadline_events(), vec!["stop"]);
     assert_eq!(harness.runtime.stop_count(), 1);
     assert_eq!(
-        harness.repository.only_match().record.state,
-        MatchState::Finished
+        harness.service.enqueue(accounts[0]).await,
+        Err(MatchmakingError::Unavailable)
     );
 }
 
@@ -444,6 +471,8 @@ async fn repository_latency_does_not_extend_absolute_match_deadlines() {
     );
     harness.clock.set(StdDuration::from_secs(12 * 60));
     harness.service.tick().await.unwrap();
+    harness.wait_for_match_state(MatchState::Finished).await;
+    harness.service.tick().await.unwrap();
     assert_eq!(
         harness.repository.only_match().record.state,
         MatchState::Finished
@@ -465,10 +494,12 @@ async fn activation_returning_after_hard_deadline_never_opens_gameplay() {
     let spec = harness.runtime.only_spec();
     harness.join_all(&accounts, &spec.world_name).await;
 
+    harness.wait_for_match_state(MatchState::Finished).await;
+    harness.service.tick().await.unwrap();
     assert_eq!(harness.runtime.stop_count(), 1);
     assert_eq!(
         harness.repository.only_match().record.state,
-        MatchState::Settling
+        MatchState::Finished
     );
     assert_eq!(
         harness.service.enqueue(accounts[0]).await.unwrap().status,
@@ -488,6 +519,355 @@ async fn activation_returning_after_hard_deadline_never_opens_gameplay() {
     assert_eq!(
         harness.repository.only_match().record.state,
         MatchState::Finished
+    );
+}
+
+#[tokio::test]
+async fn hard_deadline_outbox_precedes_seal_and_terminalizes_every_remaining_player() {
+    let harness = Harness::new().await;
+    let accounts = accounts(10);
+    harness.connect_all(&accounts).await;
+    for account_id in &accounts {
+        harness.service.enqueue(*account_id).await.unwrap();
+    }
+    let spec = harness.runtime.only_spec();
+    harness.join_all(&accounts, &spec.world_name).await;
+    let hard_deadline = harness
+        .repository
+        .only_match()
+        .record
+        .hard_deadline
+        .unwrap();
+
+    harness.clock.set(StdDuration::from_secs(12 * 60));
+    harness.service.tick().await.unwrap();
+    harness.wait_for_match_state(MatchState::Finished).await;
+    harness.service.tick().await.unwrap();
+
+    let stored = harness.repository.only_match();
+    assert!(stored.participants.iter().all(|participant| {
+        participant.state == ParticipantState::TimedOut
+            && participant.terminal_cause == Some(ParticipantTerminalCause::HardDeadline)
+            && participant.terminal_at == Some(hard_deadline)
+            && participant.survived_ms == Some(12 * 60 * 1_000)
+    }));
+    assert_eq!(
+        harness.runtime.hard_deadline_events(),
+        vec!["outbox", "seal", "stop"]
+    );
+    assert_eq!(harness.runtime.stop_count(), 1);
+}
+
+#[tokio::test]
+async fn duplicate_and_late_hard_deadline_seals_cannot_corrupt_a_finished_match() {
+    let harness = Harness::new().await;
+    let accounts = accounts(MATCH_SIZE);
+    harness.connect_all(&accounts).await;
+    for account_id in &accounts {
+        harness.service.enqueue(*account_id).await.unwrap();
+    }
+    let spec = harness.runtime.only_spec();
+    harness.join_all(&accounts, &spec.world_name).await;
+
+    harness.clock.set(StdDuration::from_secs(12 * 60));
+    harness.service.tick().await.unwrap();
+    harness.service.tick().await.unwrap();
+    harness.wait_for_match_state(MatchState::Finished).await;
+    harness.service.tick().await.unwrap();
+    assert_eq!(
+        harness.runtime.hard_deadline_events(),
+        vec!["outbox", "seal", "stop"]
+    );
+
+    harness
+        .service
+        .sender
+        .send(super::command::Command::HardDeadlineSealed {
+            match_id: spec.match_id,
+            world_name: spec.world_name.clone(),
+            world_generation: TEST_WORLD_GENERATION.to_owned(),
+            sealed: false,
+            world_stopped: true,
+        })
+        .await
+        .unwrap();
+    harness.service.tick().await.unwrap();
+
+    assert_eq!(
+        harness.repository.only_match().record.state,
+        MatchState::Finished
+    );
+    assert_eq!(harness.runtime.stop_count(), 1);
+    assert_eq!(
+        harness.service.enqueue(accounts[0]).await.unwrap().status,
+        QueueStatus::Queued,
+        "迟到的旧 sealed 回执不能把已经完成的 gate 置为失败关闭"
+    );
+}
+
+#[tokio::test]
+async fn extraction_qualification_commits_once_and_evicts_after_commit() {
+    let harness = Harness::new().await;
+    let (accounts, spec) = harness.start_extraction_match().await;
+    let qualified_at = harness
+        .repository
+        .only_match()
+        .record
+        .extraction_open_at
+        .unwrap();
+    let qualification = extraction_qualification(
+        &spec,
+        accounts[0],
+        qualified_at,
+        SettlementResources::new(3, 5, 2),
+    );
+
+    assert!(harness.service.observe_extraction(MatchExtractionNotice {
+        world_name: spec.world_name.clone(),
+        world_generation: TEST_WORLD_GENERATION.to_owned(),
+        qualification: qualification.clone(),
+    }));
+    harness.service.tick().await.unwrap();
+    assert!(harness.service.observe_extraction(MatchExtractionNotice {
+        world_name: spec.world_name.clone(),
+        world_generation: TEST_WORLD_GENERATION.to_owned(),
+        qualification,
+    }));
+    harness.service.tick().await.unwrap();
+
+    let participant = harness
+        .repository
+        .only_match()
+        .participants
+        .into_iter()
+        .find(|participant| participant.account_id == accounts[0])
+        .unwrap();
+    assert_eq!(participant.state, ParticipantState::Extracted);
+    assert_eq!(harness.repository.settlement_count(), 1);
+    assert_eq!(harness.repository.settlement_call_counts(), (1, 1, 1, 0));
+    assert_eq!(
+        harness.repository.settlement_events(),
+        vec!["mark", "commit", "find"]
+    );
+    assert_eq!(harness.runtime.eviction_count(accounts[0]), 1);
+}
+
+#[tokio::test]
+async fn unknown_commit_outcome_is_read_before_any_write_retry() {
+    let harness = Harness::new().await;
+    let (accounts, spec) = harness.start_extraction_match().await;
+    let qualified_at = harness
+        .repository
+        .only_match()
+        .record
+        .extraction_open_at
+        .unwrap();
+    harness.repository.fail_next_commit_with_unknown_outcome();
+    let qualification = extraction_qualification(
+        &spec,
+        accounts[0],
+        qualified_at,
+        SettlementResources::new(1, 2, 3),
+    );
+
+    assert!(harness.service.observe_extraction(MatchExtractionNotice {
+        world_name: spec.world_name.clone(),
+        world_generation: TEST_WORLD_GENERATION.to_owned(),
+        qualification,
+    }));
+    harness.service.tick().await.unwrap();
+    assert_eq!(
+        harness.repository.settlement_events(),
+        vec!["mark", "commit", "find"]
+    );
+    assert_eq!(harness.repository.settlement_count(), 0);
+
+    harness.service.tick().await.unwrap();
+    assert_eq!(
+        harness.repository.settlement_events(),
+        vec!["mark", "commit", "find", "commit"]
+    );
+    assert_eq!(harness.repository.settlement_call_counts(), (1, 2, 1, 0));
+    assert_eq!(harness.repository.settlement_count(), 1);
+    assert_eq!(harness.runtime.eviction_count(accounts[0]), 1);
+}
+
+#[tokio::test]
+async fn committed_settlement_with_lost_response_is_confirmed_without_second_write() {
+    let harness = Harness::new().await;
+    let (accounts, spec) = harness.start_extraction_match().await;
+    let qualified_at = harness
+        .repository
+        .only_match()
+        .record
+        .extraction_open_at
+        .unwrap();
+    harness.repository.lose_next_commit_response_after_store();
+    let qualification = extraction_qualification(
+        &spec,
+        accounts[0],
+        qualified_at,
+        SettlementResources::new(4, 3, 2),
+    );
+
+    assert!(harness.service.observe_extraction(MatchExtractionNotice {
+        world_name: spec.world_name.clone(),
+        world_generation: TEST_WORLD_GENERATION.to_owned(),
+        qualification,
+    }));
+    harness.service.tick().await.unwrap();
+
+    assert_eq!(
+        harness.repository.settlement_events(),
+        vec!["mark", "commit", "find"]
+    );
+    assert_eq!(harness.repository.settlement_call_counts(), (1, 1, 1, 0));
+    assert_eq!(harness.repository.settlement_count(), 1);
+    assert_eq!(harness.runtime.eviction_count(accounts[0]), 1);
+}
+
+#[tokio::test]
+async fn post_grace_reconciliation_is_bounded_and_never_writes() {
+    let harness = Harness::new().await;
+    let (accounts, spec) = harness.start_extraction_match().await;
+    let qualified_at = harness
+        .repository
+        .only_match()
+        .record
+        .hard_deadline
+        .unwrap();
+    harness.runtime.hang_hard_deadline();
+    harness.repository.fail_next_settlement_reads(10);
+    harness.clock.set(StdDuration::from_secs(12 * 60 + 31));
+    let qualification = extraction_qualification(
+        &spec,
+        accounts[0],
+        qualified_at,
+        SettlementResources::new(8, 0, 0),
+    );
+
+    assert!(harness.service.observe_extraction(MatchExtractionNotice {
+        world_name: spec.world_name.clone(),
+        world_generation: TEST_WORLD_GENERATION.to_owned(),
+        qualification,
+    }));
+    for _ in 0..4 {
+        harness.service.tick().await.unwrap();
+    }
+
+    assert_eq!(harness.repository.settlement_call_counts(), (0, 0, 3, 0));
+    assert_eq!(harness.repository.settlement_events(), vec!["find"; 3]);
+    assert_eq!(harness.repository.settlement_count(), 0);
+}
+
+#[tokio::test]
+async fn old_match_pending_settlement_cannot_mutate_the_new_current_match() {
+    let harness = Harness::new().await;
+    let (first_accounts, first_spec) = harness.start_extraction_match().await;
+    let qualified_at = harness
+        .repository
+        .only_match()
+        .record
+        .extraction_open_at
+        .unwrap();
+    harness.repository.fail_next_commit_with_unknown_outcome();
+    harness.repository.fail_next_settlement_reads(20);
+    let qualification = extraction_qualification(
+        &first_spec,
+        first_accounts[0],
+        qualified_at,
+        SettlementResources::new(2, 2, 2),
+    );
+    assert!(harness.service.observe_extraction(MatchExtractionNotice {
+        world_name: first_spec.world_name.clone(),
+        world_generation: TEST_WORLD_GENERATION.to_owned(),
+        qualification,
+    }));
+    harness.service.tick().await.unwrap();
+
+    harness.clock.set(StdDuration::from_secs(12 * 60));
+    harness.service.tick().await.unwrap();
+    harness.wait_for_match_state(MatchState::Finished).await;
+    harness.service.tick().await.unwrap();
+
+    let mut second_accounts = (0..MATCH_SIZE)
+        .map(|index| Uuid::from_u128(20_000 + index as u128))
+        .collect::<Vec<_>>();
+    second_accounts[0] = first_accounts[0];
+    for (index, account_id) in second_accounts.iter().enumerate() {
+        harness
+            .service
+            .apply_connection_event(MatchConnectionEvent::Connected {
+                connection_id: format!("second-connection-{index}"),
+                account_id: *account_id,
+            })
+            .await
+            .unwrap();
+        harness.service.enqueue(*account_id).await.unwrap();
+    }
+    let second_spec = harness.runtime.latest_spec();
+    assert_ne!(second_spec.match_id, first_spec.match_id);
+    for (index, account_id) in second_accounts.iter().enumerate() {
+        let client_id = public_player_id(&second_spec, *account_id);
+        let attach_attempt_id = format!("second-join-attempt-{index}");
+        assert!(harness.service.allows_attach(
+            &second_spec.world_name,
+            TEST_WORLD_GENERATION,
+            &client_id,
+            &attach_attempt_id,
+            *account_id,
+            MatchAttachKind::Join,
+        ));
+        harness
+            .service
+            .apply_connection_event(MatchConnectionEvent::JoinCommitted {
+                connection_id: format!("second-connection-{index}"),
+                account_id: *account_id,
+                world_name: second_spec.world_name.clone(),
+                world_generation: TEST_WORLD_GENERATION.to_owned(),
+                client_id,
+                attach_attempt_id,
+            })
+            .await
+            .unwrap();
+    }
+    assert_eq!(
+        harness
+            .repository
+            .match_by_id(second_spec.match_id)
+            .record
+            .state,
+        MatchState::Active
+    );
+
+    harness.repository.fail_next_settlement_reads(0);
+    harness.service.tick().await.unwrap();
+    harness.service.tick().await.unwrap();
+
+    let old = harness.repository.match_by_id(first_spec.match_id);
+    assert_eq!(
+        old.participants
+            .iter()
+            .find(|participant| participant.account_id == first_accounts[0])
+            .unwrap()
+            .state,
+        ParticipantState::Extracted
+    );
+    let current = harness.repository.match_by_id(second_spec.match_id);
+    assert_eq!(current.record.state, MatchState::Active);
+    assert!(current
+        .participants
+        .iter()
+        .all(|participant| participant.state == ParticipantState::Active));
+    assert_eq!(harness.runtime.eviction_count(first_accounts[0]), 0);
+    assert_eq!(
+        harness
+            .service
+            .enqueue(second_accounts[0])
+            .await
+            .unwrap()
+            .status,
+        QueueStatus::Active
     );
 }
 
@@ -966,7 +1346,7 @@ async fn timed_out_participant_persists_stats_evicts_and_can_queue_again() {
     assert!(matches!(
         harness
             .repository
-            .mark_timed_out(timeout.clone(), harness.clock.utc_now().into())
+            .mark_timed_out(timeout.clone())
             .await
             .unwrap(),
         TransitionOutcome::AlreadyApplied(_)
@@ -974,13 +1354,10 @@ async fn timed_out_participant_persists_stats_evicts_and_can_queue_again() {
     assert_eq!(
         harness
             .repository
-            .mark_timed_out(
-                ParticipantTimeout {
-                    stats: ParticipantMatchStats::default(),
-                    ..timeout
-                },
-                harness.clock.utc_now().into(),
-            )
+            .mark_timed_out(ParticipantTimeout {
+                stats: ParticipantMatchStats::default(),
+                ..timeout
+            },)
             .await,
         Err(MatchRepositoryError::Conflict)
     );
@@ -1222,6 +1599,61 @@ async fn memory_startup_recovery_aborts_nonterminal_state_once() {
     );
 }
 
+#[tokio::test]
+async fn durable_result_queries_remain_available_after_gameplay_gate_closes() {
+    let harness = Harness::new().await;
+    let accounts = accounts(MATCH_SIZE);
+    harness.connect_all(&accounts).await;
+    for account_id in &accounts {
+        harness.service.enqueue(*account_id).await.unwrap();
+    }
+    let spec = harness.runtime.only_spec();
+    harness.join_all(&accounts, &spec.world_name).await;
+    assert!(harness.service.observe_death(MatchDeathNotice {
+        world_name: spec.world_name.clone(),
+        world_generation: TEST_WORLD_GENERATION.to_owned(),
+        death: participant_death(&spec, accounts[0], accounts[1]),
+    }));
+
+    let result = harness
+        .service
+        .find_match_result(spec.match_id, accounts[0])
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(result.participant_state, ParticipantState::Dead);
+    assert_eq!(result.terminal_cause, Some(ParticipantTerminalCause::Melee));
+    assert_eq!(
+        result.killer_public_player_id,
+        Some(
+            spec.roster
+                .iter()
+                .find(|participant| participant.account_id == accounts[1])
+                .unwrap()
+                .public_player_id
+        )
+    );
+    assert_eq!(result.stats, participant_stats());
+    assert_eq!(
+        harness
+            .service
+            .find_latest_match_result(accounts[0])
+            .await
+            .unwrap(),
+        Some(result.clone())
+    );
+
+    harness.service.gate.fail_closed();
+    assert_eq!(
+        harness
+            .service
+            .find_match_result(spec.match_id, accounts[0])
+            .await
+            .unwrap(),
+        Some(result)
+    );
+}
+
 struct Harness {
     service: Arc<MatchmakingService>,
     repository: Arc<MemoryMatchRepository>,
@@ -1242,10 +1674,38 @@ impl Harness {
             MatchVersions {
                 generation: "generation-v1".to_owned(),
                 gameplay: "gameplay-v1".to_owned(),
-                config: "config-v1".to_owned(),
+                config: "balance-v1".to_owned(),
             },
         );
         service.bind_runtime(runtime.clone()).await.unwrap();
+        let weak_service = Arc::downgrade(&service);
+        let deadline_repository = repository.clone();
+        runtime.observe_hard_deadline(move |spec, monotonic_deadline, utc_deadline| {
+            let Some(service) = weak_service.upgrade() else {
+                return;
+            };
+            let stored = deadline_repository.match_by_id(spec.match_id);
+            for participant in stored.participants.into_iter().filter(|participant| {
+                matches!(
+                    participant.state,
+                    ParticipantState::Active | ParticipantState::Disconnected
+                )
+            }) {
+                let survived_ms = u32::try_from(monotonic_deadline.as_millis()).unwrap();
+                let _ = service.observe_timeout_elimination(MatchTimeoutNotice {
+                    world_name: spec.world_name.clone(),
+                    world_generation: TEST_WORLD_GENERATION.to_owned(),
+                    timeout: ParticipantTimeout {
+                        match_id: spec.match_id,
+                        account_id: participant.account_id,
+                        cause: ParticipantTerminalCause::HardDeadline,
+                        occurred_at: utc_deadline,
+                        survived_ms,
+                        stats: participant.stats,
+                    },
+                });
+            }
+        });
         Self {
             service,
             repository,
@@ -1290,6 +1750,36 @@ impl Harness {
                 .unwrap();
         }
     }
+
+    async fn start_extraction_match(&self) -> (Vec<Uuid>, MatchWorldSpec) {
+        let accounts = accounts(MATCH_SIZE);
+        self.connect_all(&accounts).await;
+        for account_id in &accounts {
+            self.service.enqueue(*account_id).await.unwrap();
+        }
+        let spec = self.runtime.only_spec();
+        self.join_all(&accounts, &spec.world_name).await;
+        self.clock.set(StdDuration::from_secs(8 * 60));
+        self.service.tick().await.unwrap();
+        assert_eq!(
+            self.repository.only_match().record.state,
+            MatchState::ExtractionOpen
+        );
+        (accounts, spec)
+    }
+
+    async fn wait_for_match_state(&self, expected: MatchState) {
+        tokio::time::timeout(StdDuration::from_secs(1), async {
+            loop {
+                if self.repository.only_match().record.state == expected {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("等待比赛进入 {expected:?} 超时"));
+    }
 }
 
 fn accounts(count: usize) -> Vec<Uuid> {
@@ -1320,6 +1810,8 @@ fn participant_death(
         match_id: spec.match_id,
         victim_account_id,
         killer_account_id,
+        occurred_at: OffsetDateTime::UNIX_EPOCH + Duration::seconds(1_800_000_001),
+        survived_ms: 1_000,
         stats: participant_stats(),
     }
 }
@@ -1328,8 +1820,27 @@ fn participant_timeout(spec: &MatchWorldSpec, account_id: Uuid) -> ParticipantTi
     ParticipantTimeout {
         match_id: spec.match_id,
         account_id,
+        cause: ParticipantTerminalCause::ReconnectTimeout,
+        occurred_at: OffsetDateTime::UNIX_EPOCH + Duration::seconds(1_800_000_060),
+        survived_ms: 60_000,
         stats: participant_stats(),
     }
+}
+
+fn extraction_qualification(
+    spec: &MatchWorldSpec,
+    account_id: Uuid,
+    qualified_at: OffsetDateTime,
+    resources: SettlementResources,
+) -> ExtractionQualification {
+    ExtractionQualification::new(
+        spec.match_id,
+        account_id,
+        qualified_at,
+        resources,
+        "balance-v1".to_owned(),
+    )
+    .unwrap()
 }
 
 fn participant_stats() -> ParticipantMatchStats {
@@ -1398,6 +1909,9 @@ impl SeedGenerator for FixedSeed {
     }
 }
 
+type HardDeadlineObserver =
+    dyn Fn(&MatchWorldSpec, StdDuration, OffsetDateTime) + Send + Sync + 'static;
+
 #[derive(Default)]
 struct MemoryWorldRuntime {
     specs: Mutex<Vec<MatchWorldSpec>>,
@@ -1405,10 +1919,14 @@ struct MemoryWorldRuntime {
     despawns: Mutex<HashMap<Uuid, usize>>,
     evictions: Mutex<HashMap<Uuid, usize>>,
     timeout_eliminations: Mutex<HashMap<Uuid, usize>>,
+    hard_deadline_observer: Mutex<Option<Arc<HardDeadlineObserver>>>,
+    hard_deadline_events: Mutex<Vec<&'static str>>,
     fail_next_evict: AtomicBool,
     hang_next_evict: AtomicBool,
     fail_next_stop: AtomicBool,
     hang_stop: AtomicBool,
+    hang_hard_deadline: AtomicBool,
+    reject_next_hard_deadline_seal: AtomicBool,
 }
 
 impl MemoryWorldRuntime {
@@ -1416,6 +1934,10 @@ impl MemoryWorldRuntime {
         let specs = self.specs.lock().unwrap();
         assert_eq!(specs.len(), 1);
         specs[0].clone()
+    }
+
+    fn latest_spec(&self) -> MatchWorldSpec {
+        self.specs.lock().unwrap().last().unwrap().clone()
     }
 
     fn stop_count(&self) -> usize {
@@ -1464,6 +1986,26 @@ impl MemoryWorldRuntime {
             .copied()
             .unwrap_or_default()
     }
+
+    fn hang_hard_deadline(&self) {
+        self.hang_hard_deadline.store(true, Ordering::SeqCst);
+    }
+
+    fn reject_next_hard_deadline_seal(&self) {
+        self.reject_next_hard_deadline_seal
+            .store(true, Ordering::SeqCst);
+    }
+
+    fn observe_hard_deadline(
+        &self,
+        observer: impl Fn(&MatchWorldSpec, StdDuration, OffsetDateTime) + Send + Sync + 'static,
+    ) {
+        *self.hard_deadline_observer.lock().unwrap() = Some(Arc::new(observer));
+    }
+
+    fn hard_deadline_events(&self) -> Vec<&'static str> {
+        self.hard_deadline_events.lock().unwrap().clone()
+    }
 }
 
 #[async_trait]
@@ -1490,6 +2032,7 @@ impl MatchWorldRuntime for MemoryWorldRuntime {
             std::future::pending::<()>().await;
         }
         self.stops.lock().unwrap().push(world_name.to_owned());
+        self.hard_deadline_events.lock().unwrap().push("stop");
         Ok(true)
     }
 
@@ -1535,15 +2078,58 @@ impl MatchWorldRuntime for MemoryWorldRuntime {
             .or_default() += 1;
         Ok(true)
     }
+
+    async fn seal_hard_deadline(
+        &self,
+        world_name: &str,
+        monotonic_deadline: StdDuration,
+        utc_deadline: OffsetDateTime,
+    ) -> Result<bool, MatchWorldRuntimeError> {
+        if self.hang_hard_deadline.load(Ordering::SeqCst) {
+            std::future::pending::<()>().await;
+        }
+        if self
+            .reject_next_hard_deadline_seal
+            .swap(false, Ordering::SeqCst)
+        {
+            return Ok(false);
+        }
+        let spec = self
+            .specs
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|spec| spec.world_name == world_name)
+            .cloned()
+            .ok_or(MatchWorldRuntimeError::Conflict)?;
+        let observer = self.hard_deadline_observer.lock().unwrap().clone();
+        let Some(observer) = observer else {
+            return Err(MatchWorldRuntimeError::Unavailable);
+        };
+        observer(&spec, monotonic_deadline, utc_deadline);
+        let mut events = self.hard_deadline_events.lock().unwrap();
+        events.push("outbox");
+        events.push("seal");
+        Ok(true)
+    }
 }
 
 #[derive(Default)]
 struct MemoryMatchRepository {
     matches: Mutex<HashMap<Uuid, StoredMatch>>,
+    settlements: Mutex<HashMap<(Uuid, Uuid), SettlementRecord>>,
+    settlement_events: Mutex<Vec<&'static str>>,
     activate_hook: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
     fail_create_after_store: AtomicBool,
     fail_begin_settling: AtomicBool,
     fail_mark_dead: AtomicBool,
+    commit_outcome_unknown_once: AtomicBool,
+    lose_commit_response_after_store_once: AtomicBool,
+    find_unavailable_remaining: AtomicU64,
+    settlement_mark_calls: AtomicU64,
+    settlement_commit_calls: AtomicU64,
+    settlement_find_calls: AtomicU64,
+    settlement_abort_calls: AtomicU64,
 }
 
 impl MemoryMatchRepository {
@@ -1575,6 +2161,38 @@ impl MemoryMatchRepository {
 
     fn match_by_id(&self, match_id: Uuid) -> StoredMatch {
         self.matches.lock().unwrap()[&match_id].clone()
+    }
+
+    fn fail_next_commit_with_unknown_outcome(&self) {
+        self.commit_outcome_unknown_once
+            .store(true, Ordering::SeqCst);
+    }
+
+    fn lose_next_commit_response_after_store(&self) {
+        self.lose_commit_response_after_store_once
+            .store(true, Ordering::SeqCst);
+    }
+
+    fn fail_next_settlement_reads(&self, count: u64) {
+        self.find_unavailable_remaining
+            .store(count, Ordering::SeqCst);
+    }
+
+    fn settlement_call_counts(&self) -> (u64, u64, u64, u64) {
+        (
+            self.settlement_mark_calls.load(Ordering::SeqCst),
+            self.settlement_commit_calls.load(Ordering::SeqCst),
+            self.settlement_find_calls.load(Ordering::SeqCst),
+            self.settlement_abort_calls.load(Ordering::SeqCst),
+        )
+    }
+
+    fn settlement_events(&self) -> Vec<&'static str> {
+        self.settlement_events.lock().unwrap().clone()
+    }
+
+    fn settlement_count(&self) -> usize {
+        self.settlements.lock().unwrap().len()
     }
 
     fn update<T>(
@@ -1614,6 +2232,9 @@ impl MatchRepository for MemoryMatchRepository {
                 enqueued_at: seat.enqueued_at,
                 reconnect_deadline: None,
                 killed_by_account_id: None,
+                terminal_cause: None,
+                terminal_at: None,
+                survived_ms: None,
                 stats: ParticipantMatchStats::default(),
                 extracted_at: None,
                 settlement_qualified_at: None,
@@ -1663,10 +2284,11 @@ impl MatchRepository for MemoryMatchRepository {
             .unwrap()
             .values()
             .find(|stored| {
-                stored.participants.iter().any(|participant| {
-                    participant.account_id == account_id
-                        && participant.state.occupies_nonterminal_seat()
-                })
+                !stored.record.state.is_terminal()
+                    && stored.participants.iter().any(|participant| {
+                        participant.account_id == account_id
+                            && participant.state.occupies_nonterminal_seat()
+                    })
             })
             .cloned())
     }
@@ -1824,6 +2446,9 @@ impl MatchRepository for MemoryMatchRepository {
         participant.state = ParticipantState::Dead;
         participant.reconnect_deadline = None;
         participant.killed_by_account_id = Some(death.killer_account_id);
+        participant.terminal_cause = Some(ParticipantTerminalCause::Melee);
+        participant.terminal_at = Some(death.occurred_at);
+        participant.survived_ms = Some(death.survived_ms);
         participant.stats = death.stats;
         Ok(TransitionOutcome::Applied(participant.clone()))
     }
@@ -1831,7 +2456,6 @@ impl MatchRepository for MemoryMatchRepository {
     async fn mark_timed_out(
         &self,
         timeout: ParticipantTimeout,
-        at: OffsetDateTime,
     ) -> Result<TransitionOutcome<ParticipantRecord>, MatchRepositoryError> {
         if !timeout.is_valid() {
             return Err(MatchRepositoryError::Conflict);
@@ -1844,10 +2468,14 @@ impl MatchRepository for MemoryMatchRepository {
             stored.record.state,
             MatchState::Active | MatchState::ExtractionOpen
         );
+        let hard_deadline = stored.record.hard_deadline;
         let participant = participant_mut(stored, timeout.account_id)?;
         if participant.state == ParticipantState::TimedOut {
             return if participant.killed_by_account_id.is_none()
                 && participant.stats == timeout.stats
+                && participant.terminal_cause == Some(timeout.cause)
+                && participant.terminal_at == Some(timeout.occurred_at)
+                && participant.survived_ms == Some(timeout.survived_ms)
                 && participant.reconnect_deadline.is_none()
             {
                 Ok(TransitionOutcome::AlreadyApplied(participant.clone()))
@@ -1855,17 +2483,30 @@ impl MatchRepository for MemoryMatchRepository {
                 Err(MatchRepositoryError::Conflict)
             };
         }
-        if !match_is_live
-            || participant.state != ParticipantState::Disconnected
-            || participant
-                .reconnect_deadline
-                .is_none_or(|deadline| at < deadline)
-        {
+        let valid_source = match timeout.cause {
+            ParticipantTerminalCause::ReconnectTimeout => {
+                participant.state == ParticipantState::Disconnected
+                    && participant
+                        .reconnect_deadline
+                        .is_some_and(|deadline| timeout.occurred_at >= deadline)
+            }
+            ParticipantTerminalCause::HardDeadline => {
+                matches!(
+                    participant.state,
+                    ParticipantState::Active | ParticipantState::Disconnected
+                ) && hard_deadline.is_some_and(|deadline| timeout.occurred_at >= deadline)
+            }
+            ParticipantTerminalCause::Melee => false,
+        };
+        if !match_is_live || !valid_source {
             return Err(MatchRepositoryError::Conflict);
         }
         participant.state = ParticipantState::TimedOut;
         participant.reconnect_deadline = None;
         participant.killed_by_account_id = None;
+        participant.terminal_cause = Some(timeout.cause);
+        participant.terminal_at = Some(timeout.occurred_at);
+        participant.survived_ms = Some(timeout.survived_ms);
         participant.stats = timeout.stats;
         Ok(TransitionOutcome::Applied(participant.clone()))
     }
@@ -1891,16 +2532,15 @@ impl MatchRepository for MemoryMatchRepository {
             return Err(MatchRepositoryError::Unavailable);
         }
         self.update(match_id, |stored| {
-            if trigger == SettlingTrigger::HardDeadline {
-                for participant in &mut stored.participants {
-                    if matches!(
+            if trigger == SettlingTrigger::HardDeadline
+                && stored.participants.iter().any(|participant| {
+                    matches!(
                         participant.state,
                         ParticipantState::Active | ParticipantState::Disconnected
-                    ) {
-                        participant.state = ParticipantState::TimedOut;
-                        participant.reconnect_deadline = None;
-                    }
-                }
+                    )
+                })
+            {
+                return Err(MatchRepositoryError::Conflict);
             }
             stored.record.state = MatchState::Settling;
             Ok(stored.clone())
@@ -1917,6 +2557,229 @@ impl MatchRepository for MemoryMatchRepository {
             stored.record.finished_at = Some(at);
             Ok(stored.clone())
         })
+    }
+}
+
+#[async_trait]
+impl SettlementRepository for MemoryMatchRepository {
+    async fn mark_settlement_pending(
+        &self,
+        qualification: ExtractionQualification,
+    ) -> Result<TransitionOutcome<ParticipantRecord>, SettlementRepositoryError> {
+        self.settlement_mark_calls.fetch_add(1, Ordering::SeqCst);
+        self.settlement_events.lock().unwrap().push("mark");
+        let mut matches = self.matches.lock().unwrap();
+        let stored = matches
+            .get_mut(&qualification.match_id)
+            .ok_or(SettlementRepositoryError::Conflict)?;
+        if stored.record.versions.config != qualification.config_version
+            || stored
+                .record
+                .hard_deadline
+                .is_none_or(|deadline| qualification.qualified_at > deadline)
+        {
+            return Err(SettlementRepositoryError::Conflict);
+        }
+        let participant = stored
+            .participants
+            .iter_mut()
+            .find(|participant| participant.account_id == qualification.account_id)
+            .ok_or(SettlementRepositoryError::Conflict)?;
+        if participant.state == ParticipantState::SettlementPending {
+            return (participant.settlement_qualified_at == Some(qualification.qualified_at))
+                .then(|| TransitionOutcome::AlreadyApplied(participant.clone()))
+                .ok_or(SettlementRepositoryError::Conflict);
+        }
+        if participant.state != ParticipantState::Active {
+            return Err(SettlementRepositoryError::Conflict);
+        }
+        participant.state = ParticipantState::SettlementPending;
+        participant.settlement_qualified_at = Some(qualification.qualified_at);
+        Ok(TransitionOutcome::Applied(participant.clone()))
+    }
+
+    async fn commit_settlement(
+        &self,
+        command: CommitSettlement,
+    ) -> Result<TransitionOutcome<SettlementRecord>, SettlementRepositoryError> {
+        self.settlement_commit_calls.fetch_add(1, Ordering::SeqCst);
+        self.settlement_events.lock().unwrap().push("commit");
+        if self
+            .commit_outcome_unknown_once
+            .swap(false, Ordering::SeqCst)
+        {
+            return Err(SettlementRepositoryError::OutcomeUnknown);
+        }
+        let key = (
+            command.qualification.match_id,
+            command.qualification.account_id,
+        );
+        if let Some(existing) = self.settlements.lock().unwrap().get(&key).cloned() {
+            return (existing.settlement_id == command.settlement_id
+                && existing.inventory_digest == command.qualification.inventory_digest)
+                .then_some(TransitionOutcome::AlreadyApplied(existing))
+                .ok_or(SettlementRepositoryError::Conflict);
+        }
+        let total_value = command
+            .qualification
+            .resources
+            .total_value(&command.qualification.config_version)
+            .ok_or(SettlementRepositoryError::Overflow)?;
+        let mut matches = self.matches.lock().unwrap();
+        let stored = matches
+            .get_mut(&key.0)
+            .ok_or(SettlementRepositoryError::Conflict)?;
+        let participant = stored
+            .participants
+            .iter_mut()
+            .find(|participant| participant.account_id == key.1)
+            .ok_or(SettlementRepositoryError::Conflict)?;
+        if participant.state != ParticipantState::SettlementPending {
+            return Err(SettlementRepositoryError::Conflict);
+        }
+        let record = SettlementRecord {
+            settlement_id: command.settlement_id,
+            match_id: key.0,
+            account_id: key.1,
+            idempotency_key: command.qualification.idempotency_key(),
+            inventory_digest: command.qualification.inventory_digest,
+            config_version: command.qualification.config_version,
+            resources: command.qualification.resources,
+            total_value,
+            committed_at: command.qualification.qualified_at,
+        };
+        participant.state = ParticipantState::Extracted;
+        participant.extracted_at = Some(record.committed_at);
+        self.settlements.lock().unwrap().insert(key, record.clone());
+        if self
+            .lose_commit_response_after_store_once
+            .swap(false, Ordering::SeqCst)
+        {
+            return Err(SettlementRepositoryError::OutcomeUnknown);
+        }
+        Ok(TransitionOutcome::Applied(record))
+    }
+
+    async fn find_settlement(
+        &self,
+        match_id: Uuid,
+        account_id: Uuid,
+    ) -> Result<Option<SettlementRecord>, SettlementRepositoryError> {
+        self.settlement_find_calls.fetch_add(1, Ordering::SeqCst);
+        self.settlement_events.lock().unwrap().push("find");
+        if self
+            .find_unavailable_remaining
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
+                (remaining > 0).then(|| remaining - 1)
+            })
+            .is_ok()
+        {
+            return Err(SettlementRepositoryError::Unavailable);
+        }
+        Ok(self
+            .settlements
+            .lock()
+            .unwrap()
+            .get(&(match_id, account_id))
+            .cloned())
+    }
+
+    async fn abort_pending_settlement(
+        &self,
+        match_id: Uuid,
+        account_id: Uuid,
+        _at: OffsetDateTime,
+    ) -> Result<TransitionOutcome<ParticipantRecord>, SettlementRepositoryError> {
+        self.settlement_abort_calls.fetch_add(1, Ordering::SeqCst);
+        self.settlement_events.lock().unwrap().push("abort");
+        let mut matches = self.matches.lock().unwrap();
+        let participant = matches
+            .get_mut(&match_id)
+            .and_then(|stored| {
+                stored
+                    .participants
+                    .iter_mut()
+                    .find(|participant| participant.account_id == account_id)
+            })
+            .ok_or(SettlementRepositoryError::Conflict)?;
+        if participant.state != ParticipantState::SettlementPending {
+            return Err(SettlementRepositoryError::Conflict);
+        }
+        participant.state = ParticipantState::Aborted;
+        Ok(TransitionOutcome::Applied(participant.clone()))
+    }
+
+    async fn find_match_result(
+        &self,
+        match_id: Uuid,
+        account_id: Uuid,
+    ) -> Result<Option<MatchResultRecord>, SettlementRepositoryError> {
+        let result = {
+            let matches = self.matches.lock().unwrap();
+            let Some(stored) = matches.get(&match_id) else {
+                return Ok(None);
+            };
+            let Some(participant) = stored
+                .participants
+                .iter()
+                .find(|participant| participant.account_id == account_id)
+            else {
+                return Ok(None);
+            };
+            let killer_public_player_id = participant.killed_by_account_id.and_then(|killer| {
+                stored
+                    .participants
+                    .iter()
+                    .find(|candidate| candidate.account_id == killer)
+                    .map(|candidate| candidate.public_player_id)
+            });
+            MatchResultRecord {
+                match_id,
+                match_state: stored.record.state,
+                participant_state: participant.state,
+                public_player_id: participant.public_player_id,
+                terminal_cause: participant.terminal_cause,
+                killer_public_player_id,
+                terminal_at: participant.terminal_at,
+                survived_ms: participant.survived_ms,
+                stats: participant.stats,
+                settlement: None,
+                abort_reason: stored.record.abort_reason.clone(),
+            }
+        };
+        let settlement = self
+            .settlements
+            .lock()
+            .unwrap()
+            .get(&(match_id, account_id))
+            .cloned();
+        Ok(Some(MatchResultRecord {
+            settlement,
+            ..result
+        }))
+    }
+
+    async fn find_latest_match_result(
+        &self,
+        account_id: Uuid,
+    ) -> Result<Option<MatchResultRecord>, SettlementRepositoryError> {
+        let match_id = self
+            .matches
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|stored| {
+                stored
+                    .participants
+                    .iter()
+                    .any(|participant| participant.account_id == account_id)
+            })
+            .max_by_key(|stored| (stored.record.created_at, stored.record.match_id))
+            .map(|stored| stored.record.match_id);
+        match match_id {
+            Some(match_id) => self.find_match_result(match_id, account_id).await,
+            None => Ok(None),
+        }
     }
 }
 

@@ -8,6 +8,7 @@ import {
   readUnsignedInteger,
   readUuid,
 } from "./decoder-utils";
+import { decodeExtractionStateEnvelope } from "./extraction";
 import { decodeMiningStateEnvelope } from "./gameplay";
 import type {
   AttackCursorState,
@@ -48,6 +49,7 @@ export function decodeGameplayStateData(
       "inventory",
       "equipment",
       "mining",
+      "extraction",
       "health",
       "attack",
       "deathResult",
@@ -58,6 +60,7 @@ export function decodeGameplayStateData(
   const inventory = decodeInventory(source.inventory, manifest);
   const equipment = decodeEquipment(source.equipment);
   const mining = decodeMiningStateEnvelope(source.mining, manifest);
+  const extraction = decodeExtractionStateEnvelope(source.extraction, manifest);
   const health = decodeHealthStateEnvelope(source.health, manifest);
   const attack = decodeAttackCursor(source.attack);
   const deathResult =
@@ -67,6 +70,7 @@ export function decodeGameplayStateData(
 
   if (
     mining.matchId !== matchId ||
+    extraction.matchId !== matchId ||
     health.matchId !== matchId ||
     (deathResult !== null && deathResult.matchId !== matchId)
   ) {
@@ -79,12 +83,16 @@ export function decodeGameplayStateData(
       deathResult === null ||
       deathResult.revision !== health.revision ||
       !inventory.frozen ||
-      inventory.slots.some((slot) => slot !== null)
+      inventory.slots.some((slot) => slot !== null) ||
+      extraction.data.status !== "closed"
     ) {
       throw new Error("gameplayState: inconsistent dead terminal state");
     }
-  } else if (deathResult !== null || inventory.frozen) {
-    throw new Error("gameplayState: alive state contains terminal data");
+  } else if (
+    deathResult !== null ||
+    inventory.frozen !== (extraction.data.status === "pending")
+  ) {
+    throw new Error("gameplayState: inconsistent extraction freeze state");
   }
 
   return {
@@ -92,6 +100,7 @@ export function decodeGameplayStateData(
     inventory,
     equipment,
     mining,
+    extraction,
     health,
     attack,
     deathResult,

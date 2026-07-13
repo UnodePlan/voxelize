@@ -46,6 +46,7 @@ pub enum MiningIdleReason {
     InvalidBlock,
     Disconnected,
     TimedOut,
+    SettlementPending,
     Completed,
 }
 

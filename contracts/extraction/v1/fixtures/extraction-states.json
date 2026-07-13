@@ -1,0 +1,120 @@
+{
+  "fixtureVersion": 1,
+  "cases": [
+    {
+      "name": "hidden-zone-does-not-leak-coordinates",
+      "route": "pvp:v1:extraction-state",
+      "accept": true,
+      "value": {
+        "protocolVersion": 1,
+        "type": "state",
+        "matchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "stream": "extraction",
+        "revision": 0,
+        "data": { "status": "hidden" }
+      }
+    },
+    {
+      "name": "open-zone-carries-authoritative-progress",
+      "route": "pvp:v1:extraction-state",
+      "accept": true,
+      "value": {
+        "protocolVersion": 1,
+        "type": "state",
+        "matchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "stream": "extraction",
+        "revision": 9,
+        "data": {
+          "status": "open",
+          "zone": {
+            "center": [17, 42, -8],
+            "radiusBlocks": 4,
+            "halfHeightBlocks": 3
+          },
+          "inside": true,
+          "elapsedMs": 3750,
+          "requiredMs": 8000,
+          "hardDeadlineUnixSeconds": 1783900800
+        }
+      }
+    },
+    {
+      "name": "qualified-player-is-pending-until-durable-commit",
+      "route": "pvp:v1:extraction-state",
+      "accept": true,
+      "value": {
+        "protocolVersion": 1,
+        "type": "state",
+        "matchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "stream": "extraction",
+        "revision": 14,
+        "data": {
+          "status": "pending",
+          "zone": {
+            "center": [17, 42, -8],
+            "radiusBlocks": 4,
+            "halfHeightBlocks": 3
+          },
+          "qualifiedAtUnixSeconds": 1783900568
+        }
+      }
+    },
+    {
+      "name": "closed-zone-has-no-progress",
+      "route": "pvp:v1:extraction-state",
+      "accept": true,
+      "value": {
+        "protocolVersion": 1,
+        "type": "state",
+        "matchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "stream": "extraction",
+        "revision": 15,
+        "data": { "status": "closed" }
+      }
+    },
+    {
+      "name": "hidden-zone-rejects-coordinate-leak",
+      "route": "pvp:v1:extraction-state",
+      "accept": false,
+      "value": {
+        "protocolVersion": 1,
+        "type": "state",
+        "matchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "stream": "extraction",
+        "revision": 0,
+        "data": {
+          "status": "hidden",
+          "zone": {
+            "center": [17, 42, -8],
+            "radiusBlocks": 4,
+            "halfHeightBlocks": 3
+          }
+        }
+      }
+    },
+    {
+      "name": "open-progress-cannot-exceed-required-duration",
+      "route": "pvp:v1:extraction-state",
+      "accept": false,
+      "value": {
+        "protocolVersion": 1,
+        "type": "state",
+        "matchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "stream": "extraction",
+        "revision": 9,
+        "data": {
+          "status": "open",
+          "zone": {
+            "center": [17, 42, -8],
+            "radiusBlocks": 4,
+            "halfHeightBlocks": 3
+          },
+          "inside": true,
+          "elapsedMs": 8001,
+          "requiredMs": 8000,
+          "hardDeadlineUnixSeconds": 1783900800
+        }
+      }
+    }
+  ]
+}

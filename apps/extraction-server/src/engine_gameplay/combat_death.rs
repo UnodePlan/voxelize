@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use specs::{Entity, WriteStorage};
+use time::OffsetDateTime;
 
 use super::components::{
     EliminationComp, EliminationRecord, HealthComp, MatchPlayerComp, MiningComp,
@@ -26,6 +27,7 @@ use crate::{
 pub(super) struct MeleeDeathAccess<'a, 'world> {
     pub context: &'a GameplayRuntimeContext,
     pub now: Duration,
+    pub occurred_at: OffsetDateTime,
     pub killer_entity: Entity,
     pub killer: &'a MatchPlayerComp,
     pub victim_entity: Entity,
@@ -143,6 +145,7 @@ pub(super) fn resolve_melee_death(
         .unwrap()
         .eliminate(EliminationRecord {
             killer_account_id: Some(access.killer.account_id()),
+            occurred_at: access.occurred_at,
             result: result.clone(),
             notice_sent: false,
         });

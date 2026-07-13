@@ -3,7 +3,9 @@ use voxelize::Clients;
 
 use super::{
     authority::GameplayAuthority,
-    components::{EliminationComp, FixedEquipmentComp, HealthComp, MatchPlayerComp},
+    components::{
+        EliminationComp, ExtractionComp, FixedEquipmentComp, HealthComp, MatchPlayerComp,
+    },
 };
 use crate::contracts::AttackWeaponSlot;
 
@@ -19,6 +21,7 @@ pub(super) fn is_attack_authorized(
     equipment: &ReadStorage<'_, FixedEquipmentComp>,
     health: &WriteStorage<'_, HealthComp>,
     eliminations: &WriteStorage<'_, EliminationComp>,
+    extractions: &WriteStorage<'_, ExtractionComp>,
 ) -> bool {
     entities.is_alive(attacker_entity)
         && attacker.public_player_id().to_string() == client_id
@@ -27,6 +30,9 @@ pub(super) fn is_attack_authorized(
             .get(attacker_entity)
             .is_some_and(|value| value.state().is_alive())
         && eliminations
+            .get(attacker_entity)
+            .is_some_and(|value| value.record().is_none())
+        && extractions
             .get(attacker_entity)
             .is_some_and(|value| value.record().is_none())
         && equipment

@@ -5,8 +5,8 @@ use std::env;
 use extraction_server::{
     matchmaking::{
         CreatePreparingMatch, FrozenRoster, MatchState, MatchVersions, ParticipantDeath,
-        ParticipantMatchStats, ParticipantResourceCounts, ParticipantState, ParticipantTimeout,
-        QueuedPlayer, MATCH_SIZE,
+        ParticipantMatchStats, ParticipantResourceCounts, ParticipantState,
+        ParticipantTerminalCause, ParticipantTimeout, QueuedPlayer, MATCH_SIZE,
     },
     persistence::{acquire_matchmaking_process_lock, migrate_database, PgRepository},
     ports::{MatchRepository, MatchRepositoryError, SettlingTrigger, TransitionOutcome},
@@ -214,26 +214,26 @@ async fn lifecycle_deadlines_reconnect_and_hard_timeout_are_cas_guarded() {
         Err(MatchRepositoryError::Conflict)
     );
     assert!(repository
-        .mark_timed_out(
-            ParticipantTimeout {
-                match_id,
-                account_id: accounts[0],
-                stats: ParticipantMatchStats::default(),
-            },
-            deadline,
-        )
+        .mark_timed_out(ParticipantTimeout {
+            match_id,
+            account_id: accounts[0],
+            cause: ParticipantTerminalCause::ReconnectTimeout,
+            occurred_at: deadline,
+            survived_ms: 80_000,
+            stats: ParticipantMatchStats::default(),
+        })
         .await
         .unwrap()
         .was_applied());
     assert!(!repository
-        .mark_timed_out(
-            ParticipantTimeout {
-                match_id,
-                account_id: accounts[0],
-                stats: ParticipantMatchStats::default(),
-            },
-            deadline + Duration::seconds(1),
-        )
+        .mark_timed_out(ParticipantTimeout {
+            match_id,
+            account_id: accounts[0],
+            cause: ParticipantTerminalCause::ReconnectTimeout,
+            occurred_at: deadline,
+            survived_ms: 80_000,
+            stats: ParticipantMatchStats::default(),
+        })
         .await
         .unwrap()
         .was_applied());
@@ -262,6 +262,19 @@ async fn lifecycle_deadlines_reconnect_and_hard_timeout_are_cas_guarded() {
         .was_applied());
 
     let hard_deadline = started_at + Duration::minutes(12);
+    for account_id in &accounts[1..] {
+        repository
+            .mark_timed_out(ParticipantTimeout {
+                match_id,
+                account_id: *account_id,
+                cause: ParticipantTerminalCause::HardDeadline,
+                occurred_at: hard_deadline,
+                survived_ms: 12 * 60 * 1_000,
+                stats: ParticipantMatchStats::default(),
+            })
+            .await
+            .unwrap();
+    }
     let settling = repository
         .begin_settling(match_id, SettlingTrigger::HardDeadline, hard_deadline)
         .await
@@ -318,6 +331,8 @@ async fn participant_death_is_an_exact_idempotent_cas() {
         match_id,
         victim_account_id: accounts[0],
         killer_account_id: accounts[1],
+        occurred_at: created_at + Duration::seconds(2),
+        survived_ms: 1_000,
         stats,
     };
 
@@ -325,6 +340,12 @@ async fn participant_death_is_an_exact_idempotent_cas() {
     assert!(applied.was_applied());
     assert_eq!(applied.value().state, ParticipantState::Dead);
     assert_eq!(applied.value().killed_by_account_id, Some(accounts[1]));
+    assert_eq!(
+        applied.value().terminal_cause,
+        Some(ParticipantTerminalCause::Melee)
+    );
+    assert_eq!(applied.value().terminal_at, Some(active_death.occurred_at));
+    assert_eq!(applied.value().survived_ms, Some(active_death.survived_ms));
     assert_eq!(applied.value().stats, stats);
     let persisted = repository.find_match(match_id).await.unwrap().unwrap();
     let persisted_victim = persisted
@@ -334,6 +355,12 @@ async fn participant_death_is_an_exact_idempotent_cas() {
         .unwrap();
     assert_eq!(persisted_victim.state, ParticipantState::Dead);
     assert_eq!(persisted_victim.killed_by_account_id, Some(accounts[1]));
+    assert_eq!(
+        persisted_victim.terminal_cause,
+        Some(ParticipantTerminalCause::Melee)
+    );
+    assert_eq!(persisted_victim.terminal_at, Some(active_death.occurred_at));
+    assert_eq!(persisted_victim.survived_ms, Some(active_death.survived_ms));
     assert_eq!(persisted_victim.stats, stats);
     assert!(persisted_victim.reconnect_deadline.is_none());
     assert!(matches!(
@@ -351,14 +378,14 @@ async fn participant_death_is_an_exact_idempotent_cas() {
     );
     assert_eq!(
         repository
-            .mark_timed_out(
-                ParticipantTimeout {
-                    match_id,
-                    account_id: accounts[0],
-                    stats,
-                },
-                created_at + Duration::minutes(2),
-            )
+            .mark_timed_out(ParticipantTimeout {
+                match_id,
+                account_id: accounts[0],
+                cause: ParticipantTerminalCause::ReconnectTimeout,
+                occurred_at: created_at + Duration::minutes(2),
+                survived_ms: 120_000,
+                stats,
+            })
             .await,
         Err(MatchRepositoryError::Conflict)
     );
@@ -371,6 +398,8 @@ async fn participant_death_is_an_exact_idempotent_cas() {
         match_id,
         victim_account_id: accounts[3],
         killer_account_id: accounts[4],
+        occurred_at: created_at + Duration::seconds(3),
+        survived_ms: 2_000,
         stats,
     };
     assert!(repository
@@ -420,21 +449,30 @@ async fn participant_timeout_persists_stats_and_excludes_death_terminal() {
     let timeout = ParticipantTimeout {
         match_id,
         account_id: accounts[0],
+        cause: ParticipantTerminalCause::ReconnectTimeout,
+        occurred_at: deadline,
+        survived_ms: 61_000,
         stats,
     };
 
     assert_eq!(
         repository
-            .mark_timed_out(timeout.clone(), deadline - Duration::nanoseconds(1))
+            .mark_timed_out(ParticipantTimeout {
+                occurred_at: deadline - Duration::nanoseconds(1),
+                ..timeout.clone()
+            })
             .await,
         Err(MatchRepositoryError::Conflict)
     );
-    let applied = repository
-        .mark_timed_out(timeout.clone(), deadline)
-        .await
-        .unwrap();
+    let applied = repository.mark_timed_out(timeout.clone()).await.unwrap();
     assert!(applied.was_applied());
     assert_eq!(applied.value().state, ParticipantState::TimedOut);
+    assert_eq!(
+        applied.value().terminal_cause,
+        Some(ParticipantTerminalCause::ReconnectTimeout)
+    );
+    assert_eq!(applied.value().terminal_at, Some(deadline));
+    assert_eq!(applied.value().survived_ms, Some(61_000));
     assert_eq!(applied.value().stats, stats);
     assert!(applied.value().killed_by_account_id.is_none());
     assert!(applied.value().reconnect_deadline.is_none());
@@ -446,23 +484,24 @@ async fn participant_timeout_persists_stats_and_excludes_death_terminal() {
         .find(|participant| participant.account_id == accounts[0])
         .unwrap();
     assert_eq!(persisted_timeout.state, ParticipantState::TimedOut);
+    assert_eq!(
+        persisted_timeout.terminal_cause,
+        Some(ParticipantTerminalCause::ReconnectTimeout)
+    );
+    assert_eq!(persisted_timeout.terminal_at, Some(deadline));
+    assert_eq!(persisted_timeout.survived_ms, Some(61_000));
     assert_eq!(persisted_timeout.stats, stats);
     assert!(persisted_timeout.killed_by_account_id.is_none());
     assert!(persisted_timeout.reconnect_deadline.is_none());
     assert!(matches!(
-        repository
-            .mark_timed_out(timeout.clone(), deadline + Duration::seconds(1))
-            .await
-            .unwrap(),
+        repository.mark_timed_out(timeout.clone()).await.unwrap(),
         TransitionOutcome::AlreadyApplied(_)
     ));
 
     let mut conflicting_timeout = timeout;
     conflicting_timeout.stats.lost.diamond += 1;
     assert_eq!(
-        repository
-            .mark_timed_out(conflicting_timeout, deadline + Duration::seconds(1))
-            .await,
+        repository.mark_timed_out(conflicting_timeout).await,
         Err(MatchRepositoryError::Conflict)
     );
     assert_eq!(
@@ -471,6 +510,8 @@ async fn participant_timeout_persists_stats_and_excludes_death_terminal() {
                 match_id,
                 victim_account_id: accounts[0],
                 killer_account_id: accounts[1],
+                occurred_at: deadline + Duration::seconds(1),
+                survived_ms: 62_000,
                 stats,
             })
             .await,

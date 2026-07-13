@@ -1,6 +1,12 @@
 use std::fmt;
 
-use actix_web::{http::StatusCode, HttpResponse, ResponseError};
+use actix_web::{
+    http::{
+        header::{CacheControl, CacheDirective},
+        StatusCode,
+    },
+    HttpResponse, ResponseError,
+};
 use serde::Serialize;
 
 use crate::{auth::AuthError, contracts::ErrorCode, matchmaking::MatchmakingError};
@@ -85,12 +91,14 @@ impl ResponseError for ApiError {
     }
 
     fn error_response(&self) -> HttpResponse {
-        HttpResponse::build(self.status).json(ApiErrorResponse {
-            error: ApiErrorBody {
-                code: self.code,
-                retryable: self.retryable,
-            },
-        })
+        HttpResponse::build(self.status)
+            .insert_header(CacheControl(vec![CacheDirective::NoStore]))
+            .json(ApiErrorResponse {
+                error: ApiErrorBody {
+                    code: self.code,
+                    retryable: self.retryable,
+                },
+            })
     }
 }
 

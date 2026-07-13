@@ -21,6 +21,9 @@ pub(crate) struct GameplayConfig {
     pub dirt_mining_duration: Duration,
     pub gold_mining_duration: Duration,
     pub diamond_mining_duration: Duration,
+    pub extraction_radius: f32,
+    pub extraction_half_height: f32,
+    pub extraction_hold_duration: Duration,
 }
 
 impl GameplayConfig {
@@ -59,4 +62,7 @@ pub(crate) const GAMEPLAY_V1: GameplayConfig = GameplayConfig {
     dirt_mining_duration: Duration::from_millis(500),
     gold_mining_duration: Duration::from_millis(1_500),
     diamond_mining_duration: Duration::from_millis(3_000),
+    extraction_radius: 4.0,
+    extraction_half_height: 3.0,
+    extraction_hold_duration: Duration::from_secs(8),
 };

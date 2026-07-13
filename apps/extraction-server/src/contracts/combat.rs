@@ -154,6 +154,7 @@ pub fn decode_health_state(
 pub enum DeathCause {
     Melee,
     ReconnectTimeout,
+    HardDeadline,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -220,7 +221,9 @@ impl DeathResultEnvelope {
                 .data
                 .killer_public_player_id
                 .is_some_and(|killer| !killer.is_nil()),
-            DeathCause::ReconnectTimeout => self.data.killer_public_player_id.is_none(),
+            DeathCause::ReconnectTimeout | DeathCause::HardDeadline => {
+                self.data.killer_public_player_id.is_none()
+            }
         };
         if !killer_is_valid {
             return Err(ContractError::new("death result 击杀者与死因不一致"));

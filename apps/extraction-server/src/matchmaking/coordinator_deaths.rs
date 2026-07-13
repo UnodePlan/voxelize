@@ -1,7 +1,7 @@
 use super::{
     coordinator::{repository_error, Coordinator},
     MatchDeathNotice, MatchState, MatchTimeoutNotice, MatchmakingError, ParticipantDeath,
-    ParticipantRecord, ParticipantState, ParticipantTimeout,
+    ParticipantRecord, ParticipantState, ParticipantTerminalCause, ParticipantTimeout,
 };
 
 impl Coordinator {
@@ -115,10 +115,24 @@ impl Coordinator {
             .get(&notice.timeout.account_id)
             .map(|participant| participant.state)
             .ok_or(MatchmakingError::RosterLocked)?;
-        if !matches!(
-            state,
-            ParticipantState::Disconnected | ParticipantState::TimedOut
-        ) {
+        let valid_source = match notice.timeout.cause {
+            ParticipantTerminalCause::ReconnectTimeout => matches!(
+                state,
+                ParticipantState::Disconnected | ParticipantState::TimedOut
+            ),
+            ParticipantTerminalCause::HardDeadline => {
+                matches!(
+                    state,
+                    ParticipantState::Active
+                        | ParticipantState::Disconnected
+                        | ParticipantState::TimedOut
+                ) && current
+                    .hard_deadline_utc
+                    .is_some_and(|deadline| notice.timeout.occurred_at >= deadline)
+            }
+            ParticipantTerminalCause::Melee => false,
+        };
+        if !valid_source {
             return Err(MatchmakingError::RosterLocked);
         }
         if let Some(participant) = self
@@ -148,7 +162,7 @@ impl Coordinator {
         }
         let record = self
             .repository
-            .mark_timed_out(timeout.clone(), self.utc_now())
+            .mark_timed_out(timeout.clone())
             .await
             .map_err(repository_error)?
             .into_value();
@@ -164,6 +178,9 @@ fn record_matches_death(record: &ParticipantRecord, death: &ParticipantDeath) ->
         && record.account_id == death.victim_account_id
         && record.state == ParticipantState::Dead
         && record.killed_by_account_id == Some(death.killer_account_id)
+        && record.terminal_cause == Some(super::ParticipantTerminalCause::Melee)
+        && record.terminal_at == Some(death.occurred_at)
+        && record.survived_ms == Some(death.survived_ms)
         && record.stats == death.stats
         && record.reconnect_deadline.is_none()
 }
@@ -173,6 +190,9 @@ fn record_matches_timeout(record: &ParticipantRecord, timeout: &ParticipantTimeo
         && record.account_id == timeout.account_id
         && record.state == ParticipantState::TimedOut
         && record.killed_by_account_id.is_none()
+        && record.terminal_cause == Some(timeout.cause)
+        && record.terminal_at == Some(timeout.occurred_at)
+        && record.survived_ms == Some(timeout.survived_ms)
         && record.stats == timeout.stats
         && record.reconnect_deadline.is_none()
 }

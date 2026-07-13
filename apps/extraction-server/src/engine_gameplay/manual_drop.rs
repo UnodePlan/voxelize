@@ -6,7 +6,9 @@ use voxelize::{DirectionComp, MessageQueues, PositionComp};
 
 use super::{
     authority::GameplayAuthority,
-    components::{EliminationComp, HealthComp, MatchPlayerComp, ResourceInventoryComp},
+    components::{
+        EliminationComp, ExtractionComp, HealthComp, MatchPlayerComp, ResourceInventoryComp,
+    },
     intents::DropSlotIntentQueue,
     messaging::{queue_error, queue_ok},
     runtime::GameplayRuntimeContext,
@@ -41,6 +43,7 @@ pub(super) struct ManualDropAccess<'a, 'world> {
     pub players: &'a ReadStorage<'world, MatchPlayerComp>,
     pub health: &'a ReadStorage<'world, HealthComp>,
     pub eliminations: &'a WriteStorage<'world, EliminationComp>,
+    pub extractions: &'a WriteStorage<'world, ExtractionComp>,
     pub inventories: &'a mut WriteStorage<'world, ResourceInventoryComp>,
     pub positions: &'a WriteStorage<'world, PositionComp>,
     pub directions: &'a ReadStorage<'world, DirectionComp>,
@@ -60,6 +63,7 @@ pub(super) fn process_manual_drops(access: ManualDropAccess<'_, '_>) {
         players,
         health,
         eliminations,
+        extractions,
         inventories,
         positions,
         directions,
@@ -84,6 +88,9 @@ pub(super) fn process_manual_drops(access: ManualDropAccess<'_, '_>) {
                 .get(intent.entity)
                 .is_none_or(|value| !value.state().is_alive())
             || eliminations
+                .get(intent.entity)
+                .is_none_or(|value| value.record().is_some())
+            || extractions
                 .get(intent.entity)
                 .is_none_or(|value| value.record().is_some())
         {

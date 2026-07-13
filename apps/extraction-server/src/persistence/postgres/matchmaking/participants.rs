@@ -140,12 +140,15 @@ pub(in crate::persistence::postgres) async fn mark_dead(
 
     let result = sqlx::query(
         "UPDATE match_participants SET state = 'dead', reconnect_deadline = NULL, \
-         killed_by_account_id = $3, mined_counts = $4, pickup_counts = $5, lost_counts = $6 \
+         killed_by_account_id = $3, terminal_cause = 'melee', terminal_at = $4, \
+         survived_ms = $5, mined_counts = $6, pickup_counts = $7, lost_counts = $8 \
          WHERE match_id = $1 AND account_id = $2 AND state IN ('active', 'disconnected')",
     )
     .bind(death.match_id)
     .bind(death.victim_account_id)
     .bind(death.killer_account_id)
+    .bind(death.occurred_at)
+    .bind(i64::from(death.survived_ms))
     .bind(Json(death.stats.mined))
     .bind(Json(death.stats.picked_up))
     .bind(Json(death.stats.lost))
@@ -158,6 +161,9 @@ pub(in crate::persistence::postgres) async fn mark_dead(
     participant.state = ParticipantState::Dead.as_str().to_owned();
     participant.reconnect_deadline = None;
     participant.killed_by_account_id = Some(death.killer_account_id);
+    participant.terminal_cause = Some("melee".to_owned());
+    participant.terminal_at = Some(death.occurred_at);
+    participant.survived_ms = Some(i64::from(death.survived_ms));
     participant.mined_counts = Json(death.stats.mined);
     participant.pickup_counts = Json(death.stats.picked_up);
     participant.lost_counts = Json(death.stats.lost);
@@ -177,6 +183,9 @@ fn death_matches_record(death: &ParticipantDeath, record: &ParticipantRecord) ->
         && record.account_id == death.victim_account_id
         && record.state == ParticipantState::Dead
         && record.killed_by_account_id == Some(death.killer_account_id)
+        && record.terminal_cause == Some(crate::matchmaking::ParticipantTerminalCause::Melee)
+        && record.terminal_at == Some(death.occurred_at)
+        && record.survived_ms == Some(death.survived_ms)
         && record.stats == death.stats
         && record.reconnect_deadline.is_none()
 }

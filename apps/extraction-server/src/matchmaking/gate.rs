@@ -151,6 +151,13 @@ impl AttachGate {
         }) else {
             return false;
         };
+        if hard_deadline_closed
+            .as_ref()
+            .is_some_and(|closed| closed.0 == world_name && closed.1 == world_generation)
+            && snapshot.state == MatchState::Settling
+        {
+            return true;
+        }
         if !matches!(
             snapshot.state,
             MatchState::Active | MatchState::ExtractionOpen

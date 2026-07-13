@@ -10,15 +10,17 @@ use super::{
     authority::GameplayAuthority,
     auto_pickup::{auto_pickup, AutoPickupAccess},
     components::{
-        EliminationComp, FixedEquipmentComp, HealthComp, LootDropComp, MatchPlayerComp,
-        ResourceInventoryComp, RoundStatsComp,
+        EliminationComp, ExtractionComp, FixedEquipmentComp, HealthComp, LootDropComp,
+        MatchPlayerComp, ResourceInventoryComp, RoundStatsComp,
     },
     death_outbox::flush_death_notices,
     drop_spawn::{spawn_pending_drops, DropSpawnAccess},
+    extraction_outbox::{flush_extraction_notices, terminal_outboxes_are_flushed},
     intents::DropSlotIntentQueue,
     manual_drop::{process_manual_drops, ManualDropAccess},
     messaging::{queue_inventory_state, PlayerInventoryState},
     runtime::GameplayRuntimeContext,
+    HardDeadlineControl,
 };
 use crate::gameplay::drop_queue::{PendingDropQueue, SpawnedDropIds};
 
@@ -29,6 +31,7 @@ impl<'a> System<'a> for GameplayRuntimeSystem {
         Entities<'a>,
         ReadExpect<'a, GameplayRuntimeContext>,
         ReadExpect<'a, GameplayAuthority>,
+        ReadExpect<'a, HardDeadlineControl>,
         WriteExpect<'a, DropSlotIntentQueue>,
         WriteExpect<'a, PendingDropQueue>,
         WriteExpect<'a, SpawnedDropIds>,
@@ -40,6 +43,7 @@ impl<'a> System<'a> for GameplayRuntimeSystem {
         WriteStorage<'a, RoundStatsComp>,
         ReadStorage<'a, DirectionComp>,
         WriteStorage<'a, EliminationComp>,
+        WriteStorage<'a, ExtractionComp>,
         WriteStorage<'a, ResourceInventoryComp>,
         WriteStorage<'a, PositionComp>,
         WriteStorage<'a, LootDropComp>,
@@ -56,6 +60,7 @@ impl<'a> System<'a> for GameplayRuntimeSystem {
             entities,
             context,
             authority,
+            hard_deadline,
             mut intents,
             mut pending,
             mut spawned,
@@ -67,6 +72,7 @@ impl<'a> System<'a> for GameplayRuntimeSystem {
             mut stats,
             directions,
             mut eliminations,
+            mut extractions,
             mut inventories,
             mut positions,
             mut loots,
@@ -90,6 +96,10 @@ impl<'a> System<'a> for GameplayRuntimeSystem {
             &stats,
             &mut eliminations,
         );
+        flush_extraction_notices(&entities, &authority, &players, &mut extractions);
+        if terminal_outboxes_are_flushed(&entities, &eliminations, &extractions) {
+            hard_deadline.seal_after_outbox();
+        }
 
         process_manual_drops(ManualDropAccess {
             entities: &entities,
@@ -103,6 +113,7 @@ impl<'a> System<'a> for GameplayRuntimeSystem {
             players: &players,
             health: &health,
             eliminations: &eliminations,
+            extractions: &extractions,
             inventories: &mut inventories,
             positions: &positions,
             directions: &directions,
@@ -133,6 +144,7 @@ impl<'a> System<'a> for GameplayRuntimeSystem {
             players: &players,
             health: &health,
             eliminations: &eliminations,
+            extractions: &extractions,
             inventories: &mut inventories,
             stats: &mut stats,
             positions: &positions,

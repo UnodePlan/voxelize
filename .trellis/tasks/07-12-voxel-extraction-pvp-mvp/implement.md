@@ -141,7 +141,7 @@
 - [x] 攻击只提交 sequence/武器槽；服务端 ray-AABB 选择最近合法目标，落空也消费冷却。
 - [x] 固定同 tick 优先级，死亡早于拾取和撤离；`Alive -> Dead` CAS 只执行一次。
 - [x] 死亡冻结背包并转入唯一 pending loot，固定装备不掉，记录击杀者和结果统计。
-- [ ] 断线角色可被攻击；窗口内被杀和超时不能双掉落。死亡结果后离开原 World，不接收观战数据。
+- [x] 断线角色可被攻击；窗口内被杀和超时不能双掉落。死亡结果后离开原 World，不接收观战数据。
 
 实现记录（2026-07-13）：新增严格 `pvp:v1:attack` 协议，payload 只允许固定近战槽，目标、伤害、生命、击杀与队伍元数据均由服务端拒绝。每局玩家实体安装 20 半心、固定近战装备、攻击 sequence/cooldown revision、局内统计和不可逆淘汰组件；loadout 最大生命与协议 20 不一致时在创建 World 前失败关闭。服务端用权威 `PositionComp/DirectionComp` 对所有其他存活玩家执行 `0.8 x 1.8` ray-AABB，按距离和 seat 选择最近目标，Ready Chunk 内完整单位方块遮挡，未知或未 Ready 数据失败关闭；落空同样消费 600ms 冷却，同玩家网络接收顺序不按 sequence 重排。
 
@@ -157,16 +157,22 @@ Combat 命名 hook 固定在 Broadcast 前，重连超时意图先于攻击解�
 
 ## 阶段 8：撤离、结算与异常恢复
 
-- [ ] 第 8 分钟才发布唯一撤离区；服务端累计连续 8 秒，离区/死亡/断线中断；仅 `qualified_at <= hard_deadline` 进入待结算。
-- [ ] 达标后冻结 participant 和背包，生成规范快照、digest、config version 与 `extract:v1:{match}:{account}` 幂等键。
-- [ ] 异步事务原子写 settlement/items、ledger、warehouse 和 participant Extracted；World tick 不等待 SQL。
-- [ ] commit 后才确认；未知结果先查询，commit 前失败为 0，commit 后响应丢失仍为 1。
-- [ ] 实现硬截止后 30 秒写入宽限期；期满不再发起写入，仅保留有界只读 reconciliation，并允许清理玩法 World。
+- [x] 第 8 分钟才发布唯一撤离区；服务端累计连续 8 秒，离区/死亡/断线中断；仅 `qualified_at <= hard_deadline` 进入待结算。
+- [x] 达标后冻结 participant 和背包，生成规范快照、digest、config version 与 `extract:v1:{match}:{account}` 幂等键。
+- [x] 异步事务原子写 settlement/items、ledger、warehouse 和 participant Extracted；World tick 不等待 SQL。
+- [x] commit 后才确认；未知结果先查询，commit 前失败为 0，commit 后响应丢失仍为 1。
+- [x] 实现硬截止后 30 秒写入宽限期；期满不再发起写入，仅保留有界只读 reconciliation，并允许清理玩法 World。
 - [x] 启动时把未结束比赛标 Aborted，保留已提交收益，其他局内收益作废；完整 settlement reconciliation 仍留在本阶段后续子项。
-- [ ] 实现仅允许本人访问的 `/api/matches/{match_id}/result` 与 `/api/matches/latest-result`，覆盖 PendingReconciliation/Extracted/Aborted。
-- [ ] 持久化完整死亡/超时结果，使断线时未收到 Direct 的本人可在大厅恢复击杀者、存活时间和资源统计。
-- [ ] hard deadline 关闭 gate 后先封口 World 已发生的死亡/超时 outbox，再进入 participant 批量终态；携带权威发生时间，不能把截止前死亡覆盖为无统计 TimedOut。
-- [ ] 仓库只读展示数量和 settlement 聚合统计，不提供消费/交易/属性入口。
+- [x] 实现仅允许本人访问的 `/api/matches/{match_id}/result` 与 `/api/matches/latest-result`，覆盖 PendingReconciliation/Extracted/Aborted。
+- [x] 持久化完整死亡/超时结果，使断线时未收到 Direct 的本人可在大厅恢复击杀者、存活时间和资源统计。
+- [x] hard deadline 关闭 gate 后先封口 World 已发生的死亡/超时 outbox，再进入 participant 批量终态；携带权威发生时间，不能把截止前死亡覆盖为无统计 TimedOut。
+- [x] 仓库只读展示数量和 settlement 聚合统计，不提供消费/交易/属性入口。
+
+实现记录（2026-07-13）：撤离区在持久化 `ExtractionOpen` 后才通过 Direct 状态公开，服务端以单调时钟计算连续 8 秒，离区、死亡和断线均清零；硬截止采用包含边界并固定执行“死亡/攻击 -> 撤离达标 -> 剩余玩家 hardDeadline 终态 -> Broadcast -> death/extraction outbox -> seal -> stop”。达标时冻结 12 格背包，按固定键序聚合三类资源并生成 SHA-256 digest 与稳定幂等键；所有后续玩法入口拒绝 `SettlementPending`。独立异步协调器在 World tick 外执行 mark/commit/find，未知 commit 先读后写，宽限期后最多有界只读核对且不再写库。审查补充修复了 `seal_hard_deadline=Ok(false)` 被误当成功的问题，此时比赛失败关闭为 Aborted。
+
+PostgreSQL 结算使用数据库事务时间、5 秒锁超时、15 秒语句超时和固定 `match -> participant -> account -> settlement/assets` 锁序，在一个事务中写 settlement/items、append-only ledger、warehouse 与 Extracted；同 digest 重试不要求重建相同 settlement UUID，空背包与累计溢出均有回归。本人结果 API 使用会话账号查询，跨账号统一返回 `200 null`，覆盖待核对、撤离、死亡、超时和异常五种状态；死亡/超时原因、时间、存活时长及资源统计持久化，仓库数量和聚合统计在同一只读可重复读快照中返回。新增生产文件均低于 300 行；大型测试文件适用测试例外。
+
+验证记录：应用 `engine` 全目标实际运行 172/172，通过后新增 `Ok(false)` 回归并定向通过；`engine,db-tests` 全目标 check 与 `--no-deps -D warnings` Clippy 通过，客户端 85/85、生产 build、全 extraction ESLint、E2E Actor 2/2、根引擎 64 项及根集成测试均通过，`git diff --check` 通过。PostgreSQL 用例已编译，但当前未配置 `TEST_DATABASE_URL/DATABASE_URL`，没有连接数据库或执行 migration，因此不声称真实 SQL 测试通过。
 
 验收：fake clock 覆盖 8m/8s/12m/30s 边界；截止前达标且截止后 commit 仍成功，截止后达标失败；故障注入覆盖 commit 前、回滚、commit 后响应前、宽限期后只读核对和重启核对。
 

@@ -1,4 +1,5 @@
 mod lifecycle;
+mod terminal_control;
 
 use std::{
     collections::HashMap,
@@ -15,7 +16,9 @@ use voxelize::{
 
 use crate::{
     engine_catalog::EngineCatalog,
-    engine_gameplay::{install_gameplay_runtime, ForcedEliminationQueue, GameplayAuthority},
+    engine_gameplay::{
+        install_gameplay_runtime, ForcedEliminationQueue, GameplayAuthority, HardDeadlineControl,
+    },
     engine_movement::install_bounded_movement,
     generation::{install_generation_stage, install_spawn_assignment, GenerationPlan},
     match_world::{engine_seed_v1, MatchWorldMetadata},
@@ -31,6 +34,7 @@ pub(crate) struct EngineMatchWorldRuntime {
     generations: Arc<Mutex<HashMap<String, String>>>,
     owned_matches: Mutex<HashMap<String, Uuid>>,
     forced_eliminations: Mutex<HashMap<String, ForcedEliminationQueue>>,
+    hard_deadlines: Mutex<HashMap<String, HardDeadlineControl>>,
     catalog: Arc<EngineCatalog>,
 }
 
@@ -46,6 +50,7 @@ impl EngineMatchWorldRuntime {
             generations: Arc::new(Mutex::new(HashMap::new())),
             owned_matches: Mutex::new(HashMap::new()),
             forced_eliminations: Mutex::new(HashMap::new()),
+            hard_deadlines: Mutex::new(HashMap::new()),
             catalog,
         }
     }
@@ -103,6 +108,10 @@ impl MatchWorldRuntime for EngineMatchWorldRuntime {
         let forced_eliminations = {
             let queue = world.read_resource::<ForcedEliminationQueue>();
             (*queue).clone()
+        };
+        let hard_deadline = {
+            let control = world.read_resource::<HardDeadlineControl>();
+            (*control).clone()
         };
         world.ecs_mut().insert(MatchWorldMetadata {
             match_id: spec.match_id,
@@ -171,6 +180,10 @@ impl MatchWorldRuntime for EngineMatchWorldRuntime {
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .insert(spec.world_name.clone(), forced_eliminations);
+        self.hard_deadlines
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .insert(spec.world_name.clone(), hard_deadline);
         let generation = match self.wait_until_ready(&spec.world_name).await {
             Ok(generation) => generation,
             Err(error) => {
@@ -221,6 +234,10 @@ impl MatchWorldRuntime for EngineMatchWorldRuntime {
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .remove(world_name);
+        self.hard_deadlines
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .remove(world_name);
         Ok(outcome.removed)
     }
 
@@ -229,13 +246,7 @@ impl MatchWorldRuntime for EngineMatchWorldRuntime {
         world_name: &str,
         account_id: Uuid,
     ) -> Result<bool, MatchWorldRuntimeError> {
-        let Some(world_generation) = self
-            .generations
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .get(world_name)
-            .cloned()
-        else {
+        let Some(world_generation) = self.world_generation(world_name) else {
             return Ok(false);
         };
         self.server
@@ -253,13 +264,7 @@ impl MatchWorldRuntime for EngineMatchWorldRuntime {
         world_name: &str,
         account_id: Uuid,
     ) -> Result<bool, MatchWorldRuntimeError> {
-        let Some(world_generation) = self
-            .generations
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .get(world_name)
-            .cloned()
-        else {
+        let Some(world_generation) = self.world_generation(world_name) else {
             return Ok(false);
         };
         self.server
@@ -277,15 +282,16 @@ impl MatchWorldRuntime for EngineMatchWorldRuntime {
         world_name: &str,
         account_id: Uuid,
     ) -> Result<bool, MatchWorldRuntimeError> {
-        let queues = self
-            .forced_eliminations
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        let Some(queue) = queues.get(world_name) else {
-            return Ok(false);
-        };
-        queue
-            .enqueue(account_id)
-            .map_err(|_| MatchWorldRuntimeError::Unavailable)
+        self.queue_timeout_elimination(world_name, account_id)
+    }
+
+    async fn seal_hard_deadline(
+        &self,
+        world_name: &str,
+        monotonic_deadline: std::time::Duration,
+        utc_deadline: time::OffsetDateTime,
+    ) -> Result<bool, MatchWorldRuntimeError> {
+        self.wait_for_hard_deadline_seal(world_name, monotonic_deadline, utc_deadline)
+            .await
     }
 }

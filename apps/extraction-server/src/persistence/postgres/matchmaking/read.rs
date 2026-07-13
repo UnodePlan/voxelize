@@ -63,7 +63,7 @@ pub(in crate::persistence::postgres) async fn find_nonterminal_by_account(
     Ok(Some(stored))
 }
 
-pub(super) async fn lock_match(
+pub(in crate::persistence::postgres) async fn lock_match(
     transaction: &mut Transaction<'_, Postgres>,
     match_id: Uuid,
 ) -> Result<MatchRow, MatchRepositoryError> {
@@ -76,7 +76,7 @@ pub(super) async fn lock_match(
         .ok_or(MatchRepositoryError::Conflict)
 }
 
-pub(super) async fn load_match_in_transaction(
+pub(in crate::persistence::postgres) async fn load_match_in_transaction(
     transaction: &mut Transaction<'_, Postgres>,
     row: MatchRow,
 ) -> Result<StoredMatch, MatchRepositoryError> {
@@ -108,7 +108,7 @@ async fn read_snapshot(pool: &PgPool) -> Result<Transaction<'_, Postgres>, Match
     Ok(transaction)
 }
 
-pub(super) async fn lock_participant(
+pub(in crate::persistence::postgres) async fn lock_participant(
     transaction: &mut Transaction<'_, Postgres>,
     match_id: Uuid,
     account_id: Uuid,

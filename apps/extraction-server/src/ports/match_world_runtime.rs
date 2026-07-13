@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::{
@@ -86,4 +87,14 @@ pub trait MatchWorldRuntime: Send + Sync {
         world_name: &str,
         account_id: Uuid,
     ) -> Result<bool, MatchWorldRuntimeError>;
+
+    async fn seal_hard_deadline(
+        &self,
+        world_name: &str,
+        monotonic_deadline: std::time::Duration,
+        utc_deadline: OffsetDateTime,
+    ) -> Result<bool, MatchWorldRuntimeError> {
+        let _ = (world_name, monotonic_deadline, utc_deadline);
+        Err(MatchWorldRuntimeError::Unavailable)
+    }
 }

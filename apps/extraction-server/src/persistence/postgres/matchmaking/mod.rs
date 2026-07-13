@@ -1,9 +1,9 @@
 mod create;
 mod lifecycle;
 mod participants;
-mod read;
+pub(in crate::persistence::postgres) mod read;
 mod recovery;
-mod rows;
+pub(in crate::persistence::postgres) mod rows;
 mod timeouts;
 
 use sqlx::Error;

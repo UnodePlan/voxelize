@@ -57,5 +57,9 @@ impl EngineMatchWorldRuntime {
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .remove(world_name);
+        self.hard_deadlines
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .remove(world_name);
     }
 }

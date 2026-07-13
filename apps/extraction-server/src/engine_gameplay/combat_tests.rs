@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use specs::{Builder, RunNow, WorldExt};
+use time::OffsetDateTime;
 use uuid::Uuid;
 use voxelize::{
     Block, Chunk, ChunkOptions, ChunkStatus, DirectionComp, PositionComp, Registry, VoxelAccess,
@@ -12,23 +13,26 @@ use super::{
     combat_ordering::drain_attacks_in_stable_order,
     combat_system::CombatResolutionSystem,
     components::{
-        CombatComp, EliminationComp, FixedEquipmentComp, HealthComp, MatchPlayerComp, MiningComp,
-        ResourceInventoryComp, RoundStatsComp,
+        CombatComp, EliminationComp, ExtractionComp, FixedEquipmentComp, HealthComp,
+        MatchPlayerComp, MiningComp, ResourceInventoryComp, RoundStatsComp,
     },
     intents::{AttackIntentQueue, QueuedAttackIntent},
     runtime::install_gameplay_runtime,
+    system::GameplayRuntimeSystem,
     tests::match_spec,
-    ForcedEliminationQueue,
+    ForcedEliminationQueue, HardDeadlineControl, HardDeadlineRequest,
 };
 use crate::{
     contracts::{AttackPayload, AttackWeaponSlot, DeathCause, ResourceKey},
     gameplay::{
         combat::{CombatState, HealthState},
         drop_queue::PendingDropQueue,
+        extraction::freeze_inventory_for_extraction,
         inventory::MatchInventory,
         loot::DropId,
         round_stats::RoundStats,
     },
+    generation::MapPoint,
     matchmaking::SeatId,
 };
 
@@ -48,6 +52,7 @@ fn combat_world(now: Duration) -> World {
     let config = WorldConfig::new().max_height(64).max_light_level(1).build();
     let mut world = World::new(&spec.world_name, &config);
     install_gameplay_runtime(&mut world, &spec, GameplayAuthority::allow_all_at(now)).unwrap();
+    world.ecs_mut().insert(MapPoint::new(100, 50, 100));
     let mut registry = Registry::new();
     registry.register_block(&Block::new("combat-test-solid").id(1).build());
     world.ecs_mut().insert(registry);
@@ -100,6 +105,7 @@ fn add_player(
         .with(CombatComp::new(CombatState::default()))
         .with(RoundStatsComp::new(RoundStats::new(Duration::ZERO)))
         .with(EliminationComp::alive())
+        .with(ExtractionComp::default())
         .with(PositionComp::new(position[0], position[1], position[2]))
         .with(DirectionComp::new(direction[0], direction[1], direction[2]))
         .build();
@@ -123,6 +129,25 @@ fn inventory_with(resource: ResourceKey, quantity: u32) -> MatchInventory {
     let mut inventory = MatchInventory::new(64).unwrap();
     inventory.insert(resource, quantity).unwrap();
     inventory
+}
+
+fn qualify_player(world: &mut World, player: TestPlayer, qualified_at: OffsetDateTime) {
+    let qualification = {
+        let mut inventories = world.write_component::<ResourceInventoryComp>();
+        freeze_inventory_for_extraction(
+            inventories.get_mut(player.entity).unwrap().inventory_mut(),
+            match_spec().match_id,
+            player.account_id,
+            qualified_at,
+            "balance-v1",
+        )
+        .unwrap()
+    };
+    assert!(world
+        .write_component::<ExtractionComp>()
+        .get_mut(player.entity)
+        .unwrap()
+        .qualify(qualification));
 }
 
 fn queue_attack(world: &mut World, attacker: TestPlayer, sequence: u32) {
@@ -656,4 +681,153 @@ fn timeout_wins_same_tick_attack_race_and_produces_one_terminal_drop() {
             .len(),
         1
     );
+}
+
+#[test]
+fn settlement_pending_player_cannot_consume_an_attack_intent() {
+    let now = Duration::from_secs(500);
+    let mut world = combat_world(now);
+    let attacker = add_player(
+        &mut world,
+        0,
+        ATTACKER_POSITION,
+        [1.0, 0.0, 0.0],
+        HealthState::new(20).unwrap(),
+        inventory_with(ResourceKey::Gold, 9),
+    );
+    let victim = add_player(
+        &mut world,
+        1,
+        VICTIM_POSITION,
+        [-1.0, 0.0, 0.0],
+        HealthState::new(20).unwrap(),
+        MatchInventory::new(64).unwrap(),
+    );
+    qualify_player(
+        &mut world,
+        attacker,
+        OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(500),
+    );
+
+    queue_attack(&mut world, attacker, 1);
+    run_combat_at(&mut world, now);
+
+    assert_eq!(
+        world
+            .read_component::<HealthComp>()
+            .get(victim.entity)
+            .unwrap()
+            .state()
+            .half_hearts(),
+        20
+    );
+    assert_eq!(
+        world
+            .read_component::<CombatComp>()
+            .get(attacker.entity)
+            .unwrap()
+            .state()
+            .last_sequence(),
+        None,
+        "待结算玩家的攻击必须在消费 sequence 前被拒绝"
+    );
+    assert!(world
+        .read_component::<ResourceInventoryComp>()
+        .get(attacker.entity)
+        .unwrap()
+        .inventory()
+        .is_frozen());
+}
+
+#[test]
+fn hard_deadline_terminal_outboxes_are_flushed_before_seal() {
+    let deadline = Duration::from_secs(720);
+    let deadline_utc = OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(720);
+    let request = HardDeadlineRequest {
+        monotonic_deadline: deadline,
+        utc_deadline: deadline_utc,
+    };
+    let mut world = combat_world(deadline);
+    let extracted = add_player(
+        &mut world,
+        0,
+        ATTACKER_POSITION,
+        [1.0, 0.0, 0.0],
+        HealthState::new(20).unwrap(),
+        inventory_with(ResourceKey::Diamond, 4),
+    );
+    let remaining = add_player(
+        &mut world,
+        1,
+        VICTIM_POSITION,
+        [-1.0, 0.0, 0.0],
+        HealthState::new(20).unwrap(),
+        inventory_with(ResourceKey::Dirt, 7),
+    );
+    qualify_player(&mut world, extracted, deadline_utc);
+
+    let control = {
+        let resource = world.read_resource::<HardDeadlineControl>();
+        (*resource).clone()
+    };
+    assert!(control.request(request));
+    run_combat_at(&mut world, deadline);
+
+    assert!(!control.is_sealed(request));
+    let health = world.read_component::<HealthComp>();
+    assert_eq!(
+        health.get(extracted.entity).unwrap().state().half_hearts(),
+        20
+    );
+    assert_eq!(
+        health.get(remaining.entity).unwrap().state().half_hearts(),
+        0
+    );
+    drop(health);
+    let eliminations = world.read_component::<EliminationComp>();
+    let timeout = eliminations
+        .get(remaining.entity)
+        .unwrap()
+        .record()
+        .unwrap();
+    assert_eq!(timeout.result.data.cause, DeathCause::HardDeadline);
+    assert_eq!(timeout.occurred_at, deadline_utc);
+    assert!(!timeout.notice_sent);
+    drop(eliminations);
+    assert!(
+        !world
+            .read_component::<ExtractionComp>()
+            .get(extracted.entity)
+            .unwrap()
+            .record()
+            .unwrap()
+            .notice_sent
+    );
+    assert_eq!(
+        world.read_resource::<PendingDropQueue>().total_quantity(),
+        7
+    );
+
+    GameplayRuntimeSystem.run_now(world.ecs());
+    world.ecs_mut().maintain();
+
+    assert!(
+        world
+            .read_component::<EliminationComp>()
+            .get(remaining.entity)
+            .unwrap()
+            .record()
+            .unwrap()
+            .notice_sent
+    );
+    assert!(
+        world
+            .read_component::<ExtractionComp>()
+            .get(extracted.entity)
+            .unwrap()
+            .record()
+            .unwrap()
+            .notice_sent
+    );
+    assert!(control.is_sealed(request));
 }

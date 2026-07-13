@@ -20,7 +20,7 @@ use support::{empty_matchmaking, service_at, siwe_message, EmptyMatchRepository,
 #[actix_web::test]
 async fn empty_match_repository_has_no_startup_recovery_work() {
     assert_eq!(
-        EmptyMatchRepository
+        EmptyMatchRepository::default()
             .abort_unrecoverable_matches("process_restart".to_owned(), OffsetDateTime::UNIX_EPOCH,)
             .await,
         Ok(0)

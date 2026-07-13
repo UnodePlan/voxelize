@@ -195,12 +195,16 @@ impl Coordinator {
             participants,
             extraction_open_deadline: None,
             hard_deadline: None,
+            extraction_open_at_utc: None,
+            hard_deadline_utc: None,
+            settlement_grace_deadline_utc: None,
             activated_at: None,
             abort_reason: None,
             settling_trigger: None,
             settling_persisted: false,
             world_stopped: false,
             hard_deadline_task: None,
+            hard_deadline_closing: false,
         });
         self.sync_gate();
 

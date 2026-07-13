@@ -4,8 +4,8 @@ use voxelize::{Chunks, Clients, DirectionComp, MessageQueues, PositionComp};
 use super::{
     authority::GameplayAuthority,
     components::{
-        EliminationComp, FixedEquipmentComp, MatchPlayerComp, MiningComp, ResourceInventoryComp,
-        RoundStatsComp,
+        EliminationComp, ExtractionComp, FixedEquipmentComp, MatchPlayerComp, MiningComp,
+        ResourceInventoryComp, RoundStatsComp,
     },
     intents::MiningIntentQueue,
     messaging::{queue_error, queue_inventory_state, queue_mining_state},
@@ -41,6 +41,7 @@ impl<'a> System<'a> for MiningResolutionSystem {
         ReadStorage<'a, PositionComp>,
         ReadStorage<'a, DirectionComp>,
         ReadStorage<'a, EliminationComp>,
+        ReadStorage<'a, ExtractionComp>,
         WriteStorage<'a, MiningComp>,
         WriteStorage<'a, ResourceInventoryComp>,
         WriteStorage<'a, RoundStatsComp>,
@@ -63,6 +64,7 @@ impl<'a> System<'a> for MiningResolutionSystem {
             positions,
             directions,
             eliminations,
+            extractions,
             mut mining,
             mut inventories,
             mut stats,
@@ -104,6 +106,7 @@ impl<'a> System<'a> for MiningResolutionSystem {
             positions: &positions,
             directions: &directions,
             eliminations: &eliminations,
+            extractions: &extractions,
             mining: &mut mining,
             dirty: &mut dirty,
         });
@@ -122,6 +125,7 @@ impl<'a> System<'a> for MiningResolutionSystem {
             positions: &positions,
             directions: &directions,
             eliminations: &eliminations,
+            extractions: &extractions,
             mining: &mut mining,
             inventories: &mut inventories,
             stats: &mut stats,

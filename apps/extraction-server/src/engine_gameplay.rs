@@ -1,6 +1,7 @@
 mod attack_method;
 mod authority;
 mod auto_pickup;
+mod combat_attacks;
 mod combat_authorization;
 mod combat_death;
 mod combat_ordering;
@@ -10,7 +11,11 @@ mod combat_targeting;
 mod components;
 mod death_outbox;
 mod drop_spawn;
+mod extraction_messaging;
+mod extraction_outbox;
+mod extraction_resolution;
 mod forced_elimination;
+mod hard_deadline;
 mod intents;
 mod manual_drop;
 mod messaging;
@@ -31,10 +36,13 @@ mod timeout_resolution;
 #[cfg(test)]
 mod combat_tests;
 #[cfg(test)]
+mod extraction_state_tests;
+#[cfg(test)]
 mod mining_tests;
 #[cfg(test)]
 mod tests;
 
 pub(crate) use authority::GameplayAuthority;
 pub(crate) use forced_elimination::ForcedEliminationQueue;
+pub(crate) use hard_deadline::{HardDeadlineControl, HardDeadlineRequest};
 pub(crate) use runtime::install_gameplay_runtime;

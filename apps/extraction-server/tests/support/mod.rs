@@ -11,15 +11,16 @@ use extraction_server::{
         SignatureVerifier,
     },
     matchmaking::{
-        CreatePreparingMatch, MatchVersions, MatchmakingService, ParticipantDeath,
-        ParticipantRecord, ParticipantTimeout, StoredMatch,
+        CommitSettlement, CreatePreparingMatch, ExtractionQualification, MatchResultRecord,
+        MatchVersions, MatchmakingService, ParticipantDeath, ParticipantRecord, ParticipantTimeout,
+        SettlementRecord, StoredMatch,
     },
     ports::{
         AuthRepository, AuthRepositoryError, Clock, LoginCommand, LoginResult, MatchRepository,
         MatchRepositoryError, MatchWorldRuntime, MatchWorldRuntimeError, MatchWorldSpec, NewNonce,
         PreparedMatchWorld, RandomIdGenerator, RandomSeedGenerator, RepositoryFuture,
-        RepositoryProbe, SessionRecord, SettlingTrigger, StoredNonce, TransitionOutcome,
-        WarehouseSnapshot,
+        RepositoryProbe, SessionRecord, SettlementRepository, SettlementRepositoryError,
+        SettlingTrigger, StoredNonce, TransitionOutcome, WarehouseSnapshot,
     },
 };
 use signinwithethereum::Message;
@@ -316,7 +317,17 @@ impl SignatureVerifier for AcceptVerifier {
 }
 
 #[allow(dead_code)]
-pub struct EmptyMatchRepository;
+#[derive(Default)]
+pub struct EmptyMatchRepository {
+    results: Mutex<Vec<(Uuid, MatchResultRecord)>>,
+}
+
+impl EmptyMatchRepository {
+    #[allow(dead_code)]
+    pub fn seed_match_result(&self, account_id: Uuid, result: MatchResultRecord) {
+        self.results.lock().unwrap().push((account_id, result));
+    }
+}
 
 impl RepositoryProbe for EmptyMatchRepository {
     fn check(&self) -> RepositoryFuture<'_> {
@@ -400,7 +411,6 @@ impl MatchRepository for EmptyMatchRepository {
     async fn mark_timed_out(
         &self,
         _timeout: ParticipantTimeout,
-        _at: OffsetDateTime,
     ) -> Result<TransitionOutcome<ParticipantRecord>, MatchRepositoryError> {
         Err(MatchRepositoryError::Unavailable)
     }
@@ -428,6 +438,68 @@ impl MatchRepository for EmptyMatchRepository {
         _at: OffsetDateTime,
     ) -> Result<TransitionOutcome<StoredMatch>, MatchRepositoryError> {
         Err(MatchRepositoryError::Unavailable)
+    }
+}
+
+#[async_trait]
+impl SettlementRepository for EmptyMatchRepository {
+    async fn mark_settlement_pending(
+        &self,
+        _qualification: ExtractionQualification,
+    ) -> Result<TransitionOutcome<ParticipantRecord>, SettlementRepositoryError> {
+        Err(SettlementRepositoryError::Unavailable)
+    }
+
+    async fn commit_settlement(
+        &self,
+        _command: CommitSettlement,
+    ) -> Result<TransitionOutcome<SettlementRecord>, SettlementRepositoryError> {
+        Err(SettlementRepositoryError::Unavailable)
+    }
+
+    async fn find_settlement(
+        &self,
+        _match_id: Uuid,
+        _account_id: Uuid,
+    ) -> Result<Option<SettlementRecord>, SettlementRepositoryError> {
+        Ok(None)
+    }
+
+    async fn abort_pending_settlement(
+        &self,
+        _match_id: Uuid,
+        _account_id: Uuid,
+        _at: OffsetDateTime,
+    ) -> Result<TransitionOutcome<ParticipantRecord>, SettlementRepositoryError> {
+        Err(SettlementRepositoryError::Unavailable)
+    }
+
+    async fn find_match_result(
+        &self,
+        match_id: Uuid,
+        account_id: Uuid,
+    ) -> Result<Option<MatchResultRecord>, SettlementRepositoryError> {
+        Ok(self
+            .results
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(owner, result)| *owner == account_id && result.match_id == match_id)
+            .map(|(_, result)| result.clone()))
+    }
+
+    async fn find_latest_match_result(
+        &self,
+        account_id: Uuid,
+    ) -> Result<Option<MatchResultRecord>, SettlementRepositoryError> {
+        Ok(self
+            .results
+            .lock()
+            .unwrap()
+            .iter()
+            .rev()
+            .find(|(owner, _)| *owner == account_id)
+            .map(|(_, result)| result.clone()))
     }
 }
 
@@ -480,7 +552,7 @@ impl MatchWorldRuntime for EmptyWorldRuntime {
 #[allow(dead_code)]
 pub async fn empty_matchmaking(clock: Arc<dyn Clock>) -> Arc<MatchmakingService> {
     let service = MatchmakingService::start(
-        Arc::new(EmptyMatchRepository),
+        Arc::new(EmptyMatchRepository::default()),
         clock,
         Arc::new(RandomIdGenerator),
         Arc::new(RandomSeedGenerator),

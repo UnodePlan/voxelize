@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{BTreeMap, HashMap, HashSet, VecDeque},
     sync::Arc,
     time::Duration,
 };
@@ -16,33 +16,36 @@ use super::{
     CreatePreparingMatch, MatchState, MatchVersions, ParticipantState,
 };
 use crate::ports::{
-    Clock, IdGenerator, MatchRepository, MatchWorldRuntime, MatchWorldRuntimeError, SeedGenerator,
-    SettlingTrigger,
+    Clock, IdGenerator, MatchWorldRuntime, MatchWorldRuntimeError, MatchmakingRepository,
+    SeedGenerator, SettlingTrigger,
 };
 
 pub(super) struct Coordinator {
-    pub(super) repository: Arc<dyn MatchRepository>,
+    pub(super) repository: Arc<dyn MatchmakingRepository>,
     pub(super) clock: Arc<dyn Clock>,
     pub(super) ids: Arc<dyn IdGenerator>,
     pub(super) seeds: Arc<dyn SeedGenerator>,
     pub(super) versions: MatchVersions,
     pub(super) gate: Arc<AttachGate>,
+    pub(super) sender: mpsc::Sender<Command>,
     pub(super) runtime: Option<Arc<dyn MatchWorldRuntime>>,
     pub(super) queue: VecDeque<QueueEntry>,
     pub(super) connections: HashMap<Uuid, HashSet<String>>,
     pub(super) current: Option<LiveMatch>,
     pub(super) prepare_attempt: Option<CreatePreparingMatch>,
+    pub(super) pending_settlements: BTreeMap<(Uuid, Uuid), PendingSettlement>,
     pub(super) next_order: u64,
 }
 
 impl Coordinator {
     pub(super) fn new(
-        repository: Arc<dyn MatchRepository>,
+        repository: Arc<dyn MatchmakingRepository>,
         clock: Arc<dyn Clock>,
         ids: Arc<dyn IdGenerator>,
         seeds: Arc<dyn SeedGenerator>,
         versions: MatchVersions,
         gate: Arc<AttachGate>,
+        sender: mpsc::Sender<Command>,
     ) -> Self {
         Self {
             repository,
@@ -51,74 +54,14 @@ impl Coordinator {
             seeds,
             versions,
             gate,
+            sender,
             runtime: None,
             queue: VecDeque::new(),
             connections: HashMap::new(),
             current: None,
             prepare_attempt: None,
+            pending_settlements: BTreeMap::new(),
             next_order: 0,
-        }
-    }
-
-    pub(super) async fn run(mut self, mut receiver: mpsc::Receiver<Command>) {
-        while let Some(command) = receiver.recv().await {
-            match command {
-                Command::BindRuntime { runtime, reply } => {
-                    if self.runtime.is_none() {
-                        self.runtime = Some(runtime);
-                    }
-                    let _ = reply.send(());
-                }
-                Command::Enqueue { account_id, reply } => {
-                    let result = self.enqueue(account_id).await;
-                    let _ = reply.send(result);
-                }
-                Command::Cancel { account_id, reply } => {
-                    let result = self.cancel(account_id).await;
-                    let _ = reply.send(result);
-                }
-                Command::Connection { event, reply } => {
-                    let observed = reply.is_none();
-                    let result = self.apply_connection(event).await;
-                    if let Some(reply) = reply {
-                        let _ = reply.send(result);
-                    } else if observed && result.is_err() {
-                        self.gate.fail_closed();
-                        let _ = self.abort_current("connection_event_failed").await;
-                    }
-                }
-                #[cfg(any(feature = "engine", test))]
-                Command::Death { notice } => {
-                    if self.apply_death(notice).await.is_err() {
-                        self.gate.fail_closed();
-                        let _ = self.abort_current("death_notice_failed").await;
-                    }
-                }
-                #[cfg(any(feature = "engine", test))]
-                Command::TimeoutElimination { notice } => {
-                    if self.apply_timeout_elimination(notice).await.is_err() {
-                        self.gate.fail_closed();
-                        let _ = self
-                            .abort_current("timeout_elimination_notice_failed")
-                            .await;
-                    }
-                }
-                Command::Tick {
-                    reply,
-                    ticker_pending,
-                } => {
-                    if let Some(pending) = ticker_pending {
-                        pending.store(false, std::sync::atomic::Ordering::Release);
-                    }
-                    let result = self.advance_time().await;
-                    if let Some(reply) = reply {
-                        let _ = reply.send(result);
-                    }
-                }
-                Command::FailClosed => {
-                    let _ = self.abort_current("connection_event_overflow").await;
-                }
-            }
         }
     }
 
@@ -207,12 +150,25 @@ pub(super) struct LiveMatch {
     pub participants: HashMap<Uuid, LiveParticipant>,
     pub extraction_open_deadline: Option<Duration>,
     pub hard_deadline: Option<Duration>,
+    pub extraction_open_at_utc: Option<OffsetDateTime>,
+    pub hard_deadline_utc: Option<OffsetDateTime>,
+    pub settlement_grace_deadline_utc: Option<OffsetDateTime>,
     pub activated_at: Option<Duration>,
     pub abort_reason: Option<String>,
     pub settling_trigger: Option<SettlingTrigger>,
     pub settling_persisted: bool,
     pub world_stopped: bool,
     pub hard_deadline_task: Option<tokio::task::JoinHandle<()>>,
+    pub hard_deadline_closing: bool,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct PendingSettlement {
+    pub command: crate::matchmaking::CommitSettlement,
+    pub grace_deadline: OffsetDateTime,
+    pub pending_persisted: bool,
+    pub read_before_write: bool,
+    pub post_grace_reads_remaining: u8,
 }
 
 impl LiveMatch {
@@ -241,6 +197,12 @@ impl LiveMatch {
             world_name: self.world_name.clone(),
             world_generation: self.world_generation.clone(),
             state: self.state,
+            #[cfg(feature = "engine")]
+            extraction_open: self.state == MatchState::ExtractionOpen,
+            #[cfg(feature = "engine")]
+            hard_deadline: self.hard_deadline,
+            #[cfg(feature = "engine")]
+            hard_deadline_utc: self.hard_deadline_utc,
             participants: self
                 .participants
                 .iter()

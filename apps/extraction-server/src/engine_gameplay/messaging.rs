@@ -10,8 +10,8 @@ use super::{
     runtime::GameplayRuntimeContext,
 };
 use crate::contracts::{
-    AttackCursorState, DeathResultEnvelope, ErrorCode, ExtractionManifest, HealthStateData,
-    HealthStateEnvelope, MiningStateEnvelope, ProtocolEnvelope,
+    AttackCursorState, DeathResultEnvelope, ErrorCode, ExtractionManifest, ExtractionStateEnvelope,
+    HealthStateData, HealthStateEnvelope, MiningStateEnvelope, ProtocolEnvelope,
 };
 
 const RESULT_METHOD: &str = "pvp:v1:result";
@@ -43,31 +43,39 @@ pub(super) struct PlayerGameplayState {
     #[serde(flatten)]
     assets: PlayerInventoryState,
     mining: MiningStateEnvelope,
+    extraction: ExtractionStateEnvelope,
     health: HealthStateEnvelope,
     attack: AttackCursorState,
     death_result: Option<DeathResultEnvelope>,
 }
 
+pub(super) struct PlayerGameplayStateAccess<'a> {
+    pub context: &'a GameplayRuntimeContext,
+    pub inventory: &'a ResourceInventoryComp,
+    pub equipment: &'a FixedEquipmentComp,
+    pub mining: &'a MiningComp,
+    pub extraction: ExtractionStateEnvelope,
+    pub health: &'a HealthComp,
+    pub combat: &'a CombatComp,
+    pub elimination: &'a EliminationComp,
+}
+
 impl PlayerGameplayState {
-    pub(super) fn new(
-        context: &GameplayRuntimeContext,
-        inventory: &ResourceInventoryComp,
-        equipment: &FixedEquipmentComp,
-        mining: &MiningComp,
-        health: &HealthComp,
-        combat: &CombatComp,
-        elimination: &EliminationComp,
-    ) -> Option<Self> {
+    pub(super) fn new(access: PlayerGameplayStateAccess<'_>) -> Option<Self> {
         Some(Self {
-            match_id: context.match_id,
-            assets: PlayerInventoryState::new(inventory, equipment),
-            mining: mining_state(context, mining)?,
-            health: health_state(context, health)?,
+            match_id: access.context.match_id,
+            assets: PlayerInventoryState::new(access.inventory, access.equipment),
+            mining: mining_state(access.context, access.mining)?,
+            extraction: access.extraction,
+            health: health_state(access.context, access.health)?,
             attack: AttackCursorState {
-                revision: combat.state().revision(),
-                accepted_sequence: combat.state().last_sequence(),
+                revision: access.combat.state().revision(),
+                accepted_sequence: access.combat.state().last_sequence(),
             },
-            death_result: elimination.record().map(|record| record.result.clone()),
+            death_result: access
+                .elimination
+                .record()
+                .map(|record| record.result.clone()),
         })
     }
 }
@@ -171,7 +179,7 @@ fn health_state(
     HealthStateEnvelope::new(&context.manifest, context.match_id, state.revision(), data).ok()
 }
 
-fn queue_method<T: Serialize>(
+pub(super) fn queue_method<T: Serialize>(
     queues: &mut MessageQueues,
     client_id: &str,
     method_name: &str,

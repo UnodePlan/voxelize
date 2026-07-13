@@ -1,10 +1,11 @@
 use extraction_server::contracts::{
-    bundled_combat_state_fixture, bundled_envelope_fixture, bundled_gameplay_intent_fixture,
-    bundled_get_state_fixture, bundled_manifest, bundled_mining_state_fixture,
-    decode_attack_intent, decode_attack_result_data, decode_death_result, decode_drop_slot_intent,
-    decode_gameplay_state, decode_get_state_intent, decode_health_state, decode_mining_intent,
-    decode_mining_state, decode_protocol_envelope, EquipmentKey, ErrorCode, ExtractionManifest,
-    ProtocolEnvelope, ResourceKey,
+    bundled_combat_state_fixture, bundled_envelope_fixture, bundled_extraction_state_fixture,
+    bundled_gameplay_intent_fixture, bundled_get_state_fixture, bundled_manifest,
+    bundled_mining_state_fixture, decode_attack_intent, decode_attack_result_data,
+    decode_death_result, decode_drop_slot_intent, decode_extraction_state, decode_gameplay_state,
+    decode_get_state_intent, decode_health_state, decode_mining_intent, decode_mining_state,
+    decode_protocol_envelope, EquipmentKey, ErrorCode, ExtractionManifest, ProtocolEnvelope,
+    ResourceKey,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -225,6 +226,22 @@ fn rust_decoder_matches_shared_mining_state_cases() {
             decoded.is_ok(),
             fixture_case.accept,
             "mining state fixture case {} did not match: {:?}",
+            fixture_case.name,
+            decoded.err()
+        );
+    }
+}
+
+#[test]
+fn rust_decoder_matches_shared_extraction_state_cases() {
+    let manifest = bundled_manifest().unwrap();
+    let fixture = bundled_extraction_state_fixture().unwrap();
+    for fixture_case in fixture.cases {
+        let decoded = decode_extraction_state(fixture_case.value, &manifest);
+        assert_eq!(
+            decoded.is_ok(),
+            fixture_case.accept,
+            "extraction state fixture case {} did not match: {:?}",
             fixture_case.name,
             decoded.err()
         );

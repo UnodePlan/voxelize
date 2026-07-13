@@ -9,6 +9,7 @@ export const MINING_IDLE_REASONS = [
   "invalidBlock",
   "disconnected",
   "timedOut",
+  "settlementPending",
   "completed",
 ] as const;
 export const ERROR_CODES = [

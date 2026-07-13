@@ -8,14 +8,14 @@ use super::{
     authority::GameplayAuthority,
     combat_system::CombatResolutionSystem,
     components::{
-        CombatComp, EliminationComp, FixedEquipmentComp, HealthComp, LootDropComp, MatchPlayerComp,
-        MiningComp, ResourceInventoryComp, RoundStatsComp,
+        CombatComp, EliminationComp, ExtractionComp, FixedEquipmentComp, HealthComp, LootDropComp,
+        MatchPlayerComp, MiningComp, ResourceInventoryComp, RoundStatsComp,
     },
     intents::{AttackIntentQueue, DropSlotIntentQueue, MiningIntentQueue},
     methods::install_gameplay_methods,
     mining_system::MiningResolutionSystem,
     system::GameplayRuntimeSystem,
-    ForcedEliminationQueue,
+    ForcedEliminationQueue, HardDeadlineControl,
 };
 use crate::{
     contracts::{bundled_manifest, ExtractionManifest, ResourceKey},
@@ -149,6 +149,7 @@ pub(crate) fn install_gameplay_runtime(
     world.ecs_mut().register::<CombatComp>();
     world.ecs_mut().register::<RoundStatsComp>();
     world.ecs_mut().register::<EliminationComp>();
+    world.ecs_mut().register::<ExtractionComp>();
     world.ecs_mut().insert(GameplayRuntimeContext::new(
         spec.match_id,
         config,
@@ -164,6 +165,7 @@ pub(crate) fn install_gameplay_runtime(
     world.ecs_mut().insert(SpawnedDropIds::default());
     world.ecs_mut().insert(HarvestedVoxelSet::default());
     world.ecs_mut().insert(ForcedEliminationQueue::default());
+    world.ecs_mut().insert(HardDeadlineControl::default());
     world
         .ecs_mut()
         .insert(DropSlotIntentQueue::new(config.intent_queue_capacity));
@@ -219,6 +221,7 @@ pub(crate) fn install_gameplay_runtime(
         world.add(entity, CombatComp::new(CombatState::default()));
         world.add(entity, RoundStatsComp::new(RoundStats::new(now)));
         world.add(entity, EliminationComp::alive());
+        world.add(entity, ExtractionComp::default());
     });
 
     install_gameplay_methods(world);

@@ -3,6 +3,7 @@ pub(crate) mod config;
 pub(crate) mod death;
 pub(crate) mod drop_queue;
 pub(crate) mod equipment;
+pub(crate) mod extraction;
 pub(crate) mod harvest;
 pub(crate) mod inventory;
 pub(crate) mod loot;
@@ -15,6 +16,8 @@ pub(crate) mod transactions;
 mod combat_tests;
 #[cfg(test)]
 mod death_tests;
+#[cfg(test)]
+mod extraction_tests;
 #[cfg(test)]
 mod harvest_tests;
 #[cfg(test)]

@@ -6,8 +6,8 @@ use voxelize::{EntityIDs, MetadataComp, PositionComp};
 use super::{
     authority::GameplayAuthority,
     components::{
-        EliminationComp, HealthComp, LootDropComp, MatchPlayerComp, ResourceInventoryComp,
-        RoundStatsComp,
+        EliminationComp, ExtractionComp, HealthComp, LootDropComp, MatchPlayerComp,
+        ResourceInventoryComp, RoundStatsComp,
     },
     drop_spawn::set_loot_metadata,
 };
@@ -22,6 +22,7 @@ pub(super) struct AutoPickupAccess<'a, 'world> {
     pub players: &'a ReadStorage<'world, MatchPlayerComp>,
     pub health: &'a ReadStorage<'world, HealthComp>,
     pub eliminations: &'a WriteStorage<'world, EliminationComp>,
+    pub extractions: &'a WriteStorage<'world, ExtractionComp>,
     pub inventories: &'a mut WriteStorage<'world, ResourceInventoryComp>,
     pub stats: &'a mut WriteStorage<'world, RoundStatsComp>,
     pub positions: &'a WriteStorage<'world, PositionComp>,
@@ -40,6 +41,7 @@ pub(super) fn auto_pickup(access: AutoPickupAccess<'_, '_>) {
         players,
         health,
         eliminations,
+        extractions,
         inventories,
         stats,
         positions,
@@ -47,23 +49,33 @@ pub(super) fn auto_pickup(access: AutoPickupAccess<'_, '_>) {
         metadatas,
         dirty_players,
     } = access;
-    let mut candidates = (entities, players, positions, health, eliminations)
+    let mut candidates = (
+        entities,
+        players,
+        positions,
+        health,
+        eliminations,
+        extractions,
+    )
         .join()
-        .filter_map(|(entity, player, position, health, elimination)| {
-            let client_id = player.public_player_id().to_string();
-            (health.state().is_alive()
-                && elimination.record().is_none()
-                && authority.allows(&client_id, player.account_id()))
-            .then_some((
-                entity,
-                client_id,
-                PickupCandidate {
-                    seat_id: player.seat_id(),
-                    account_id: player.account_id(),
-                    position: position.0.to_arr(),
-                },
-            ))
-        })
+        .filter_map(
+            |(entity, player, position, health, elimination, extraction)| {
+                let client_id = player.public_player_id().to_string();
+                (health.state().is_alive()
+                    && elimination.record().is_none()
+                    && extraction.record().is_none()
+                    && authority.allows(&client_id, player.account_id()))
+                .then_some((
+                    entity,
+                    client_id,
+                    PickupCandidate {
+                        seat_id: player.seat_id(),
+                        account_id: player.account_id(),
+                        position: position.0.to_arr(),
+                    },
+                ))
+            },
+        )
         .collect::<Vec<_>>();
     candidates.sort_by_key(|candidate| candidate.2.seat_id);
     let domain_candidates = candidates

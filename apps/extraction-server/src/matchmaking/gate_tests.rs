@@ -18,6 +18,12 @@ fn hard_deadline_closure_cannot_be_reopened_by_stale_sync() {
         world_name: "match-1".to_owned(),
         world_generation: Some("generation-1".to_owned()),
         state: MatchState::Active,
+        #[cfg(feature = "engine")]
+        extraction_open: false,
+        #[cfg(feature = "engine")]
+        hard_deadline: Some(Duration::from_secs(720)),
+        #[cfg(feature = "engine")]
+        hard_deadline_utc: Some(OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(720)),
         participants: HashMap::from([(
             account_id,
             GateParticipant {
@@ -29,6 +35,7 @@ fn hard_deadline_closure_cannot_be_reopened_by_stale_sync() {
         )]),
     };
     gate.replace(Some(active()));
+    assert!(gate.close_for_hard_deadline("match-1", "generation-1"));
     assert!(gate.close_for_hard_deadline("match-1", "generation-1"));
 
     // 模拟跨过硬截止的慢 SQL 返回后，协调器仍拿旧 Active 状态执行 sync_gate。
@@ -58,6 +65,12 @@ fn rebind_admission_and_timeout_claim_are_linearized() {
         world_name: "match-2".to_owned(),
         world_generation: Some("generation-2".to_owned()),
         state: MatchState::Active,
+        #[cfg(feature = "engine")]
+        extraction_open: false,
+        #[cfg(feature = "engine")]
+        hard_deadline: Some(Duration::from_secs(720)),
+        #[cfg(feature = "engine")]
+        hard_deadline_utc: Some(OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(720)),
         participants: HashMap::from([(
             account_id,
             GateParticipant {
@@ -119,6 +132,12 @@ fn stale_join_commit_cannot_consume_a_newer_attempt() {
         world_name: "match-3".to_owned(),
         world_generation: Some("generation-3".to_owned()),
         state: MatchState::Preparing,
+        #[cfg(feature = "engine")]
+        extraction_open: false,
+        #[cfg(feature = "engine")]
+        hard_deadline: None,
+        #[cfg(feature = "engine")]
+        hard_deadline_utc: None,
         participants: HashMap::from([(
             account_id,
             GateParticipant {

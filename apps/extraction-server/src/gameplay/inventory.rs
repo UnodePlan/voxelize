@@ -215,7 +215,6 @@ impl MatchInventory {
         Ok(proposal.stack)
     }
 
-    #[cfg(test)]
     pub(crate) fn freeze(&mut self) -> Result<bool, InventoryError> {
         if self.frozen {
             return Ok(false);

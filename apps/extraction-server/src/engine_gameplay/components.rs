@@ -6,6 +6,7 @@ use crate::{
     gameplay::{
         combat::{CombatState, HealthState},
         equipment::{FixedEquipment, FixedEquipmentSnapshot},
+        extraction::ExtractionProgress,
         inventory::{InventorySnapshot, MatchInventory},
         loot::LootDrop,
         mining::MiningState,
@@ -196,6 +197,7 @@ impl Component for RoundStatsComp {
 
 pub(super) struct EliminationRecord {
     pub killer_account_id: Option<Uuid>,
+    pub occurred_at: time::OffsetDateTime,
     pub result: DeathResultEnvelope,
     pub notice_sent: bool,
 }
@@ -226,4 +228,63 @@ impl EliminationComp {
 
 impl Component for EliminationComp {
     type Storage = VecStorage<Self>;
+}
+
+pub(super) struct ExtractionRecord {
+    pub qualification: crate::matchmaking::ExtractionQualification,
+    pub notice_sent: bool,
+}
+
+#[derive(Default)]
+pub(super) struct ExtractionComp {
+    progress: ExtractionProgress,
+    record: Option<ExtractionRecord>,
+    last_published_revision: Option<u32>,
+}
+
+impl ExtractionComp {
+    pub(super) fn progress(&self) -> &ExtractionProgress {
+        &self.progress
+    }
+
+    pub(super) fn progress_mut(&mut self) -> &mut ExtractionProgress {
+        &mut self.progress
+    }
+
+    pub(super) fn record(&self) -> Option<&ExtractionRecord> {
+        self.record.as_ref()
+    }
+
+    pub(super) fn record_mut(&mut self) -> Option<&mut ExtractionRecord> {
+        self.record.as_mut()
+    }
+
+    pub(super) fn qualify(
+        &mut self,
+        qualification: crate::matchmaking::ExtractionQualification,
+    ) -> bool {
+        if self.record.is_some() {
+            return false;
+        }
+        self.record = Some(ExtractionRecord {
+            qualification,
+            notice_sent: false,
+        });
+        true
+    }
+
+    pub(super) fn should_publish(&mut self, revision: u32) -> bool {
+        if self
+            .last_published_revision
+            .is_some_and(|published| revision <= published)
+        {
+            return false;
+        }
+        self.last_published_revision = Some(revision);
+        true
+    }
+}
+
+impl Component for ExtractionComp {
+    type Storage = DenseVecStorage<Self>;
 }

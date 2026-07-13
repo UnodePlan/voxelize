@@ -10,7 +10,7 @@ use crate::{
     matchmaking::{MatchVersions, MatchmakingService},
     persistence::{acquire_matchmaking_process_lock, MatchmakingProcessLock, PgRepository},
     ports::{
-        AuthRepository, Clock, MatchRepository, RandomIdGenerator, RandomSeedGenerator,
+        AuthRepository, Clock, MatchmakingRepository, RandomIdGenerator, RandomSeedGenerator,
         RepositoryProbe, SystemClock,
     },
     AppState, ServerConfig,
@@ -46,7 +46,7 @@ pub(crate) async fn build(config: &ServerConfig) -> io::Result<Application> {
     );
     let repository_probe: Arc<dyn RepositoryProbe> = repository.clone();
     let auth_repository: Arc<dyn AuthRepository> = repository.clone();
-    let match_repository: Arc<dyn MatchRepository> = repository;
+    let match_repository: Arc<dyn MatchmakingRepository> = repository;
     let clock: Arc<dyn Clock> = Arc::new(SystemClock::default());
     match_repository
         .abort_unrecoverable_matches(STARTUP_ABORT_REASON.to_owned(), clock.utc_now().into())

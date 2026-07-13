@@ -6,8 +6,8 @@ use voxelize::{Chunks, Clients, DirectionComp, PositionComp, Vec3};
 use super::{
     authority::GameplayAuthority,
     components::{
-        EliminationComp, FixedEquipmentComp, MatchPlayerComp, MiningComp, ResourceInventoryComp,
-        RoundStatsComp,
+        EliminationComp, ExtractionComp, FixedEquipmentComp, MatchPlayerComp, MiningComp,
+        ResourceInventoryComp, RoundStatsComp,
     },
     mining_dirty::MiningDirtyPlayers,
     mining_validation::{validate_mining_target, MiningValidationAccess},
@@ -40,6 +40,7 @@ pub(super) struct MiningCompletionAccess<'a, 'world> {
     pub positions: &'a ReadStorage<'world, PositionComp>,
     pub directions: &'a ReadStorage<'world, DirectionComp>,
     pub eliminations: &'a ReadStorage<'world, EliminationComp>,
+    pub extractions: &'a ReadStorage<'world, ExtractionComp>,
     pub mining: &'a mut WriteStorage<'world, MiningComp>,
     pub inventories: &'a mut WriteStorage<'world, ResourceInventoryComp>,
     pub stats: &'a mut WriteStorage<'world, RoundStatsComp>,
@@ -52,10 +53,11 @@ pub(super) fn advance_mining(mut access: MiningCompletionAccess<'_, '_>) {
         access.players,
         &*access.mining,
         access.eliminations,
+        access.extractions,
     )
         .join()
-        .filter_map(|(entity, player, mining, elimination)| {
-            if elimination.record().is_some() {
+        .filter_map(|(entity, player, mining, elimination, extraction)| {
+            if elimination.record().is_some() || extraction.record().is_some() {
                 return None;
             }
             let target = mining.state().active_target()?;

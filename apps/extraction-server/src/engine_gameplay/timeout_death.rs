@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use specs::{Entity, WriteStorage};
+use time::OffsetDateTime;
 
 use super::{
     components::{
@@ -24,6 +25,8 @@ use crate::{
 pub(super) struct TimeoutDeathAccess<'a, 'world> {
     pub context: &'a GameplayRuntimeContext,
     pub now: Duration,
+    pub occurred_at: OffsetDateTime,
+    pub cause: DeathCause,
     pub victim_entity: Entity,
     pub victim: &'a MatchPlayerComp,
     pub victim_position: [f32; 3],
@@ -96,7 +99,7 @@ pub(super) fn resolve_timeout_death(
         access.context.match_id,
         health.revision(),
         DeathResultData {
-            cause: DeathCause::ReconnectTimeout,
+            cause: access.cause,
             killer_public_player_id: None,
             survived_ms: survival_ms(&stats)?,
             mined: tally(stats.mined()),
@@ -150,6 +153,7 @@ pub(super) fn resolve_timeout_death(
         .unwrap()
         .eliminate(EliminationRecord {
             killer_account_id: None,
+            occurred_at: access.occurred_at,
             result: result.clone(),
             notice_sent: false,
         });

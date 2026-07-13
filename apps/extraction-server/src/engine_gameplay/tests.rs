@@ -8,8 +8,8 @@ use voxelize::{DirectionComp, PositionComp, World, WorldConfig};
 use super::{
     authority::GameplayAuthority,
     components::{
-        CombatComp, EliminationComp, FixedEquipmentComp, HealthComp, LootDropComp, MatchPlayerComp,
-        MiningComp, ResourceInventoryComp, RoundStatsComp,
+        CombatComp, EliminationComp, ExtractionComp, FixedEquipmentComp, HealthComp, LootDropComp,
+        MatchPlayerComp, MiningComp, ResourceInventoryComp, RoundStatsComp,
     },
     intents::{DropSlotIntentQueue, QueuedDropSlotIntent},
     runtime::{install_gameplay_runtime, GameplayInstallError},
@@ -96,6 +96,7 @@ fn world_and_player(
         .with(CombatComp::new(CombatState::default()))
         .with(RoundStatsComp::new(RoundStats::new(now)))
         .with(EliminationComp::alive())
+        .with(ExtractionComp::default())
         .with(PositionComp::new(0.0, 1.0, 0.0))
         .with(DirectionComp::new(1.0, 0.0, 0.0))
         .build();

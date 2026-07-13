@@ -5,9 +5,11 @@ use std::{
 };
 
 use specs::Entity;
+use time::OffsetDateTime;
 use uuid::Uuid;
 use voxelize::{Clients, World};
 
+use crate::matchmaking::GameplayTimeline;
 use crate::matchmaking::{
     MatchDeathNotice, MatchTimeoutNotice, MatchmakingService, ParticipantDeath, ParticipantTimeout,
 };
@@ -115,6 +117,29 @@ impl GameplayAuthority {
             .map(|service| service.monotonic_now())
     }
 
+    pub(crate) fn utc_now(&self) -> Option<OffsetDateTime> {
+        #[cfg(test)]
+        if let Some(now) = self.test_now {
+            return OffsetDateTime::UNIX_EPOCH.checked_add(time::Duration::try_from(now).ok()?);
+        }
+        self.matchmaking.upgrade().map(|service| service.utc_now())
+    }
+
+    pub(crate) fn gameplay_timeline(&self) -> Option<GameplayTimeline> {
+        #[cfg(test)]
+        if self.test_now.is_some() {
+            return Some(GameplayTimeline {
+                extraction_open: true,
+                hard_deadline: Duration::from_secs(720),
+                hard_deadline_utc: OffsetDateTime::UNIX_EPOCH
+                    .checked_add(time::Duration::seconds(720))?,
+            });
+        }
+        let service = self.matchmaking.upgrade()?;
+        let generation = self.world_generation(&service)?;
+        service.gameplay_timeline(&self.world_name, &generation)
+    }
+
     pub(super) fn report_death(&self, death: ParticipantDeath) -> bool {
         #[cfg(test)]
         if self.test_now.is_some() {
@@ -148,6 +173,27 @@ impl GameplayAuthority {
             world_name: self.world_name.clone(),
             world_generation,
             timeout,
+        })
+    }
+
+    pub(super) fn report_extraction(
+        &self,
+        qualification: crate::matchmaking::ExtractionQualification,
+    ) -> bool {
+        #[cfg(test)]
+        if self.test_now.is_some() {
+            return qualification.is_valid();
+        }
+        let Some(service) = self.matchmaking.upgrade() else {
+            return false;
+        };
+        let Some(world_generation) = self.world_generation(&service) else {
+            return false;
+        };
+        service.observe_extraction(crate::matchmaking::MatchExtractionNotice {
+            world_name: self.world_name.clone(),
+            world_generation,
+            qualification,
         })
     }
 

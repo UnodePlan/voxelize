@@ -102,7 +102,6 @@ pub trait MatchRepository: RepositoryProbe + Send + Sync {
     async fn mark_timed_out(
         &self,
         timeout: ParticipantTimeout,
-        at: OffsetDateTime,
     ) -> Result<TransitionOutcome<ParticipantRecord>, MatchRepositoryError>;
 
     async fn open_extraction(

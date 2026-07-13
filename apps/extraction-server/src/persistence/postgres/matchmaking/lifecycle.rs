@@ -66,15 +66,6 @@ pub(in crate::persistence::postgres) async fn begin_settling(
             if row.hard_deadline.is_none_or(|deadline| at < deadline) {
                 return Err(MatchRepositoryError::Conflict);
             }
-            // 硬截止在比赛转换事务内释放所有仍占用玩法席位的账号。
-            sqlx::query(
-                "UPDATE match_participants SET state = 'timed_out', reconnect_deadline = NULL \
-                 WHERE match_id = $1 AND state IN ('active', 'disconnected')",
-            )
-            .bind(match_id)
-            .execute(&mut *transaction)
-            .await
-            .map_err(classify_write_error)?;
         }
         SettlingTrigger::AllParticipantsTerminal => {}
     }
@@ -113,8 +104,7 @@ pub(in crate::persistence::postgres) async fn finish(
     state
         .transition_to(MatchState::Finished)
         .map_err(|_| MatchRepositoryError::Conflict)?;
-    if at < row.created_at || count_nonterminal_participants(&mut transaction, match_id).await? != 0
-    {
+    if at < row.created_at || count_gameplay_participants(&mut transaction, match_id).await? != 0 {
         return Err(MatchRepositoryError::Conflict);
     }
 
@@ -176,24 +166,6 @@ async fn count_gameplay_participants(
             ParticipantState::Preparing,
             ParticipantState::Active,
             ParticipantState::Disconnected,
-        ],
-    )
-    .await
-}
-
-async fn count_nonterminal_participants(
-    transaction: &mut Transaction<'_, Postgres>,
-    match_id: Uuid,
-) -> Result<i64, MatchRepositoryError> {
-    count_participants(
-        transaction,
-        match_id,
-        &[
-            ParticipantState::Waiting,
-            ParticipantState::Preparing,
-            ParticipantState::Active,
-            ParticipantState::Disconnected,
-            ParticipantState::SettlementPending,
         ],
     )
     .await

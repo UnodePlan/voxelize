@@ -3,8 +3,8 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use super::{
-    ContractError, DeathResultEnvelope, EquipmentKey, ExtractionManifest, HealthStateEnvelope,
-    Intent, MiningStateEnvelope, ProtocolEnvelope, ResourceKey,
+    ContractError, DeathResultEnvelope, EquipmentKey, ExtractionManifest, ExtractionStateEnvelope,
+    HealthStateEnvelope, Intent, MiningStateEnvelope, ProtocolEnvelope, ResourceKey,
 };
 use crate::match_world::RESOURCE_BACKPACK_SLOTS;
 
@@ -54,6 +54,7 @@ pub struct GameplayStateData {
     pub inventory: InventoryState,
     pub equipment: FixedEquipmentState,
     pub mining: MiningStateEnvelope,
+    pub extraction: ExtractionStateEnvelope,
     pub health: HealthStateEnvelope,
     pub attack: AttackCursorState,
     pub death_result: Option<DeathResultEnvelope>,
@@ -63,6 +64,7 @@ impl GameplayStateData {
     fn validate(&self, manifest: &ExtractionManifest) -> Result<(), ContractError> {
         if self.match_id.is_nil()
             || self.mining.match_id != self.match_id
+            || self.extraction.match_id != self.match_id
             || self.health.match_id != self.match_id
             || self
                 .death_result
@@ -72,6 +74,7 @@ impl GameplayStateData {
             return Err(ContractError::new("get-state 内部 matchId 不一致"));
         }
         self.mining.validate(manifest)?;
+        self.extraction.validate(manifest)?;
         self.health.validate(manifest)?;
         if let Some(result) = &self.death_result {
             result.validate(manifest)?;
@@ -99,11 +102,14 @@ impl GameplayStateData {
             if !self.inventory.frozen
                 || self.inventory.slots.iter().any(Option::is_some)
                 || result.revision != self.health.revision
+                || !self.extraction.data.is_closed()
             {
                 return Err(ContractError::new("死亡 get-state 终态不一致"));
             }
-        } else if self.inventory.frozen || self.death_result.is_some() {
-            return Err(ContractError::new("存活 get-state 不得包含死亡终态"));
+        } else if self.death_result.is_some()
+            || self.inventory.frozen != self.extraction.data.is_pending()
+        {
+            return Err(ContractError::new("存活 get-state 撤离冻结状态不一致"));
         }
         Ok(())
     }

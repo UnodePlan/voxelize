@@ -1,34 +1,25 @@
-use specs::{Entities, Join, ReadExpect, ReadStorage, System, WriteExpect, WriteStorage};
+use specs::{Entities, ReadExpect, ReadStorage, System, WriteExpect, WriteStorage};
 use voxelize::{Chunks, Clients, DirectionComp, MessageQueues, PositionComp, Registry};
 
 use super::{
     authority::GameplayAuthority,
-    combat_authorization::is_attack_authorized,
-    combat_death::{resolve_melee_death, MeleeDeathAccess},
-    combat_ordering::drain_attacks_in_stable_order,
-    combat_responses::{
-        combat_error, queue_attack_result, reject_all_unavailable, reject_invalid, targeting_error,
-    },
-    combat_targeting::{select_combat_target, TargetCandidate},
+    combat_attacks::{resolve_attacks, AttackResolutionAccess},
+    combat_responses::reject_all_unavailable,
     components::{
-        CombatComp, EliminationComp, FixedEquipmentComp, HealthComp, MatchPlayerComp, MiningComp,
-        ResourceInventoryComp, RoundStatsComp,
+        CombatComp, EliminationComp, ExtractionComp, FixedEquipmentComp, HealthComp,
+        MatchPlayerComp, MiningComp, ResourceInventoryComp, RoundStatsComp,
     },
+    extraction_resolution::{process_extractions, ExtractionResolutionAccess},
     intents::AttackIntentQueue,
-    messaging::{queue_death_result, queue_error, queue_health_state},
     runtime::GameplayRuntimeContext,
-    timeout_resolution::{process_forced_eliminations, TimeoutResolutionAccess},
-    ForcedEliminationQueue,
+    timeout_resolution::{
+        process_forced_eliminations, process_hard_deadline_eliminations, TimeoutResolutionAccess,
+    },
+    ForcedEliminationQueue, HardDeadlineControl,
 };
 use crate::{
-    contracts::{AttackResolution, ErrorCode},
-    gameplay::{
-        combat::{
-            CombatError, DamageOutcome, SwingOutcome, BASIC_MELEE_COOLDOWN,
-            BASIC_MELEE_DAMAGE_HALF_HEARTS,
-        },
-        drop_queue::{PendingDropQueue, SpawnedDropIds},
-    },
+    gameplay::drop_queue::{PendingDropQueue, SpawnedDropIds},
+    generation::MapPoint,
 };
 
 pub(super) struct CombatResolutionSystem;
@@ -41,6 +32,8 @@ impl<'a> System<'a> for CombatResolutionSystem {
         ReadExpect<'a, Clients>,
         ReadExpect<'a, Chunks>,
         ReadExpect<'a, Registry>,
+        ReadExpect<'a, MapPoint>,
+        ReadExpect<'a, HardDeadlineControl>,
         ReadExpect<'a, ForcedEliminationQueue>,
         WriteExpect<'a, AttackIntentQueue>,
         WriteExpect<'a, PendingDropQueue>,
@@ -56,6 +49,7 @@ impl<'a> System<'a> for CombatResolutionSystem {
         WriteStorage<'a, MiningComp>,
         WriteStorage<'a, RoundStatsComp>,
         WriteStorage<'a, EliminationComp>,
+        WriteStorage<'a, ExtractionComp>,
     );
 
     fn run(&mut self, data: Self::SystemData) {
@@ -66,6 +60,8 @@ impl<'a> System<'a> for CombatResolutionSystem {
             clients,
             chunks,
             registry,
+            zone_point,
+            hard_deadline,
             forced,
             mut intents,
             mut pending,
@@ -81,8 +77,13 @@ impl<'a> System<'a> for CombatResolutionSystem {
             mut mining,
             mut stats,
             mut eliminations,
+            mut extractions,
         ) = data;
         let Some(now) = authority.monotonic_now() else {
+            reject_all_unavailable(&context, &mut intents, &mut queues);
+            return;
+        };
+        let Some(occurred_at) = authority.utc_now() else {
             reject_all_unavailable(&context, &mut intents, &mut queues);
             return;
         };
@@ -92,6 +93,7 @@ impl<'a> System<'a> for CombatResolutionSystem {
             context: &context,
             authority: &authority,
             now,
+            occurred_at,
             forced: &forced,
             pending: &mut pending,
             spawned: &spawned,
@@ -103,190 +105,75 @@ impl<'a> System<'a> for CombatResolutionSystem {
             mining: &mut mining,
             stats: &mut stats,
             eliminations: &mut eliminations,
+            extractions: &extractions,
         });
 
-        for intent in drain_attacks_in_stable_order(&mut intents, &players) {
-            let Some(attacker) = players.get(intent.entity) else {
-                reject_invalid(&context, &mut queues, &intent.client_id, intent.request_id);
-                continue;
-            };
-            if !is_attack_authorized(
-                &entities,
-                &authority,
-                &clients,
-                intent.entity,
-                attacker,
-                &intent.client_id,
-                intent.payload.weapon_slot,
-                &equipment,
-                &health,
-                &eliminations,
-            ) {
-                reject_invalid(&context, &mut queues, &intent.client_id, intent.request_id);
-                continue;
-            }
+        resolve_attacks(AttackResolutionAccess {
+            entities: &entities,
+            context: &context,
+            authority: &authority,
+            clients: &clients,
+            chunks: &chunks,
+            registry: &registry,
+            now,
+            occurred_at,
+            intents: &mut intents,
+            pending: &mut pending,
+            spawned: &spawned,
+            queues: &mut queues,
+            players: &players,
+            equipment: &equipment,
+            positions: &positions,
+            directions: &directions,
+            health: &mut health,
+            combat: &mut combat,
+            inventories: &mut inventories,
+            mining: &mut mining,
+            stats: &mut stats,
+            eliminations: &mut eliminations,
+            extractions: &extractions,
+        });
 
-            let swing = combat
-                .get_mut(intent.entity)
-                .ok_or(CombatError::RevisionExhausted)
-                .and_then(|state| {
-                    state
-                        .state_mut()
-                        .accept_swing(intent.sequence, now, BASIC_MELEE_COOLDOWN)
-                });
-            match swing {
-                Ok(SwingOutcome::Accepted) => {}
-                Ok(SwingOutcome::Cooldown { .. }) => {
-                    queue_error(
-                        &mut queues,
-                        &context.manifest,
-                        &intent.client_id,
-                        intent.request_id,
-                        ErrorCode::GameCooldown,
-                        false,
-                    );
-                    continue;
-                }
-                Err(error) => {
-                    let (code, retryable) = combat_error(error);
-                    queue_error(
-                        &mut queues,
-                        &context.manifest,
-                        &intent.client_id,
-                        intent.request_id,
-                        code,
-                        retryable,
-                    );
-                    continue;
-                }
-            }
-
-            let Some(origin) = positions.get(intent.entity).map(|value| value.0.to_arr()) else {
-                reject_invalid(&context, &mut queues, &intent.client_id, intent.request_id);
-                continue;
-            };
-            let Some(direction) = directions.get(intent.entity).map(|value| value.0.to_arr())
-            else {
-                reject_invalid(&context, &mut queues, &intent.client_id, intent.request_id);
-                continue;
-            };
-            let candidates = (&entities, &players, &positions, &health, &eliminations)
-                .join()
-                .filter_map(|(entity, player, position, health, elimination)| {
-                    (entity != intent.entity
-                        && health.state().is_alive()
-                        && elimination.record().is_none())
-                    .then_some(TargetCandidate {
-                        entity,
-                        seat_id: player.seat_id(),
-                        eye_position: position.0.to_arr(),
-                    })
-                })
-                .collect::<Vec<_>>();
-            let target = match select_combat_target(
-                &context,
-                &chunks,
-                &registry,
-                origin,
-                direction,
-                &candidates,
-            ) {
-                Ok(target) => target,
-                Err(error) => {
-                    let (code, retryable) = targeting_error(error);
-                    queue_error(
-                        &mut queues,
-                        &context.manifest,
-                        &intent.client_id,
-                        intent.request_id,
-                        code,
-                        retryable,
-                    );
-                    continue;
-                }
-            };
-            let Some(target) = target else {
-                queue_attack_result(
-                    &context,
-                    &mut queues,
-                    &combat,
-                    &intent,
-                    AttackResolution::Miss,
-                );
-                continue;
-            };
-            let Some(victim) = players.get(target.entity) else {
-                continue;
-            };
-            let Some(victim_position) = positions.get(target.entity).map(|value| value.0.to_arr())
-            else {
-                continue;
-            };
-            let mut candidate = health.get(target.entity).unwrap().state().clone();
-            match candidate.apply_damage(BASIC_MELEE_DAMAGE_HALF_HEARTS) {
-                Ok(DamageOutcome::Damaged { .. }) => {
-                    *health.get_mut(target.entity).unwrap().state_mut() = candidate;
-                    queue_health_state(
-                        &mut queues,
-                        &context,
-                        &victim.public_player_id().to_string(),
-                        health.get(target.entity).unwrap(),
-                    );
-                    queue_attack_result(
-                        &context,
-                        &mut queues,
-                        &combat,
-                        &intent,
-                        AttackResolution::Hit,
-                    );
-                }
-                Ok(DamageOutcome::Killed) => {
-                    let result = resolve_melee_death(MeleeDeathAccess {
-                        context: &context,
-                        now,
-                        killer_entity: intent.entity,
-                        killer: attacker,
-                        victim_entity: target.entity,
-                        victim,
-                        victim_position,
-                        pending: &mut pending,
-                        spawned: &spawned,
-                        health: &mut health,
-                        inventories: &mut inventories,
-                        mining: &mut mining,
-                        stats: &mut stats,
-                        eliminations: &mut eliminations,
-                    });
-                    let Ok(result) = result else {
-                        authority.fail_closed();
-                        queue_error(
-                            &mut queues,
-                            &context.manifest,
-                            &intent.client_id,
-                            intent.request_id,
-                            ErrorCode::ServiceUnavailable,
-                            true,
-                        );
-                        continue;
-                    };
-                    let victim_client_id = victim.public_player_id().to_string();
-                    queue_health_state(
-                        &mut queues,
-                        &context,
-                        &victim_client_id,
-                        health.get(target.entity).unwrap(),
-                    );
-                    queue_death_result(&mut queues, &victim_client_id, &result);
-                    queue_attack_result(
-                        &context,
-                        &mut queues,
-                        &combat,
-                        &intent,
-                        AttackResolution::Kill,
-                    );
-                }
-                Err(_) => continue,
-            }
+        process_extractions(ExtractionResolutionAccess {
+            entities: &entities,
+            context: &context,
+            authority: &authority,
+            clients: &clients,
+            zone_point: *zone_point,
+            queues: &mut queues,
+            players: &players,
+            equipment: &equipment,
+            positions: &positions,
+            health: &health,
+            eliminations: &eliminations,
+            extractions: &mut extractions,
+            inventories: &mut inventories,
+            mining: &mut mining,
+        });
+        if let Some(request) = hard_deadline.pending_request() {
+            process_hard_deadline_eliminations(
+                TimeoutResolutionAccess {
+                    entities: &entities,
+                    context: &context,
+                    authority: &authority,
+                    now: request.monotonic_deadline,
+                    occurred_at: request.utc_deadline,
+                    forced: &forced,
+                    pending: &mut pending,
+                    spawned: &spawned,
+                    queues: &mut queues,
+                    players: &players,
+                    positions: &positions,
+                    health: &mut health,
+                    inventories: &mut inventories,
+                    mining: &mut mining,
+                    stats: &mut stats,
+                    eliminations: &mut eliminations,
+                    extractions: &extractions,
+                },
+                request,
+                &hard_deadline,
+            );
         }
     }
 }

@@ -25,6 +25,7 @@ export function reduceGameplayState(
   const wouldRegress =
     incoming.inventory.revision < current.inventory.revision ||
     incoming.mining.revision < current.mining.revision ||
+    incoming.extraction.revision < current.extraction.revision ||
     incoming.health.revision < current.health.revision ||
     incoming.attack.revision < current.attack.revision ||
     (current.deathResult !== null &&

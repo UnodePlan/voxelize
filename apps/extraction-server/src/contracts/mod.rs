@@ -1,5 +1,6 @@
 mod combat;
 mod envelope;
+mod extraction;
 mod gameplay;
 mod gameplay_state;
 mod manifest;
@@ -15,6 +16,9 @@ pub use combat::{
 pub use envelope::{
     decode_protocol_envelope, EnvelopeFixture, EnvelopeFixtureCase, Intent, Outcome,
     ProtocolEnvelope,
+};
+pub use extraction::{
+    decode_extraction_state, ExtractionStateData, ExtractionStateEnvelope, ExtractionZoneState,
 };
 pub use gameplay::{
     decode_drop_slot_intent, decode_mining_intent, decode_mining_state, DropSlotPayload,
@@ -36,6 +40,8 @@ const GAMEPLAY_INTENTS_JSON: &str =
     include_str!("../../../../contracts/extraction/v1/fixtures/gameplay-intents.json");
 const MINING_STATES_JSON: &str =
     include_str!("../../../../contracts/extraction/v1/fixtures/mining-states.json");
+const EXTRACTION_STATES_JSON: &str =
+    include_str!("../../../../contracts/extraction/v1/fixtures/extraction-states.json");
 const COMBAT_STATES_JSON: &str =
     include_str!("../../../../contracts/extraction/v1/fixtures/combat-states.json");
 const GET_STATE_RESULTS_JSON: &str =
@@ -61,6 +67,11 @@ pub fn bundled_gameplay_intent_fixture() -> Result<EnvelopeFixture, ContractErro
 pub fn bundled_mining_state_fixture() -> Result<EnvelopeFixture, ContractError> {
     serde_json::from_str(MINING_STATES_JSON)
         .map_err(|error| ContractError::new(format!("mining state fixture JSON 无效: {error}")))
+}
+
+pub fn bundled_extraction_state_fixture() -> Result<EnvelopeFixture, ContractError> {
+    serde_json::from_str(EXTRACTION_STATES_JSON)
+        .map_err(|error| ContractError::new(format!("extraction state fixture JSON 无效: {error}")))
 }
 
 pub fn bundled_combat_state_fixture() -> Result<EnvelopeFixture, ContractError> {

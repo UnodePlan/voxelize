@@ -8,7 +8,8 @@ use crate::{
     contracts::DeathCause,
     gameplay::loot::ResourceBundle,
     matchmaking::{
-        ParticipantDeath, ParticipantMatchStats, ParticipantResourceCounts, ParticipantTimeout,
+        ParticipantDeath, ParticipantMatchStats, ParticipantResourceCounts,
+        ParticipantTerminalCause, ParticipantTimeout,
     },
 };
 
@@ -38,16 +39,24 @@ pub(super) fn flush_death_notices<'a>(
                     match_id,
                     victim_account_id: player.account_id(),
                     killer_account_id,
+                    occurred_at: record.occurred_at,
+                    survived_ms: record.result.data.survived_ms,
                     stats: match_stats,
                 })
             }),
-            DeathCause::ReconnectTimeout => {
-                authority.report_timeout_elimination(ParticipantTimeout {
+            cause @ (DeathCause::ReconnectTimeout | DeathCause::HardDeadline) => authority
+                .report_timeout_elimination(ParticipantTimeout {
                     match_id,
                     account_id: player.account_id(),
+                    cause: match cause {
+                        DeathCause::ReconnectTimeout => ParticipantTerminalCause::ReconnectTimeout,
+                        DeathCause::HardDeadline => ParticipantTerminalCause::HardDeadline,
+                        DeathCause::Melee => unreachable!(),
+                    },
+                    occurred_at: record.occurred_at,
+                    survived_ms: record.result.data.survived_ms,
                     stats: match_stats,
-                })
-            }
+                }),
         };
         if reported {
             record.notice_sent = true;

@@ -9,8 +9,18 @@
         "matchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
         "inventory": {
           "slots": [
-            { "resource": "gold", "quantity": 3 }, null, null, null,
-            null, null, null, null, null, null, null, null
+            { "resource": "gold", "quantity": 3 },
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
           ],
           "revision": 4,
           "frozen": false
@@ -25,7 +35,19 @@
           "matchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
           "stream": "mining",
           "revision": 2,
-          "data": { "status": "idle", "acceptedSequence": 1, "reason": "completed" }
+          "data": {
+            "status": "idle",
+            "acceptedSequence": 1,
+            "reason": "completed"
+          }
+        },
+        "extraction": {
+          "protocolVersion": 1,
+          "type": "state",
+          "matchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "stream": "extraction",
+          "revision": 0,
+          "data": { "status": "hidden" }
         },
         "health": {
           "protocolVersion": 1,
@@ -33,7 +55,11 @@
           "matchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
           "stream": "health",
           "revision": 0,
-          "data": { "status": "alive", "currentHalfHearts": 20, "maxHalfHearts": 20 }
+          "data": {
+            "status": "alive",
+            "currentHalfHearts": 20,
+            "maxHalfHearts": 20
+          }
         },
         "attack": { "revision": 0, "acceptedSequence": null },
         "deathResult": null
@@ -46,7 +72,20 @@
       "value": {
         "matchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
         "inventory": {
-          "slots": [null, null, null, null, null, null, null, null, null, null, null, null],
+          "slots": [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
           "revision": 8,
           "frozen": true
         },
@@ -60,7 +99,19 @@
           "matchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
           "stream": "mining",
           "revision": 5,
-          "data": { "status": "idle", "acceptedSequence": 4, "reason": "timedOut" }
+          "data": {
+            "status": "idle",
+            "acceptedSequence": 4,
+            "reason": "timedOut"
+          }
+        },
+        "extraction": {
+          "protocolVersion": 1,
+          "type": "state",
+          "matchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "stream": "extraction",
+          "revision": 3,
+          "data": { "status": "closed" }
         },
         "health": {
           "protocolVersion": 1,
@@ -68,7 +119,11 @@
           "matchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
           "stream": "health",
           "revision": 10,
-          "data": { "status": "dead", "currentHalfHearts": 0, "maxHalfHearts": 20 }
+          "data": {
+            "status": "dead",
+            "currentHalfHearts": 0,
+            "maxHalfHearts": 20
+          }
         },
         "attack": { "revision": 3, "acceptedSequence": 2 },
         "deathResult": {
@@ -95,18 +150,41 @@
       "value": {
         "matchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
         "inventory": { "slots": [null], "revision": 0, "frozen": false },
-        "equipment": { "pickaxe": "basic_pickaxe", "meleeWeapon": "basic_melee_weapon" },
+        "equipment": {
+          "pickaxe": "basic_pickaxe",
+          "meleeWeapon": "basic_melee_weapon"
+        },
         "mining": {
-          "protocolVersion": 1, "type": "state",
+          "protocolVersion": 1,
+          "type": "state",
           "matchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-          "stream": "mining", "revision": 0,
-          "data": { "status": "idle", "acceptedSequence": null, "reason": "initial" }
+          "stream": "mining",
+          "revision": 0,
+          "data": {
+            "status": "idle",
+            "acceptedSequence": null,
+            "reason": "initial"
+          }
+        },
+        "extraction": {
+          "protocolVersion": 1,
+          "type": "state",
+          "matchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "stream": "extraction",
+          "revision": 0,
+          "data": { "status": "hidden" }
         },
         "health": {
-          "protocolVersion": 1, "type": "state",
+          "protocolVersion": 1,
+          "type": "state",
           "matchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-          "stream": "health", "revision": 0,
-          "data": { "status": "alive", "currentHalfHearts": 20, "maxHalfHearts": 20 }
+          "stream": "health",
+          "revision": 0,
+          "data": {
+            "status": "alive",
+            "currentHalfHearts": 20,
+            "maxHalfHearts": 20
+          }
         },
         "attack": { "revision": 0, "acceptedSequence": null },
         "deathResult": null
@@ -119,21 +197,58 @@
       "value": {
         "matchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
         "inventory": {
-          "slots": [null, null, null, null, null, null, null, null, null, null, null, null],
-          "revision": 0, "frozen": false
+          "slots": [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "revision": 0,
+          "frozen": false
         },
-        "equipment": { "pickaxe": "basic_pickaxe", "meleeWeapon": "basic_melee_weapon" },
+        "equipment": {
+          "pickaxe": "basic_pickaxe",
+          "meleeWeapon": "basic_melee_weapon"
+        },
         "mining": {
-          "protocolVersion": 1, "type": "state",
+          "protocolVersion": 1,
+          "type": "state",
           "matchId": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
-          "stream": "mining", "revision": 0,
-          "data": { "status": "idle", "acceptedSequence": null, "reason": "initial" }
+          "stream": "mining",
+          "revision": 0,
+          "data": {
+            "status": "idle",
+            "acceptedSequence": null,
+            "reason": "initial"
+          }
+        },
+        "extraction": {
+          "protocolVersion": 1,
+          "type": "state",
+          "matchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "stream": "extraction",
+          "revision": 0,
+          "data": { "status": "hidden" }
         },
         "health": {
-          "protocolVersion": 1, "type": "state",
+          "protocolVersion": 1,
+          "type": "state",
           "matchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-          "stream": "health", "revision": 0,
-          "data": { "status": "alive", "currentHalfHearts": 20, "maxHalfHearts": 20 }
+          "stream": "health",
+          "revision": 0,
+          "data": {
+            "status": "alive",
+            "currentHalfHearts": 20,
+            "maxHalfHearts": 20
+          }
         },
         "attack": { "revision": 0, "acceptedSequence": null },
         "deathResult": null
@@ -146,29 +261,70 @@
       "value": {
         "matchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
         "inventory": {
-          "slots": [null, null, null, null, null, null, null, null, null, null, null, null],
-          "revision": 0, "frozen": false
+          "slots": [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "revision": 0,
+          "frozen": false
         },
-        "equipment": { "pickaxe": "basic_pickaxe", "meleeWeapon": "basic_melee_weapon" },
+        "equipment": {
+          "pickaxe": "basic_pickaxe",
+          "meleeWeapon": "basic_melee_weapon"
+        },
         "mining": {
-          "protocolVersion": 1, "type": "state",
+          "protocolVersion": 1,
+          "type": "state",
           "matchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-          "stream": "mining", "revision": 0,
-          "data": { "status": "idle", "acceptedSequence": null, "reason": "initial" }
+          "stream": "mining",
+          "revision": 0,
+          "data": {
+            "status": "idle",
+            "acceptedSequence": null,
+            "reason": "initial"
+          }
+        },
+        "extraction": {
+          "protocolVersion": 1,
+          "type": "state",
+          "matchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "stream": "extraction",
+          "revision": 0,
+          "data": { "status": "hidden" }
         },
         "health": {
-          "protocolVersion": 1, "type": "state",
+          "protocolVersion": 1,
+          "type": "state",
           "matchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-          "stream": "health", "revision": 1,
-          "data": { "status": "alive", "currentHalfHearts": 19, "maxHalfHearts": 20 }
+          "stream": "health",
+          "revision": 1,
+          "data": {
+            "status": "alive",
+            "currentHalfHearts": 19,
+            "maxHalfHearts": 20
+          }
         },
         "attack": { "revision": 0, "acceptedSequence": null },
         "deathResult": {
-          "protocolVersion": 1, "type": "state",
+          "protocolVersion": 1,
+          "type": "state",
           "matchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-          "stream": "deathResult", "revision": 1,
+          "stream": "deathResult",
+          "revision": 1,
           "data": {
-            "cause": "reconnectTimeout", "killerPublicPlayerId": null, "survivedMs": 1,
+            "cause": "reconnectTimeout",
+            "killerPublicPlayerId": null,
+            "survivedMs": 1,
             "mined": { "dirt": 0, "gold": 0, "diamond": 0 },
             "pickedUp": { "dirt": 0, "gold": 0, "diamond": 0 },
             "lost": { "dirt": 0, "gold": 0, "diamond": 0 }
@@ -184,31 +340,69 @@
         "matchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
         "inventory": {
           "slots": [
-            { "resource": "diamond", "quantity": 1 }, null, null, null,
-            null, null, null, null, null, null, null, null
+            { "resource": "diamond", "quantity": 1 },
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
           ],
-          "revision": 8, "frozen": false
+          "revision": 8,
+          "frozen": false
         },
-        "equipment": { "pickaxe": "basic_pickaxe", "meleeWeapon": "basic_melee_weapon" },
+        "equipment": {
+          "pickaxe": "basic_pickaxe",
+          "meleeWeapon": "basic_melee_weapon"
+        },
         "mining": {
-          "protocolVersion": 1, "type": "state",
+          "protocolVersion": 1,
+          "type": "state",
           "matchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-          "stream": "mining", "revision": 5,
-          "data": { "status": "idle", "acceptedSequence": 4, "reason": "timedOut" }
+          "stream": "mining",
+          "revision": 5,
+          "data": {
+            "status": "idle",
+            "acceptedSequence": 4,
+            "reason": "timedOut"
+          }
+        },
+        "extraction": {
+          "protocolVersion": 1,
+          "type": "state",
+          "matchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "stream": "extraction",
+          "revision": 3,
+          "data": { "status": "closed" }
         },
         "health": {
-          "protocolVersion": 1, "type": "state",
+          "protocolVersion": 1,
+          "type": "state",
           "matchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-          "stream": "health", "revision": 10,
-          "data": { "status": "dead", "currentHalfHearts": 0, "maxHalfHearts": 20 }
+          "stream": "health",
+          "revision": 10,
+          "data": {
+            "status": "dead",
+            "currentHalfHearts": 0,
+            "maxHalfHearts": 20
+          }
         },
         "attack": { "revision": 3, "acceptedSequence": 2 },
         "deathResult": {
-          "protocolVersion": 1, "type": "state",
+          "protocolVersion": 1,
+          "type": "state",
           "matchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-          "stream": "deathResult", "revision": 10,
+          "stream": "deathResult",
+          "revision": 10,
           "data": {
-            "cause": "reconnectTimeout", "killerPublicPlayerId": null, "survivedMs": 1,
+            "cause": "reconnectTimeout",
+            "killerPublicPlayerId": null,
+            "survivedMs": 1,
             "mined": { "dirt": 0, "gold": 0, "diamond": 1 },
             "pickedUp": { "dirt": 0, "gold": 0, "diamond": 0 },
             "lost": { "dirt": 0, "gold": 0, "diamond": 1 }

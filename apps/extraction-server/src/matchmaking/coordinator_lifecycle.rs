@@ -220,6 +220,8 @@ impl Coordinator {
             .abort(match_id, reason, self.utc_now())
             .await
             .map_err(repository_error)?;
+        self.pending_settlements
+            .retain(|(pending_match_id, _), _| *pending_match_id != match_id);
         let waiting = self
             .current
             .take()

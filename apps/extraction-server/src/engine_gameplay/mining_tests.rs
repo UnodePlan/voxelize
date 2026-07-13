@@ -10,8 +10,8 @@ use voxelize::{
 use super::{
     authority::GameplayAuthority,
     components::{
-        EliminationComp, FixedEquipmentComp, MatchPlayerComp, MiningComp, ResourceInventoryComp,
-        RoundStatsComp,
+        EliminationComp, ExtractionComp, FixedEquipmentComp, MatchPlayerComp, MiningComp,
+        ResourceInventoryComp, RoundStatsComp,
     },
     intents::{MiningIntentQueue, QueuedMiningIntent},
     mining_system::MiningResolutionSystem,
@@ -70,6 +70,7 @@ fn add_player(
         .with(MiningComp::new())
         .with(RoundStatsComp::new(RoundStats::new(Duration::ZERO)))
         .with(EliminationComp::alive())
+        .with(ExtractionComp::default())
         .with(PositionComp::new(ORIGIN[0], ORIGIN[1], ORIGIN[2]))
         .with(DirectionComp::new(direction[0], direction[1], direction[2]))
         .build();

@@ -7,11 +7,16 @@ pub(super) async fn load_warehouse(
     pool: &PgPool,
     account_id: Uuid,
 ) -> Result<WarehouseSnapshot, AuthRepositoryError> {
+    let mut transaction = pool.begin().await.map_err(unavailable)?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+        .execute(&mut *transaction)
+        .await
+        .map_err(unavailable)?;
     let balances = sqlx::query_as::<_, BalanceRow>(
         "SELECT item_key, quantity FROM warehouse_balances WHERE account_id = $1",
     )
     .bind(account_id)
-    .fetch_all(pool)
+    .fetch_all(&mut *transaction)
     .await
     .map_err(unavailable)?;
 
@@ -26,14 +31,11 @@ pub(super) async fn load_warehouse(
     }
 
     let total_resources_extracted = sqlx::query_scalar::<_, i64>(
-        "SELECT COALESCE(SUM(items.quantity), 0)::BIGINT \
-         FROM settlement_items AS items \
-         INNER JOIN extraction_settlements AS settlements \
-             ON settlements.id = items.settlement_id \
-         WHERE settlements.account_id = $1",
+        "SELECT COALESCE(SUM(ledger.delta), 0)::BIGINT \
+         FROM asset_ledger AS ledger WHERE ledger.account_id = $1",
     )
     .bind(account_id)
-    .fetch_one(pool)
+    .fetch_one(&mut *transaction)
     .await
     .map_err(unavailable)?;
     let stats = sqlx::query_as::<_, StatsRow>(
@@ -45,10 +47,11 @@ pub(super) async fn load_warehouse(
          WHERE settlements.account_id = $1",
     )
     .bind(account_id)
-    .fetch_one(pool)
+    .fetch_one(&mut *transaction)
     .await
     .map_err(unavailable)?;
     snapshot.stats = stats.with_total_resources(total_resources_extracted);
+    transaction.commit().await.map_err(unavailable)?;
     Ok(snapshot)
 }
 

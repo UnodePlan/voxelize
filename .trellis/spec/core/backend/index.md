@@ -26,6 +26,7 @@ This directory contains guidelines for backend development. Fill in each file wi
 | [Authoritative Match Inventory and Loot](./authoritative-match-assets.md) | Private inventory, pending ownership, deterministic drops, auto-pickup, and Direct state | Active |
 | [Authoritative Match Mining](./authoritative-mining.md) | Strict mining intents, server timing/raycast, atomic harvest, AIR ordering, and full progress snapshots | Active |
 | [Authoritative Match Combat](./authoritative-combat.md) | Half-heart health, server-selected melee targets, terminal inventory drops, timeout arbitration, and death persistence | Active |
+| [Authoritative Extraction and Settlement](./authoritative-extraction-settlement.md) | Extraction qualification, hard-deadline sealing, atomic settlement, reconciliation, results, and warehouse projections | Active |
 
 ---
 
