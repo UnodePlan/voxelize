@@ -1,3 +1,4 @@
+import type { MessageProtocol } from "@voxelize/protocol";
 import {
   AmbientLight,
   BoxGeometry,
@@ -16,7 +17,19 @@ import {
   WebGLRenderer,
 } from "three";
 
+import type { ExtractionManifest } from "../../../../contracts/extraction/v1/typescript";
+
+import type { WorldInputActions } from "./world-input";
+import { VoxelWorldSession } from "./world-session";
+
 export type SceneMode = "lobby" | "match" | "result";
+
+export interface VoxelSceneActions extends WorldInputActions {
+  getManifest(): ExtractionManifest | null;
+  onError(message: string): void;
+  onWorldReady(): void;
+  sendWorldPacket(message: MessageProtocol): void;
+}
 
 const BLOCK_SIZE = 1;
 const GRID_RADIUS = 11;
@@ -35,8 +48,12 @@ export class VoxelBackdrop {
   private mode: SceneMode = "lobby";
   private pointerX = 0;
   private pointerY = 0;
+  private liveWorld: VoxelWorldSession | null = null;
 
-  constructor(private readonly canvas: HTMLCanvasElement) {
+  constructor(
+    private readonly canvas: HTMLCanvasElement,
+    private readonly actions: VoxelSceneActions,
+  ) {
     this.renderer = new WebGLRenderer({
       canvas,
       antialias: true,
@@ -73,10 +90,36 @@ export class VoxelBackdrop {
     this.beacon.visible = mode !== "lobby";
   }
 
+  handleNetworkMessage(message: MessageProtocol): void {
+    if (message.type === "INIT") {
+      const manifest = this.actions.getManifest();
+      if (manifest === null) {
+        this.actions.onError("资源清单尚未就绪");
+        return;
+      }
+      this.disposeLiveWorld();
+      this.liveWorld = new VoxelWorldSession(
+        this.canvas,
+        manifest,
+        this.actions,
+      );
+      this.liveWorld.resize(
+        Math.max(1, this.canvas.clientWidth),
+        Math.max(1, this.canvas.clientHeight),
+      );
+    }
+    this.liveWorld?.enqueue(message);
+  }
+
+  resetLiveWorld(): void {
+    this.disposeLiveWorld();
+  }
+
   dispose(): void {
     cancelAnimationFrame(this.animationFrame);
     this.resizeObserver.disconnect();
     window.removeEventListener("pointermove", this.handlePointer);
+    this.disposeLiveWorld();
     this.renderer.dispose();
   }
 
@@ -168,9 +211,17 @@ export class VoxelBackdrop {
     this.renderer.setSize(width, height, false);
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
+    this.liveWorld?.resize(width, height);
   }
 
   private animate = (): void => {
+    if (this.mode === "match" && this.liveWorld?.ready === true) {
+      this.liveWorld.update();
+      this.liveWorld.render(this.renderer);
+      this.recordFrame();
+      this.animationFrame = requestAnimationFrame(this.animate);
+      return;
+    }
     const reduced = this.reducedMotion.matches;
     const targetZ = this.mode === "match" ? 14 : 20;
     const targetY = this.mode === "match" ? 7.5 : 12;
@@ -186,10 +237,20 @@ export class VoxelBackdrop {
     }
     this.camera.lookAt(0, 0.5, 0);
     this.renderer.render(this.scene, this.camera);
+    this.recordFrame();
+    this.animationFrame = requestAnimationFrame(this.animate);
+  };
+
+  private recordFrame(): void {
     this.frame += 1;
     if (this.frame % 30 === 0) {
       this.canvas.dataset.renderFrame = String(this.frame);
     }
-    this.animationFrame = requestAnimationFrame(this.animate);
-  };
+  }
+
+  private disposeLiveWorld(): void {
+    this.liveWorld?.dispose();
+    this.liveWorld = null;
+    delete this.canvas.dataset.liveWorld;
+  }
 }

@@ -1,5 +1,8 @@
-use hashbrown::HashMap;
 use specs::{ReadExpect, System, WriteExpect};
+
+mod batching;
+
+use batching::batch_messages;
 
 use crate::{
     common::ClientFilter,
@@ -10,33 +13,6 @@ use crate::{
 };
 
 pub struct BroadcastSystem;
-
-fn filter_key(filter: &ClientFilter) -> String {
-    match filter {
-        ClientFilter::All => "all".to_string(),
-        ClientFilter::Direct(id) => format!("direct:{}", id),
-        ClientFilter::Include(ids) => {
-            let mut sorted = ids.clone();
-            sorted.sort();
-            format!("include:{}", sorted.join(","))
-        }
-        ClientFilter::Exclude(ids) => {
-            let mut sorted = ids.clone();
-            sorted.sort();
-            format!("exclude:{}", sorted.join(","))
-        }
-    }
-}
-
-fn can_batch(msg_type: i32) -> bool {
-    matches!(
-        MessageType::try_from(msg_type),
-        Ok(MessageType::Peer)
-            | Ok(MessageType::Entity)
-            | Ok(MessageType::Update)
-            | Ok(MessageType::Event)
-    )
-}
 
 fn is_immediate(msg_type: i32) -> bool {
     matches!(
@@ -50,38 +26,6 @@ fn should_send_to_transport(msg_type: i32) -> bool {
         MessageType::try_from(msg_type),
         Ok(MessageType::Entity) | Ok(MessageType::Peer)
     )
-}
-
-fn merge_messages(base: &mut Message, other: Message) {
-    base.peers.extend(other.peers);
-    base.entities.extend(other.entities);
-    base.updates.extend(other.updates);
-    base.events.extend(other.events);
-}
-
-fn batch_messages(messages: Vec<(Message, ClientFilter)>) -> Vec<(Message, ClientFilter)> {
-    let mut batched: HashMap<(i32, String), (Message, ClientFilter)> = HashMap::new();
-    let mut unbatched: Vec<(Message, ClientFilter)> = Vec::new();
-
-    for (message, filter) in messages {
-        let msg_type = message.r#type;
-
-        if can_batch(msg_type) {
-            let key = (msg_type, filter_key(&filter));
-
-            if let Some((existing, _)) = batched.get_mut(&key) {
-                merge_messages(existing, message);
-            } else {
-                batched.insert(key, (message, filter));
-            }
-        } else {
-            unbatched.push((message, filter));
-        }
-    }
-
-    let mut result: Vec<(Message, ClientFilter)> = batched.into_values().collect();
-    result.extend(unbatched);
-    result
 }
 
 impl<'a> System<'a> for BroadcastSystem {

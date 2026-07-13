@@ -19,6 +19,7 @@ use super::{
 };
 use crate::{
     contracts::{bundled_manifest, ExtractionManifest, ResourceKey},
+    engine_movement::{is_authoritative_movement_installed, MOVEMENT_SYSTEM_NAME},
     gameplay::{
         combat::{CombatState, HealthState},
         config::GameplayConfig,
@@ -231,12 +232,12 @@ pub(crate) fn install_gameplay_runtime(
     world
         .install_before_broadcast_system(COMBAT_SYSTEM_NAME, || CombatResolutionSystem)
         .map_err(|_| GameplayInstallError::DispatcherUnavailable)?;
-    world.extend_dispatcher(|builder| {
-        builder.with(
-            GameplayRuntimeSystem,
-            GAMEPLAY_SYSTEM_NAME,
-            DEFAULT_DISPATCHER_LEAVES,
-        )
+    let mut dependencies = DEFAULT_DISPATCHER_LEAVES.to_vec();
+    if is_authoritative_movement_installed(world) {
+        dependencies.push(MOVEMENT_SYSTEM_NAME);
+    }
+    world.extend_dispatcher(move |builder| {
+        builder.with(GameplayRuntimeSystem, GAMEPLAY_SYSTEM_NAME, &dependencies)
     });
     Ok(())
 }

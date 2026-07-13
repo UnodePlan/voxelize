@@ -1,7 +1,7 @@
 import { readdir, readFile, stat } from "node:fs/promises";
 import { resolve } from "node:path";
 
-const forbidden = ["__VOXEL_EXTRACTION_E2E__", "e2e-main"];
+const forbidden = ["__VOXEL_EXTRACTION_E2E__", "e2e-main", "core-facade"];
 const files = await collectFiles(resolve("dist"));
 
 for (const file of files) {

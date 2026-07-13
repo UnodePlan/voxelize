@@ -4,11 +4,14 @@ use specs::{
 };
 
 use crate::{
-    BackgroundEntitiesSaver, Bookkeeping, ClientFilter, Clients, DoNotPersistComp, ETypeComp,
-    EntityFlag, EntityIDs, EntityOperation, EntityProtocol, IDComp, InteractorComp, KdTree,
-    Message, MessageQueues, MessageType, MetadataComp, Physics, PositionComp, Vec3, VoxelComp,
-    WorldConfig,
+    world::visibility::bounded_visibility_radius, BackgroundEntitiesSaver, Bookkeeping,
+    ClientFilter, Clients, DoNotPersistComp, ETypeComp, EntityFlag, EntityIDs, EntityProtocol,
+    IDComp, InteractorComp, KdTree, Message, MessageQueues, MessageType, MetadataComp, Physics,
+    PositionComp, Vec3, VoxelComp, WorldConfig,
 };
+
+use super::legacy_visibility::project_legacy_entity_updates;
+use super::visibility::{project_entity_visibility, DeletedEntityRecord, EntityVisibilityRecord};
 
 #[derive(Default)]
 pub struct EntitiesSendingSystem {
@@ -64,6 +67,8 @@ impl<'a> System<'a> for EntitiesSendingSystem {
         self.new_entity_ids_buffer.clear();
 
         let entity_visible_radius = config.entity_visible_radius;
+        let bounded_radius =
+            bounded_visibility_radius(config.entity_visibility_policy, entity_visible_radius);
 
         let mut new_entity_handlers = HashMap::new();
 
@@ -90,7 +95,7 @@ impl<'a> System<'a> for EntitiesSendingSystem {
 
         let old_entity_handlers = std::mem::take(&mut physics.entity_to_handlers);
 
-        let mut deleted_entities: Vec<(String, String, String)> = Vec::new();
+        let mut deleted_entities = Vec::new();
 
         for (id, (etype, ent, metadata, persisted)) in old_entities.iter() {
             if updated_ids.contains(id) {
@@ -106,7 +111,11 @@ impl<'a> System<'a> for EntitiesSendingSystem {
                 physics.unregister(body_handle, collider_handle);
             }
 
-            deleted_entities.push((id.clone(), etype.clone(), metadata.clone()));
+            deleted_entities.push(DeletedEntityRecord {
+                id: id.clone(),
+                etype: etype.clone(),
+                metadata: metadata.clone(),
+            });
         }
 
         physics.entity_to_handlers = new_entity_handlers;
@@ -120,6 +129,7 @@ impl<'a> System<'a> for EntitiesSendingSystem {
         let mut new_bookkeeping_records = HashMap::new();
         let mut entity_positions: HashMap<String, Vec3<f32>> = HashMap::new();
         let mut entity_metadata_map: HashMap<String, (String, String, bool)> = HashMap::new();
+        let mut visibility_records = Vec::new();
 
         for (ent, id, metadata, etype, _, do_not_persist, position, voxel) in (
             &entities,
@@ -139,11 +149,11 @@ impl<'a> System<'a> for EntitiesSendingSystem {
 
             let persisted = do_not_persist.is_none();
 
-            let pos = position
+            let spatial_position = position
                 .map(|p| p.0.clone())
-                .or_else(|| voxel.map(|v| Vec3(v.0 .0 as f32, v.0 .1 as f32, v.0 .2 as f32)))
-                .unwrap_or(Vec3(0.0, 0.0, 0.0));
-            entity_positions.insert(id.0.clone(), pos);
+                .or_else(|| voxel.map(|v| Vec3(v.0 .0 as f32, v.0 .1 as f32, v.0 .2 as f32)));
+            let pos = spatial_position.clone().unwrap_or(Vec3(0.0, 0.0, 0.0));
+            entity_positions.insert(id.0.clone(), pos.clone());
 
             let is_new = self.new_entity_ids_buffer.contains(&id.0);
             let (json_str, updated) = metadata.to_cached_str();
@@ -153,137 +163,62 @@ impl<'a> System<'a> for EntitiesSendingSystem {
                     .insert(id.0.clone(), (etype.0.clone(), json_str.clone(), is_new));
             }
 
+            visibility_records.push(EntityVisibilityRecord {
+                id: id.0.clone(),
+                etype: etype.0.clone(),
+                metadata: json_str.clone(),
+                position: spatial_position,
+                changed: updated,
+                is_new,
+            });
+
             new_bookkeeping_records.insert(
                 id.0.to_owned(),
                 (etype.0.to_owned(), ent, json_str, persisted),
             );
         }
 
-        let all_client_ids: Vec<String> = clients.keys().cloned().collect();
-
-        let entity_to_client_id: HashMap<Entity, String> = clients
-            .iter()
-            .map(|(client_id, client)| (client.entity, client_id.clone()))
-            .collect();
-
         let mut client_updates: HashMap<String, Vec<EntityProtocol>> = HashMap::new();
-
-        for (entity_id, (etype, metadata_str, is_new)) in &entity_metadata_map {
-            let pos = entity_positions
-                .get(entity_id)
-                .cloned()
-                .unwrap_or(Vec3(0.0, 0.0, 0.0));
-            let nearby_players = kdtree.players_within_radius(&pos, entity_visible_radius);
-
-            for player_entity in nearby_players {
-                let client_id = match entity_to_client_id.get(player_entity) {
-                    Some(id) => id,
-                    None => continue,
-                };
-
-                let client_known = bookkeeping
+        if let Some(radius) = bounded_radius {
+            visibility_records.sort_by(|left, right| left.id.cmp(&right.id));
+            let mut client_ids: Vec<_> = clients.keys().cloned().collect();
+            client_ids.sort();
+            for client_id in client_ids {
+                let client_position = clients
+                    .get(&client_id)
+                    .and_then(|client| positions.get(client.entity))
+                    .map(|position| position.0.clone())
+                    .unwrap_or(Vec3(f32::NAN, f32::NAN, f32::NAN));
+                let known = bookkeeping
                     .client_known_entities
-                    .get(client_id)
-                    .map(|set| set.contains(entity_id))
-                    .unwrap_or(false);
-
-                let operation = if !client_known {
-                    EntityOperation::Create
-                } else if *is_new {
-                    EntityOperation::Create
-                } else {
-                    EntityOperation::Update
-                };
-
-                client_updates
-                    .entry(client_id.clone())
-                    .or_default()
-                    .push(EntityProtocol {
-                        operation,
-                        id: entity_id.clone(),
-                        r#type: etype.clone(),
-                        metadata: Some(metadata_str.clone()),
-                    });
-
+                    .get(&client_id)
+                    .cloned()
+                    .unwrap_or_default();
+                let projection = project_entity_visibility(
+                    &client_position,
+                    &known,
+                    &visibility_records,
+                    &deleted_entities,
+                    radius,
+                );
                 bookkeeping
                     .client_known_entities
-                    .entry(client_id.clone())
-                    .or_default()
-                    .insert(entity_id.clone());
+                    .insert(client_id.clone(), projection.visible);
+                client_updates.insert(client_id, projection.updates);
             }
-        }
-
-        for (entity_id, etype, metadata_str) in &deleted_entities {
-            for client_id in &all_client_ids {
-                let client_knew = bookkeeping
-                    .client_known_entities
-                    .get(client_id)
-                    .map(|set| set.contains(entity_id))
-                    .unwrap_or(false);
-
-                if client_knew {
-                    client_updates
-                        .entry(client_id.clone())
-                        .or_default()
-                        .push(EntityProtocol {
-                            operation: EntityOperation::Delete,
-                            id: entity_id.clone(),
-                            r#type: etype.clone(),
-                            metadata: Some(metadata_str.clone()),
-                        });
-
-                    if let Some(known) = bookkeeping.client_known_entities.get_mut(client_id) {
-                        known.remove(entity_id);
-                    }
-                }
-            }
-        }
-
-        for (client_id, client) in clients.iter() {
-            let client_pos = match positions.get(client.entity) {
-                Some(p) => p.0.clone(),
-                None => continue,
-            };
-
-            if let Some(known_entities) = bookkeeping.client_known_entities.get_mut(client_id) {
-                let entities_to_delete: Vec<String> = known_entities
-                    .iter()
-                    .filter(|entity_id| {
-                        if let Some((etype, ..)) = new_bookkeeping_records.get(*entity_id) {
-                            if etype.starts_with("block::") {
-                                return false;
-                            }
-                        }
-                        if let Some(entity_pos) = entity_positions.get(*entity_id) {
-                            let dx = entity_pos.0 - client_pos.0;
-                            let dy = entity_pos.1 - client_pos.1;
-                            let dz = entity_pos.2 - client_pos.2;
-                            let dist_sq = dx * dx + dy * dy + dz * dz;
-                            dist_sq > entity_visible_radius * entity_visible_radius
-                        } else {
-                            true
-                        }
-                    })
-                    .cloned()
-                    .collect();
-
-                for entity_id in entities_to_delete {
-                    if let Some((etype, _ent, metadata, _persisted)) =
-                        new_bookkeeping_records.get(&entity_id)
-                    {
-                        client_updates
-                            .entry(client_id.clone())
-                            .or_default()
-                            .push(EntityProtocol {
-                                operation: EntityOperation::Delete,
-                                id: entity_id.clone(),
-                                r#type: etype.clone(),
-                                metadata: Some(metadata.clone()),
-                            });
-                    }
-                    known_entities.remove(&entity_id);
-                }
-            }
+        } else {
+            project_legacy_entity_updates(
+                &clients,
+                &kdtree,
+                &positions,
+                entity_visible_radius,
+                &entity_metadata_map,
+                &entity_positions,
+                &new_bookkeeping_records,
+                &deleted_entities,
+                &mut bookkeeping,
+                &mut client_updates,
+            );
         }
 
         bookkeeping.entities = new_bookkeeping_records;

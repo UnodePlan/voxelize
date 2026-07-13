@@ -238,6 +238,8 @@ export class Clouds extends Group {
     name: "cloud-worker",
   });
 
+  private disposed = false;
+
   /**
    * A inner THREE.JS clock used to determine the time delta between frames.
    */
@@ -354,7 +356,9 @@ export class Clouds extends Group {
    * Reset the clouds to their initial state.
    */
   reset = async () => {
-    this.children.forEach((child: Mesh) => {
+    if (this.disposed) return;
+
+    [...this.children].forEach((child: Mesh) => {
       if (child.parent) {
         child.parent.remove(child);
         child.geometry?.dispose();
@@ -373,7 +377,7 @@ export class Clouds extends Group {
    * @param position The new position that this cloud should be centered around.
    */
   update = (position: Vector3) => {
-    if (!this.isInitialized) return;
+    if (this.disposed || !this.isInitialized) return;
 
     // Normalize the delta
     this.timer.update();
@@ -418,6 +422,8 @@ export class Clouds extends Group {
    * Initialize the clouds asynchronously.
    */
   private initialize = async () => {
+    if (this.disposed) return;
+
     const { width } = this.options;
     const [lx, lz] = this.locatedCell;
 
@@ -426,6 +432,10 @@ export class Clouds extends Group {
 
       for (let z = 0; z < width; z++) {
         const cell = await this.makeCell(x + lx, z + lz);
+        if (this.disposed) {
+          cell.geometry.dispose();
+          return;
+        }
         this.add(cell);
         arr.push(cell);
       }
@@ -436,20 +446,43 @@ export class Clouds extends Group {
     this.isInitialized = true;
   };
 
+  /** Release cloud meshes, material and background workers. */
+  dispose = () => {
+    if (this.disposed) return;
+    this.disposed = true;
+    this.isInitialized = false;
+
+    this.pool.terminate();
+    const geometries = new Set<BufferGeometry>();
+    this.traverse((object) => {
+      const mesh = object as Mesh;
+      if (!mesh.isMesh || geometries.has(mesh.geometry)) return;
+      geometries.add(mesh.geometry);
+      mesh.geometry.dispose();
+    });
+    this.material.dispose();
+    this.meshes.length = 0;
+    this.clear();
+  };
+
   /**
    * Generate a new cloud row in the `+/- x` direction.
    */
   private shiftX = async (direction = 1) => {
+    if (this.disposed) return;
+
     const { width } = this.options;
 
     const arr = direction > 0 ? this.meshes.shift() : this.meshes.pop();
 
     for (let z = 0; z < width; z++) {
+      if (this.disposed) return;
       await this.makeCell(
         this.xOffset + (direction > 0 ? width : 0),
         z + this.zOffset,
         arr[z],
       );
+      if (this.disposed) return;
     }
 
     if (direction > 0) {
@@ -465,6 +498,8 @@ export class Clouds extends Group {
    * Generate a new cloud row in the `+/- z` direction.
    */
   private shiftZ = async (direction = 1) => {
+    if (this.disposed) return;
+
     const { width } = this.options;
 
     // Guard against uninitialized meshes array
@@ -497,6 +532,7 @@ export class Clouds extends Group {
         this.zOffset + (direction > 0 ? width : 0),
         cell,
       );
+      if (this.disposed) return;
 
       // Safe array insertions
       if (direction > 0) {

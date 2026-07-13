@@ -138,6 +138,7 @@ import { ChunkRenderer, makeSceneColorTexture } from "./chunk-renderer";
 import { Clouds, CloudsOptions } from "./clouds";
 import { CSMRenderer } from "./csm-renderer";
 import { ItemDef, ItemRegistry } from "./items";
+import { disposeWorldLifecycle } from "./lifecycle";
 import { Loader } from "./loader";
 import { ChunkPipeline, MeshPipeline } from "./pipelines";
 import { Registry } from "./registry";
@@ -850,6 +851,7 @@ export class World<T = any> extends Scene implements NetIntercept {
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     ((chunk: Chunk) => void)[]
   >();
+  private blockEntityFallbackTimeouts = new Set<number>();
 
   private blockEntitiesMap: Map<
     string,
@@ -902,6 +904,8 @@ export class World<T = any> extends Scene implements NetIntercept {
   private voxelDeltas = new Map<string, VoxelDelta[]>();
   private deltaSequenceCounter = 0;
   private cleanupDeltasInterval: number | null = null;
+  private stopStatsSyncInterval: (() => void) | null = null;
+  private disposed = false;
 
   private lightJobQueue: LightJob[] = [];
   private lightJobIdCounter = 0;
@@ -963,7 +967,8 @@ export class World<T = any> extends Scene implements NetIntercept {
     this.setupUniforms();
     this.startDeltaCleanup();
 
-    setWorkerInterval(() => {
+    this.stopStatsSyncInterval = setWorkerInterval(() => {
+      if (this.disposed) return;
       this.packets.push({
         type: "METHOD",
         method: {
@@ -972,6 +977,70 @@ export class World<T = any> extends Scene implements NetIntercept {
         },
       });
     }, statsSyncInterval);
+  }
+
+  /** Release all resources owned by this world. Safe to call more than once. */
+  dispose() {
+    if (this.disposed) return;
+    this.disposed = true;
+    this.isInitialized = false;
+
+    this.stopStatsSyncInterval?.();
+    this.stopStatsSyncInterval = null;
+    if (this.cleanupDeltasInterval !== null) {
+      clearInterval(this.cleanupDeltasInterval);
+      this.cleanupDeltasInterval = null;
+    }
+
+    this.meshWorkerPool.terminate();
+    this.urgentMeshWorkerPool.terminate();
+    this.lightWorkerPool.terminate();
+
+    // 终止 Worker 后唤醒等待批处理完成的调用方，避免留下永久 pending 的等待。
+    const lightResolvers = this.lightJobsCompleteResolvers.splice(0);
+    lightResolvers.forEach((resolve) => resolve());
+
+    disposeWorldLifecycle({
+      scene: this,
+      chunkPipeline: this.chunkPipeline,
+      chunkRenderer: this.chunkRenderer,
+      blockMeshCache: this.blockMeshCache,
+      sky: this.sky,
+      clouds: this.clouds,
+      loader: this.loader,
+      registry: this.registry,
+      items: this.items,
+      csmRenderer: this.csmRenderer,
+    });
+
+    this.csmRenderer = null;
+    this.chunkPipeline = new ChunkPipeline();
+    this.meshPipeline = new MeshPipeline();
+    this.physics.bodies.length = 0;
+    this.aabbOverrides.clear();
+    this.oldBlocks.clear();
+    this.chunkInitializeListeners.clear();
+    this.blockEntitiesMap.clear();
+    this.blockEntityUpdateListeners.clear();
+    this.blockUpdateListeners.clear();
+    this.blockEntityFallbackTimeouts.forEach((timeout) =>
+      window.clearTimeout(timeout),
+    );
+    this.blockEntityFallbackTimeouts.clear();
+    this.chunkEvents.removeAllListeners();
+    this.voxelDeltas.clear();
+    this.blockUpdatesQueue.length = 0;
+    this.blockUpdatesToEmit.length = 0;
+    this.lightJobQueue.length = 0;
+    this.packets.length = 0;
+    this.textureLoaderLastMap = {};
+    this.initialData = null;
+    this.initialEntities = null;
+    this.extraInitData = {};
+    this.activeLightBatch = null;
+    this.accumulatedLightOps = null;
+    this.isTrackingChunks = false;
+    this.activeBlockUpdateSource = null;
   }
 
   private startDeltaCleanup() {
@@ -3541,6 +3610,10 @@ export class World<T = any> extends Scene implements NetIntercept {
    * the registry, setting the options, and creating the texture atlas.
    */
   async initialize() {
+    if (this.disposed) {
+      throw new Error("Cannot initialize a disposed world.");
+    }
+
     if (this.isInitialized) {
       console.warn("World has already been isInitialized.");
       return;
@@ -3633,6 +3706,7 @@ export class World<T = any> extends Scene implements NetIntercept {
     }
 
     await this.loadMaterials();
+    if (this.disposed) return;
 
     const registryData = this.registry.serialize();
     this.meshWorkerPool.postMessage({ type: "init", registryData });
@@ -3727,6 +3801,8 @@ export class World<T = any> extends Scene implements NetIntercept {
       }
     >,
   ) {
+    if (this.disposed) return;
+
     const { type } = message;
 
     switch (type) {
@@ -4147,16 +4223,19 @@ export class World<T = any> extends Scene implements NetIntercept {
     let isResolved = false;
     let unbind = () => {};
     const fallbackTimeout = window.setTimeout(() => {
-      if (isResolved) return;
+      this.blockEntityFallbackTimeouts.delete(fallbackTimeout);
+      if (this.disposed || isResolved) return;
       isResolved = true;
       unbind();
       listener(updateData);
     }, 3000);
+    this.blockEntityFallbackTimeouts.add(fallbackTimeout);
 
     unbind = this.addChunkInitListener(chunkCoords, () => {
-      if (isResolved) return;
+      if (this.disposed || isResolved) return;
       isResolved = true;
       window.clearTimeout(fallbackTimeout);
+      this.blockEntityFallbackTimeouts.delete(fallbackTimeout);
       listener(updateData);
       unbind();
     });
@@ -5514,6 +5593,11 @@ export class World<T = any> extends Scene implements NetIntercept {
     this.isTrackingChunks = true;
 
     const processUpdatesInIdleTime = () => {
+      if (this.disposed) {
+        this.isTrackingChunks = false;
+        return;
+      }
+
       if (this.blockUpdatesQueue.length > 0) {
         const updates = this.blockUpdatesQueue.splice(
           0,
@@ -5555,6 +5639,8 @@ export class World<T = any> extends Scene implements NetIntercept {
   };
 
   private processDirtyChunks = async () => {
+    if (this.disposed) return;
+
     const dirtyKeys = this.meshPipeline.getDirtyKeys();
     if (dirtyKeys.length === 0) return;
 
@@ -5593,6 +5679,7 @@ export class World<T = any> extends Scene implements NetIntercept {
     });
 
     const results = await Promise.all(workerPromises);
+    if (this.disposed) return;
 
     for (const result of results) {
       if (result.geometries) {

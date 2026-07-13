@@ -36,7 +36,16 @@ declare global {
 
 export function startE2eClient(root: HTMLElement): void {
   const elements = mountProductShell(root);
-  const scene = new VoxelBackdrop(elements.canvas);
+  const scene = new VoxelBackdrop(elements.canvas, {
+    attack: () => undefined,
+    dropSlot: () => undefined,
+    getManifest: () => manifest,
+    mining: () => undefined,
+    movement: () => undefined,
+    onError: () => undefined,
+    onWorldReady: () => undefined,
+    sendWorldPacket: () => undefined,
+  });
   let state = lobbyState();
 
   const render = () => {

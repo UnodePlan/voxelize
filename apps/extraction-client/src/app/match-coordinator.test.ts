@@ -199,6 +199,57 @@ describe("MatchCoordinator", () => {
     });
     harness.coordinator.close();
   });
+
+  it("waits for gameplay state and a rebuilt voxel world before going online", async () => {
+    const network = fakeNetwork();
+    let events!: GameNetworkEvents;
+    const harness = coordinatorHarness(
+      gameApi({ getQueue: async () => activeQueue() }),
+      (_manifest, incomingEvents) => {
+        events = incomingEvents;
+        return network;
+      },
+    );
+    harness.coordinator.activate();
+
+    await harness.coordinator.loadLobby();
+    await vi.waitFor(() => expect(harness.state().gameplay).not.toBeNull());
+    expect(harness.state().connection).toBe("connecting");
+    events.onConnection("online");
+    expect(harness.state().connection).toBe("connecting");
+    harness.coordinator.markWorldReady();
+    expect(harness.state().connection).toBe("online");
+
+    events.onConnection("reconnecting");
+    events.onVoxelReset?.();
+    events.onGameplayState(gameplay);
+    events.onConnection("online");
+    expect(harness.state().connection).toBe("reconnecting");
+    harness.coordinator.markWorldReady();
+    expect(harness.state().connection).toBe("online");
+    harness.coordinator.close();
+  });
+
+  it("disposes the live voxel world after closing the authentication generation", () => {
+    const resetWorld = vi.fn();
+    let state = authenticatedState();
+    const coordinator = new MatchCoordinator({
+      game: gameApi({}),
+      getState: () => state,
+      dispatch: (action) => {
+        state = reduceAppState(state, action);
+      },
+      networkFactory: () => fakeNetwork(),
+      onAuthenticationInvalidated: vi.fn(),
+      onVoxelReset: resetWorld,
+    });
+    coordinator.activate();
+    resetWorld.mockClear();
+
+    coordinator.close();
+
+    expect(resetWorld).toHaveBeenCalledTimes(1);
+  });
 });
 
 function coordinatorHarness(

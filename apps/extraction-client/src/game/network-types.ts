@@ -1,3 +1,5 @@
+import type { MessageProtocol } from "@voxelize/protocol";
+
 import type { GameplayStateData } from "../../../../contracts/extraction/v1/typescript";
 
 export interface GameNetworkEvents {
@@ -6,6 +8,8 @@ export interface GameNetworkEvents {
   onGameplayState(state: GameplayStateData): void;
   onProtocolError(message: string): void;
   onReconnectExpired(): void;
+  onVoxelMessage?(message: MessageProtocol): void;
+  onVoxelReset?(): void;
 }
 
 export interface PendingRequest {

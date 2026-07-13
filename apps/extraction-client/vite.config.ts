@@ -1,6 +1,18 @@
+import { fileURLToPath } from "node:url";
+
 import { defineConfig } from "vite";
 
+const testCoreFacade = fileURLToPath(
+  new URL("./src/testing/core-facade.ts", import.meta.url),
+);
+
 export default defineConfig({
+  resolve: {
+    alias:
+      process.env.VITEST === "true"
+        ? { "@voxelize/core": testCoreFacade }
+        : undefined,
+  },
   server: {
     host: "127.0.0.1",
     port: 5173,

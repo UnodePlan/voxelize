@@ -14,7 +14,7 @@ const MAX_U32 = 4_294_967_295;
 export class GameplayStateChannel {
   private pending = new Map<string, PendingRequest>();
   private requestSequence = 0;
-  private syncScheduled = false;
+  private syncTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
     private readonly manifest: ExtractionManifest,
@@ -63,15 +63,20 @@ export class GameplayStateChannel {
   }
 
   scheduleSync(): void {
-    if (this.syncScheduled) return;
-    this.syncScheduled = true;
-    setTimeout(() => {
-      this.syncScheduled = false;
-      void this.request().catch(() => undefined);
+    if (this.syncTimer !== null) return;
+    this.syncTimer = setTimeout(() => {
+      this.syncTimer = null;
+      try {
+        void this.request().catch(() => undefined);
+      } catch {
+        // Socket 可能在定时器与请求之间关闭；关闭路径已经拒绝全部 pending。
+      }
     }, 40);
   }
 
   rejectAll(message: string): void {
+    if (this.syncTimer !== null) clearTimeout(this.syncTimer);
+    this.syncTimer = null;
     this.pending.forEach((request) => {
       clearTimeout(request.timeout);
       request.reject(new Error(message));

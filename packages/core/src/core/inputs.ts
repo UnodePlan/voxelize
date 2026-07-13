@@ -434,8 +434,19 @@ export class Inputs<T extends string = any> extends EventEmitter {
    * Reset all keyboard keys by unbinding all keys.
    */
   reset = () => {
-    this.keyBounds.forEach((bounds) => bounds.forEach((item) => item.unbind()));
-    this.unbinds.forEach((fn) => fn());
+    const keyBounds = [...this.keyBounds.values()].flat();
+    keyBounds.forEach((item) => item.unbind());
+
+    this.keyBounds.clear();
+    this.keyDownCallbacks.clear();
+    this.keyUpCallbacks.clear();
+    this.keyPressCallbacks.clear();
+    this.clickCallbacks.forEach((callbacks) => callbacks.clear());
+    this.scrollCallbacks.clear();
+
+    const unbinds = this.unbinds.splice(0);
+    unbinds.forEach((fn) => fn());
+    this.removeAllListeners();
   };
 
   /**
@@ -483,9 +494,18 @@ export class Inputs<T extends string = any> extends EventEmitter {
       if (codeBounds) runBounds(e, codeBounds);
     };
 
-    document.addEventListener("keydown", keyListener("keydown"));
-    document.addEventListener("keyup", keyListener("keyup"));
-    document.addEventListener("keypress", keyListener("keypress"));
+    const keydownListener = keyListener("keydown");
+    const keyupListener = keyListener("keyup");
+    const keypressListener = keyListener("keypress");
+
+    document.addEventListener("keydown", keydownListener);
+    document.addEventListener("keyup", keyupListener);
+    document.addEventListener("keypress", keypressListener);
+    this.unbinds.push(() => {
+      document.removeEventListener("keydown", keydownListener);
+      document.removeEventListener("keyup", keyupListener);
+      document.removeEventListener("keypress", keypressListener);
+    });
   };
 
   /**

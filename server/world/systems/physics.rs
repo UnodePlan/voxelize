@@ -116,10 +116,10 @@ impl<'a> System<'a> for PhysicsSystem {
             });
 
         // Move the clients' rigid bodies to their positions
-        (&entities, &interactors, &positions)
+        (&entities, &interactors, &bodies)
             .join()
-            .for_each(|(ent, interactor, position)| {
-                physics.move_rapier_body(interactor.body_handle(), &position.0);
+            .for_each(|(ent, interactor, body)| {
+                physics.move_rapier_body(interactor.body_handle(), &body.0.get_position());
                 collision_map.insert(interactor.collider_handle().clone(), ent);
             });
 
@@ -173,14 +173,8 @@ impl<'a> System<'a> for PhysicsSystem {
 
         // Collision detection, push bodies away from one another.
         let mut collision_data = Vec::new();
-        for (curr_chunk, body, interactor, entity, position) in (
-            &curr_chunks,
-            &mut bodies,
-            &interactors,
-            &entities,
-            &positions,
-        )
-            .join()
+        for (curr_chunk, body, interactor, entity) in
+            (&curr_chunks, &mut bodies, &interactors, &entities).join()
         {
             if !chunks.is_chunk_ready(&curr_chunk.coords) {
                 continue;
@@ -188,12 +182,9 @@ impl<'a> System<'a> for PhysicsSystem {
 
             let rapier_body = physics.get(&interactor.0);
             let after = rapier_body.translation();
-
-            let Vec3(px, py, pz) = position.0;
-
-            let dx = after.x - px;
-            let dy = after.y - py;
-            let dz = after.z - pz;
+            // PositionComp 对玩家表示眼睛位置，Rapier 与 RigidBodyComp 均表示碰撞体中心。
+            let Vec3(dx, dy, dz) =
+                rapier_displacement_from_body_center(&body.0, [after.x, after.y, after.z]);
 
             let dx = if dx.abs() < 0.001 { 0.0 } else { dx };
             let dy = if dy.abs() < 0.001 { 0.0 } else { dy };
@@ -239,5 +230,27 @@ impl<'a> System<'a> for PhysicsSystem {
                 (dz * config.collision_repulsion).min(3.0),
             );
         }
+    }
+}
+
+fn rapier_displacement_from_body_center(body: &crate::RigidBody, after: [f32; 3]) -> Vec3<f32> {
+    let Vec3(px, py, pz) = body.get_position();
+    Vec3(after[0] - px, after[1] - py, after[2] - pz)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::AABB;
+
+    #[test]
+    fn rapier_displacement_uses_body_center_instead_of_client_eye_position() {
+        let mut body =
+            crate::RigidBody::new(&AABB::new().scale_x(0.8).scale_y(1.8).scale_z(0.8).build())
+                .build();
+        body.set_position(1.0, 2.0, 3.0);
+
+        let Vec3(dx, dy, dz) = rapier_displacement_from_body_center(&body, [1.0, 2.0, 3.0]);
+        assert_eq!([dx, dy, dz], [0.0, 0.0, 0.0]);
     }
 }

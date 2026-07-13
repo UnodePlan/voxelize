@@ -180,4 +180,13 @@ export class ItemRegistry {
     }
     this.renderers.clear();
   }
+
+  dispose(): void {
+    this.disposeRenderers();
+    this.itemsById.clear();
+    this.itemsByName.clear();
+    this.rendererFactories.clear();
+    this.world = null;
+    this.imageResolver = null;
+  }
 }

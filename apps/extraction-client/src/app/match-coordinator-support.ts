@@ -1,3 +1,5 @@
+import type { MessageProtocol } from "@voxelize/protocol";
+
 import type {
   ExtractionManifest,
   GameplayStateData,
@@ -6,17 +8,26 @@ import type { GameApi } from "../api/game";
 import { ApiError } from "../api/http";
 import type { QueueSnapshot } from "../api/models";
 import type { GameNetworkEvents } from "../game/network";
+import type { MovementInput } from "../game/network";
 
 import type { AppAction, AppState } from "./state";
 
 export interface MatchNetwork {
+  attack?(): void;
   close(): void;
   connect(): Promise<void>;
   join(worldName: string): void;
   leave(): void;
+  mining?(
+    action: "cancel" | "maintain" | "start",
+    voxel?: [number, number, number],
+  ): void;
+  movement?(input: MovementInput): void;
+  dropSlot?(slot: number, expectedInventoryRevision: number): void;
   requestGameplayState(): Promise<GameplayStateData>;
   resume(worldName: string): void;
   retryResume(): void;
+  sendWorldPacket?(message: MessageProtocol): void;
 }
 
 export interface MatchCoordinatorOptions {
@@ -28,6 +39,8 @@ export interface MatchCoordinatorOptions {
     events: GameNetworkEvents,
   ) => MatchNetwork;
   onAuthenticationInvalidated(): void;
+  onVoxelMessage?(message: MessageProtocol): void;
+  onVoxelReset?(): void;
 }
 
 export class MatchGeneration {
@@ -78,9 +91,13 @@ interface MatchNetworkEventOptions {
   getState(): AppState;
   isCurrent(): boolean;
   onAuthenticationInvalidated(): void;
+  onConnection?(connection: AppState["connection"]): void;
+  onGameplayState?(state: GameplayStateData): void;
   onReconnectExpired(): void;
   startResultPoll(): void;
   stopResultPoll(): void;
+  onVoxelMessage?(message: MessageProtocol): void;
+  onVoxelReset?(): void;
 }
 
 interface MatchLobbyOptions {
@@ -109,7 +126,11 @@ export function createMatchNetworkEvents(
     },
     onConnection: (connection) => {
       if (!options.isCurrent()) return;
-      options.dispatch({ type: "CONNECTION_CHANGED", connection });
+      if (options.onConnection === undefined) {
+        options.dispatch({ type: "CONNECTION_CHANGED", connection });
+      } else {
+        options.onConnection(connection);
+      }
       if (connection === "reconnecting") options.startResultPoll();
       if (
         connection === "online" &&
@@ -121,6 +142,7 @@ export function createMatchNetworkEvents(
     onGameplayState: (snapshot) => {
       if (!options.isCurrent()) return;
       options.dispatch({ type: "GAMEPLAY_STATE", state: snapshot });
+      options.onGameplayState?.(snapshot);
       if (hasTerminalGameplay(snapshot)) options.startResultPoll();
     },
     onProtocolError: (message) => {
@@ -128,6 +150,12 @@ export function createMatchNetworkEvents(
     },
     onReconnectExpired: () => {
       if (options.isCurrent()) options.onReconnectExpired();
+    },
+    onVoxelMessage: (message) => {
+      if (options.isCurrent()) options.onVoxelMessage?.(message);
+    },
+    onVoxelReset: () => {
+      if (options.isCurrent()) options.onVoxelReset?.();
     },
   };
 }

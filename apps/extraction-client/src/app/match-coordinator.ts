@@ -1,29 +1,26 @@
-import type { ExtractionManifest } from "../../../../contracts/extraction/v1/typescript";
+import type { MessageProtocol } from "@voxelize/protocol";
+
 import { createGameApi } from "../api/game";
 import type { QueueSnapshot } from "../api/models";
-import { GameNetwork } from "../game/network";
+import type { MovementInput } from "../game/network";
 
 import {
-  createMatchNetworkEvents,
-  hasTerminalGameplay,
   loadMatchLobby,
   MatchGeneration,
   reportMatchError,
   type MatchCoordinatorOptions,
-  type MatchNetwork,
 } from "./match-coordinator-support";
+import { MatchNetworkRuntime } from "./match-network-runtime";
 import { MatchResultTracker } from "./match-result-tracker";
 import { joinableAssignment } from "./match-routing";
 import { RepeatingTask } from "./poller";
 
 export class MatchCoordinator {
   private readonly game;
-  private readonly networkFactory;
-  private network: MatchNetwork | null = null;
-  private joinedWorld: string | null = null;
   private readonly queuePoll = new RepeatingTask(1_000);
   private readonly lifecycle;
   private readonly results;
+  private readonly runtime;
 
   constructor(private readonly options: MatchCoordinatorOptions) {
     this.game = options.game ?? createGameApi();
@@ -38,9 +35,18 @@ export class MatchCoordinator {
       isCurrent: (token) => this.lifecycle.isCurrent(token),
       leaveWorld: () => this.leaveWorld(),
     });
-    this.networkFactory =
-      options.networkFactory ??
-      ((manifest, events) => new GameNetwork(manifest, events));
+    this.runtime = new MatchNetworkRuntime({
+      dispatch: options.dispatch,
+      getState: options.getState,
+      isCurrent: (token) => this.lifecycle.isCurrent(token),
+      networkFactory: options.networkFactory,
+      onAuthenticationInvalidated: options.onAuthenticationInvalidated,
+      onReconnectExpired: (token) => this.recoverExpiredMatch(token),
+      onVoxelMessage: options.onVoxelMessage,
+      onVoxelReset: options.onVoxelReset,
+      startResultPoll: (token) => this.results.start(token),
+      stopResultPoll: () => this.results.invalidate(),
+    });
   }
 
   activate(): void {
@@ -97,6 +103,34 @@ export class MatchCoordinator {
   async refreshResult(): Promise<void> {
     const token = this.lifecycle.token();
     await this.results.refresh(token);
+  }
+
+  attack(): void {
+    this.runtime.attack();
+  }
+
+  mining(
+    action: "cancel" | "maintain" | "start",
+    voxel?: [number, number, number],
+  ): void {
+    this.runtime.mining(action, voxel);
+  }
+
+  movement(input: MovementInput): void {
+    this.runtime.movement(input);
+  }
+
+  dropSlot(slot: number): void {
+    const revision = this.options.getState().gameplay?.inventory.revision;
+    if (revision !== undefined) this.runtime.dropSlot(slot, revision);
+  }
+
+  sendWorldPacket(message: MessageProtocol): void {
+    this.runtime.sendWorldPacket(message);
+  }
+
+  markWorldReady(): void {
+    this.runtime.markWorldReady();
   }
 
   private async loadLobbyFor(token: number): Promise<void> {
@@ -167,84 +201,32 @@ export class MatchCoordinator {
       queue,
       this.options.getState().result,
     );
-    if (assignment === null || !(await this.ensureNetwork(token))) return;
+    if (assignment === null || !(await this.runtime.ensure(token))) return;
     if (!this.lifecycle.isQueueCurrent(token, queueGeneration)) return;
-    if (this.joinedWorld !== assignment.worldName) {
-      this.leaveWorld();
-      this.options.dispatch({
-        type: "MATCH_CONNECTING",
-        matchId: assignment.matchId,
-        worldName: assignment.worldName,
-        reconnecting: false,
-      });
-      if (queue.status === "preparing") {
-        this.network?.join(assignment.worldName);
-      } else {
-        this.network?.resume(assignment.worldName);
-      }
-      this.joinedWorld = assignment.worldName;
+    if (!this.runtime.isJoined(assignment.worldName)) {
+      this.runtime.enter(
+        assignment.matchId,
+        assignment.worldName,
+        queue.status === "preparing" ? "join" : "resume",
+      );
     }
     if (queue.status === "active" || queue.status === "extractionOpen") {
       try {
-        await this.refreshGameplayState(token);
+        await this.runtime.refreshGameplayState(token);
       } catch (error) {
         if (this.lifecycle.isQueueCurrent(token, queueGeneration)) {
-          this.network?.retryResume();
+          this.runtime.retryResume();
         }
         throw error;
       }
     }
   }
 
-  private async refreshGameplayState(token: number): Promise<void> {
-    const network = this.network;
-    const snapshot = await network?.requestGameplayState();
-    if (
-      snapshot === undefined ||
-      !this.lifecycle.isCurrent(token) ||
-      this.network !== network
-    ) {
-      return;
-    }
-    this.options.dispatch({ type: "GAMEPLAY_STATE", state: snapshot });
-    this.options.dispatch({ type: "MATCH_CONNECTED" });
-    if (hasTerminalGameplay(snapshot)) this.results.start(token);
-  }
-
   private async ensureNetwork(token: number): Promise<boolean> {
-    const manifest = this.options.getState().manifest;
-    if (manifest === null) throw new Error("manifest unavailable");
-    if (this.network === null) this.createNetwork(manifest, token);
-    const network = this.network;
-    await network?.connect();
-    if (
-      network === undefined ||
-      !this.lifecycle.isCurrent(token) ||
-      this.network !== network
-    ) {
-      network?.close();
-      return false;
-    }
-    return true;
-  }
-
-  private createNetwork(manifest: ExtractionManifest, token: number): void {
-    const current = () => this.lifecycle.isCurrent(token);
-    const events = createMatchNetworkEvents({
-      dispatch: this.options.dispatch,
-      getState: this.options.getState,
-      isCurrent: current,
-      onAuthenticationInvalidated: this.options.onAuthenticationInvalidated,
-      onReconnectExpired: () => this.recoverExpiredMatch(token),
-      startResultPoll: () => this.results.start(token),
-      stopResultPoll: () => this.results.invalidate(),
-    });
-    const network = this.networkFactory(manifest, events);
-    this.network = network;
+    return this.runtime.ensure(token);
   }
 
   private recoverExpiredMatch(token: number): void {
-    this.joinedWorld = null;
     const queueGeneration = this.beginQueueRequest();
     void this.game.getQueue().then(
       (queue) => {
@@ -269,16 +251,13 @@ export class MatchCoordinator {
   }
 
   private leaveWorld(): void {
-    if (this.joinedWorld !== null) this.network?.leave();
-    this.joinedWorld = null;
+    this.runtime.leave();
   }
 
   private resetRuntime(): void {
     this.queuePoll.stop();
     this.results.invalidate();
-    this.network?.close();
-    this.network = null;
-    this.joinedWorld = null;
+    this.runtime.reset();
   }
 
   private beginQueueRequest(): number {

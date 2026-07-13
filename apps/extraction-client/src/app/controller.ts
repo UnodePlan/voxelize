@@ -33,11 +33,23 @@ export class ProductController {
 
   constructor(root: HTMLElement) {
     this.elements = mountProductShell(root);
-    this.scene = new VoxelBackdrop(this.elements.canvas);
+    let scene: VoxelBackdrop | null = null;
     this.match = new MatchCoordinator({
       dispatch: (action) => this.dispatch(action),
       getState: () => this.state,
       onAuthenticationInvalidated: () => void this.endSession(false),
+      onVoxelMessage: (message) => scene?.handleNetworkMessage(message),
+      onVoxelReset: () => scene?.resetLiveWorld(),
+    });
+    this.scene = scene = new VoxelBackdrop(this.elements.canvas, {
+      attack: () => this.match.attack(),
+      dropSlot: (slot) => this.match.dropSlot(slot),
+      getManifest: () => this.state.manifest,
+      mining: (action, voxel) => this.match.mining(action, voxel),
+      movement: (input) => this.match.movement(input),
+      onError: (message) => this.dispatch({ type: "NOTICE", message }),
+      onWorldReady: () => this.match.markWorldReady(),
+      sendWorldPacket: (message) => this.match.sendWorldPacket(message),
     });
     bindProductCommands(this.elements.shell, {
       commands: {

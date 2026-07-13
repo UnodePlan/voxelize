@@ -8,14 +8,13 @@ use crate::{
         combat::BASIC_MELEE_REACH,
         ray_aabb::{ray_aabb_distance, RayBounds},
     },
+    match_world::{PLAYER_BODY_HEIGHT, PLAYER_BODY_WIDTH, PLAYER_EYE_HEIGHT},
     matchmaking::SeatId,
 };
 
 use super::runtime::GameplayRuntimeContext;
 
-const PLAYER_HALF_WIDTH: f32 = 0.4;
-const PLAYER_EYE_HEIGHT: f32 = 1.62;
-const PLAYER_HEIGHT: f32 = 1.8;
+const PLAYER_HALF_WIDTH: f32 = PLAYER_BODY_WIDTH / 2.0;
 const UNIT_EPSILON: f32 = 0.000_1;
 
 #[derive(Clone, Copy)]
@@ -107,7 +106,7 @@ fn player_bounds(eye: [f32; 3]) -> Result<RayBounds, CombatTargetingError> {
         ],
         max: [
             eye[0] + PLAYER_HALF_WIDTH,
-            eye[1] - PLAYER_EYE_HEIGHT + PLAYER_HEIGHT,
+            eye[1] - PLAYER_EYE_HEIGHT + PLAYER_BODY_HEIGHT,
             eye[2] + PLAYER_HALF_WIDTH,
         ],
     })

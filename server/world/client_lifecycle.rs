@@ -84,7 +84,7 @@ impl World {
             modifier(self, entity);
         }
 
-        let (init_message, known_entities) = self.generate_client_init(id, entity);
+        let (init_message, known_entities, known_peers) = self.generate_client_init(id, entity);
         self.clients_mut().insert(
             id.to_owned(),
             Client {
@@ -99,11 +99,9 @@ impl World {
         );
         self.entity_ids_mut().insert(id.to_owned(), entity.id());
         self.replace_known_entities(id, known_entities);
+        self.replace_known_peers(id, known_peers.clone());
         self.send(sender, &init_message);
-        self.broadcast(
-            Message::new(&MessageType::Join).text(id).build(),
-            ClientFilter::All,
-        );
+        self.announce_client_join(id, known_peers);
 
         info!("Client at {} joined the server to world: {}", id, self.name);
         Ok(ClientJoinReceipt {
@@ -197,8 +195,10 @@ impl World {
             client.attach_attempt_id = attach_attempt_id.clone();
         }
 
-        let (init_message, known_entities) = self.generate_client_init(id, client.entity);
+        let (init_message, known_entities, known_peers) =
+            self.generate_client_init(id, client.entity);
         self.replace_known_entities(id, known_entities);
+        self.replace_known_peers(id, known_peers);
         self.send(sender, &init_message);
         info!("Client at {} rebound to world: {}", id, self.name);
 
@@ -234,7 +234,7 @@ impl World {
         let removed = self.clients_mut().remove(id);
         self.entity_ids_mut().remove(id);
         self.chunk_interest_mut().remove_client(id);
-        self.bookkeeping_mut().remove_client(id);
+        let leave_filter = self.clear_client_visibility(id);
 
         let Some(client) = removed else {
             return false;
@@ -269,7 +269,7 @@ impl World {
         self.ecs.maintain();
         self.broadcast(
             Message::new(&MessageType::Leave).text(&client.id).build(),
-            ClientFilter::All,
+            leave_filter,
         );
         info!("Client at {} left the world: {}", id, self.name);
         true
@@ -292,37 +292,5 @@ impl World {
         self.lifecycle = WorldLifecycleState::Stopped;
 
         WorldStopSummary { client_ids }
-    }
-
-    fn generate_client_init(&mut self, id: &str, entity: Entity) -> (Message, Vec<String>) {
-        let position = self
-            .read_component::<PositionComp>()
-            .get(entity)
-            .map(|value| [value.0 .0, value.0 .1, value.0 .2])
-            .filter(|value| value.iter().any(|coordinate| *coordinate != 0.0));
-        let direction = self
-            .read_component::<DirectionComp>()
-            .get(entity)
-            .map(|value| [value.0 .0, value.0 .1, value.0 .2])
-            .filter(|value| value.iter().any(|coordinate| *coordinate != 0.0));
-        let body = self.read_component::<RigidBodyComp>();
-        let flying = body
-            .get(entity)
-            .map(|value| value.0.gravity_multiplier == 0.0 && value.0.aabb.width() > 0.0);
-        let ghost = body.get(entity).map(|value| value.0.aabb.width() <= 0.0);
-        let swimming = body.get(entity).map(|value| value.0.is_swimming);
-        drop(body);
-
-        self.generate_init_message(id, position, direction, flying, ghost, swimming)
-    }
-
-    fn replace_known_entities(&mut self, id: &str, entity_ids: Vec<String>) {
-        let mut bookkeeping = self.write_resource::<Bookkeeping>();
-        let known = bookkeeping
-            .client_known_entities
-            .entry(id.to_owned())
-            .or_default();
-        known.clear();
-        known.extend(entity_ids);
     }
 }

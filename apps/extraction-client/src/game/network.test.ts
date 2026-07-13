@@ -1,4 +1,5 @@
 import { protocol } from "@voxelize/protocol";
+import type { MessageProtocol } from "@voxelize/protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import getStateFixtures from "../../../../contracts/extraction/v1/fixtures/get-state-results.json";
@@ -323,6 +324,125 @@ describe("game network boundary", () => {
     expect(protocolError).toHaveBeenCalledTimes(1);
     network.close();
   });
+
+  it("routes decoded world messages and only emits approved world packets", async () => {
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    const voxelMessage = vi.fn();
+    const network = new GameNetwork(
+      manifest,
+      {
+        onAuthenticationInvalidated: vi.fn(),
+        onConnection: vi.fn(),
+        onGameplayState: vi.fn(),
+        onProtocolError: vi.fn(),
+        onReconnectExpired: vi.fn(),
+        onVoxelMessage: voxelMessage,
+      },
+      "https://play.example",
+    );
+    const connected = network.connect();
+    const socket = FakeWebSocket.instances[0];
+    socket?.open();
+    await connected;
+
+    socket?.receive({
+      type: protocol.Message.Type.INIT,
+      json: JSON.stringify({ id: "player-1" }),
+    });
+    await Promise.resolve();
+    expect(voxelMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "INIT", json: { id: "player-1" } }),
+    );
+
+    network.sendWorldPacket({
+      type: "LOAD",
+      json: { center: [0, 0], radius: 6 },
+    } as MessageProtocol);
+    network.sendWorldPacket({
+      type: "UPDATE",
+      json: { voxel: [0, 0, 0], id: 999 },
+    } as MessageProtocol);
+    network.movement({
+      direction: [0, 0, -1],
+      movement: { forward: 1, right: 0, jump: false },
+    });
+
+    const outbound = decodedMessages(socket);
+    expect(outbound.map(({ type }) => type)).toEqual([
+      protocol.Message.Type.LOAD,
+      protocol.Message.Type.PEER,
+    ]);
+    expect(JSON.parse(outbound[1]?.peers[0]?.metadata ?? "null")).toEqual({
+      direction: [0, 0, -1],
+      movement: { forward: 1, right: 0, jump: false },
+    });
+    network.close();
+  });
+
+  it("rebinds instead of stalling after a malformed world packet", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    const protocolError = vi.fn();
+    const connections: string[] = [];
+    const network = new GameNetwork(
+      manifest,
+      {
+        onAuthenticationInvalidated: vi.fn(),
+        onConnection: (state) => connections.push(state),
+        onGameplayState: vi.fn(),
+        onProtocolError: protocolError,
+        onReconnectExpired: vi.fn(),
+      },
+      "https://play.example",
+    );
+    const connected = network.connect();
+    const socket = FakeWebSocket.instances[0];
+    socket?.open();
+    await connected;
+    network.join("match:v1:malformed-test");
+
+    socket?.receiveBytes(new Uint8Array([0x12, 0xff]));
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(protocolError).toHaveBeenCalledTimes(1);
+    expect(connections.at(-1)).toBe("reconnecting");
+    network.close();
+  });
+
+  it("drops decoded messages that finish after leaving the world", async () => {
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    const voxelMessage = vi.fn();
+    const voxelReset = vi.fn();
+    const network = new GameNetwork(
+      manifest,
+      {
+        onAuthenticationInvalidated: vi.fn(),
+        onConnection: vi.fn(),
+        onGameplayState: vi.fn(),
+        onProtocolError: vi.fn(),
+        onReconnectExpired: vi.fn(),
+        onVoxelMessage: voxelMessage,
+        onVoxelReset: voxelReset,
+      },
+      "https://play.example",
+    );
+    const connected = network.connect();
+    const socket = FakeWebSocket.instances[0];
+    socket?.open();
+    await connected;
+    network.join("match:v1:leave-generation-test");
+
+    socket?.receive({
+      type: protocol.Message.Type.INIT,
+      json: JSON.stringify({ id: "late-player" }),
+    });
+    network.leave();
+    await Promise.resolve();
+
+    expect(voxelMessage).not.toHaveBeenCalled();
+    expect(voxelReset).toHaveBeenCalledTimes(1);
+    network.close();
+  });
 });
 
 function decodedMessages(socket: FakeWebSocket | undefined) {
@@ -398,6 +518,10 @@ class FakeWebSocket {
     const bytes = protocol.Message.encode(
       protocol.Message.create(message),
     ).finish();
+    this.receiveBytes(bytes);
+  }
+
+  receiveBytes(bytes: Uint8Array): void {
     this.onmessage?.({ data: Uint8Array.from(bytes).buffer } as MessageEvent);
   }
 

@@ -50,6 +50,10 @@ class Loader {
    */
   private audioCallbacks = new Map<string, () => Promise<AudioBuffer>>();
 
+  private audioUnlockListener: (() => void) | null = null;
+
+  private disposed = false;
+
   /**
    * Construct a Voxelize loader.
    *
@@ -60,12 +64,12 @@ class Loader {
       this.progress = loaded / total;
     };
 
-    const listenerCallback = () => {
+    this.audioUnlockListener = () => {
       this.loadAudios();
-      window.removeEventListener("click", listenerCallback);
+      this.removeAudioUnlockListener();
     };
 
-    window.addEventListener("click", listenerCallback);
+    window.addEventListener("click", this.audioUnlockListener);
   }
 
   loadGifImages = (
@@ -99,10 +103,10 @@ class Loader {
           return actual;
         });
 
-        this.images.set(source, images);
+        if (!this.disposed) this.images.set(source, images);
         this.assetPromises.delete(source);
 
-        onLoaded?.(images);
+        if (!this.disposed) onLoaded?.(images);
 
         resolve(images);
       };
@@ -118,10 +122,14 @@ class Loader {
   loadTexture = (source: string, onLoaded?: (texture: Texture) => void) => {
     const promise = new Promise<Texture>((resolve) => {
       this.textureLoader.load(source, (texture) => {
-        this.textures.set(source, texture);
+        if (this.disposed) {
+          texture.dispose();
+        } else {
+          this.textures.set(source, texture);
+        }
         this.assetPromises.delete(source);
 
-        onLoaded?.(texture);
+        if (!this.disposed) onLoaded?.(texture);
 
         resolve(texture);
       });
@@ -157,10 +165,10 @@ class Loader {
 
       image.onerror = reject;
       image.onload = () => {
-        this.images.set(source, image);
+        if (!this.disposed) this.images.set(source, image);
         this.assetPromises.delete(source);
 
-        onLoaded?.(image);
+        if (!this.disposed) onLoaded?.(image);
 
         resolve(image);
       };
@@ -256,9 +264,28 @@ class Loader {
   private loadAudios = async () => {
     for (const [source, callback] of this.audioCallbacks) {
       const buffer = await callback();
-      this.audioBuffers.set(source, buffer);
+      if (!this.disposed) this.audioBuffers.set(source, buffer);
     }
 
+    this.audioCallbacks.clear();
+  };
+
+  private removeAudioUnlockListener = () => {
+    if (!this.audioUnlockListener) return;
+    window.removeEventListener("click", this.audioUnlockListener);
+    this.audioUnlockListener = null;
+  };
+
+  dispose = () => {
+    if (this.disposed) return;
+    this.disposed = true;
+
+    this.removeAudioUnlockListener();
+    this.textures.forEach((texture) => texture.dispose());
+    this.textures.clear();
+    this.images.clear();
+    this.audioBuffers.clear();
+    this.assetPromises.clear();
     this.audioCallbacks.clear();
   };
 }

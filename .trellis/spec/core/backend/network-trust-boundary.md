@@ -32,6 +32,16 @@ pub enum WorldRequestPolicy {
     Strict { allowed_methods: Vec<String>, allowed_events: Vec<String> },
 }
 
+pub enum ChunkLoadPolicy {
+    Legacy,
+    AuthoritativeRadius { max_chunk_radius: u32 },
+}
+
+pub enum EntityVisibilityPolicy {
+    Legacy,
+    Bounded,
+}
+
 pub struct ClientRebindRequest {
     pub id: String,
     pub sender: WsSender,
@@ -54,29 +64,33 @@ pub trait AuthenticatedClientIdResolver: Send + Sync {
 - Public mode requires an authenticator, exact allow-listed Origin, bounded HTTP/WS payloads, bounded outbound and World request queues, and finite authentication/message timeouts. Authentication or overload failures close/reject the connection; they do not become guest access.
 - Join admission is a two-phase operation: the World actor validates lifecycle, capacity, duplicate client, and duplicate principal, then returns `ClientJoinReceipt`; only a successful receipt lets `Server` commit its connection table.
 - `WorldRequestPolicy::Strict` denies raw voxel updates, client movement flags, commands, and unlisted Methods/Events. Names are normalized to lowercase before comparison.
+- PVP `LOAD` admission is independent from Method/Event allow-listing. It derives the chunk center and sorting direction from the server-owned player transform, rejects non-finite/missing authority state, and accepts only configured World coordinates within the explicit authoritative radius.
+- A bounded PVP World projects `INIT`, `PEER`, and `ENTITY` per viewer. The viewer still receives its own authoritative `PEER`, while leave/delete transitions never carry newly hidden coordinates. Legacy Worlds retain global projection by default.
 - A detached client may be rebound only with the owning principal and a valid current World generation. Every Join/Rebind has an immutable `attach_attempt_id`; `JoinCommitted`, `Rebound`, rejection, disconnect, detach, and conditional cleanup must carry it. The application consumes only the exact admitted reservation, so delayed work from attempt 1 cannot remove or commit attempt 2 and repeated receipts are no-ops. Leave/despawn, cancel-Join, detach, and rebind are distinct operations and must preserve actor mailbox ordering.
 - Rebind guard admission and the application's reconnect-timeout claim are one linearized decision. A reservation established before the deadline remains valid for its eventual receipt even after the clock crosses the deadline; if timeout claims first, an attach evaluated from an older snapshot is denied.
 - World lifecycle is `Created -> Preparing -> Ready -> Stopping -> Stopped`; only `Ready` accepts clients. Prepare/preload/stop are idempotent, and removal clears routes, pending work, and timing state before the old World is stopped.
 
 ### 4. Validation & Error Matrix
 
-| Condition | Required result |
-| --- | --- |
-| Public mode has no authenticator or auth times out | Reject/close; never create a guest principal |
-| Missing, duplicate, malformed, or non-allow-listed Origin | Reject before application routes |
-| Query `client_id` differs from server identity | Ignore it in public mode |
-| Configured public-ID resolver returns `None` | Reject before creating pending Join or mutating World state |
-| World is not `Ready` | Return `WorldNotReady`; do not add a client |
-| Concurrent Join would exceed capacity | Return `WorldFull`; Server connection table stays unchanged |
-| Principal already occupies the World | Return `DuplicatePrincipal` |
-| Strict raw UPDATE, movement flag, command, or unlisted Method/Event | Reject before custom handler |
-| Malformed protobuf/JSON or invalid enum | Return a protocol error or close with a bounded error; never panic |
-| Full outbound or World request queue | Reject/close as overloaded; never silently drop authoritative state |
-| Rebind with wrong principal or stale generation | Return `PrincipalMismatch`/`NotFound`; retain the existing owner |
-| Delayed cleanup/rejection belongs to an older attach attempt | Ignore it; retain the newer lease and connection route |
-| Duplicate JoinCommitted/Rebound for a consumed attempt | Ignore it; do not repeat activation/reconnect or fail the match |
-| Timeout races a pre-deadline Rebind admission | Exactly one wins the account-level claim; never admit and time out the same attempt |
-| Remove an unknown World | Idempotent success with `removed: false` |
+| Condition                                                           | Required result                                                                           |
+| ------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| Public mode has no authenticator or auth times out                  | Reject/close; never create a guest principal                                              |
+| Missing, duplicate, malformed, or non-allow-listed Origin           | Reject before application routes                                                          |
+| Query `client_id` differs from server identity                      | Ignore it in public mode                                                                  |
+| Configured public-ID resolver returns `None`                        | Reject before creating pending Join or mutating World state                               |
+| World is not `Ready`                                                | Return `WorldNotReady`; do not add a client                                               |
+| Concurrent Join would exceed capacity                               | Return `WorldFull`; Server connection table stays unchanged                               |
+| Principal already occupies the World                                | Return `DuplicatePrincipal`                                                               |
+| Strict raw UPDATE, movement flag, command, or unlisted Method/Event | Reject before custom handler                                                              |
+| PVP LOAD claims a fake center/direction or includes a distant chunk | Ignore client center/direction and reject coordinates outside authoritative radius/bounds |
+| Peer/entity is outside the configured PVP visibility radius         | Omit metadata; send a bounded leave/delete only if it was previously visible              |
+| Malformed protobuf/JSON or invalid enum                             | Return a protocol error or close with a bounded error; never panic                        |
+| Full outbound or World request queue                                | Reject/close as overloaded; never silently drop authoritative state                       |
+| Rebind with wrong principal or stale generation                     | Return `PrincipalMismatch`/`NotFound`; retain the existing owner                          |
+| Delayed cleanup/rejection belongs to an older attach attempt        | Ignore it; retain the newer lease and connection route                                    |
+| Duplicate JoinCommitted/Rebound for a consumed attempt              | Ignore it; do not repeat activation/reconnect or fail the match                           |
+| Timeout races a pre-deadline Rebind admission                       | Exactly one wins the account-level claim; never admit and time out the same attempt       |
+| Remove an unknown World                                             | Idempotent success with `removed: false`                                                  |
 
 ### 5. Good/Base/Bad Cases
 
@@ -87,7 +101,7 @@ pub trait AuthenticatedClientIdResolver: Send + Sync {
 ### 6. Tests Required
 
 - HTTP tests assert exact Origin behavior, public-auth failure, disabled legacy RTC, payload limits, and route isolation.
-- Server/World actor tests assert 10 accepted / 11th rejected under concurrent Join, cancelled Join retry, strict rejection, dynamic AddWorld, idempotent RemoveWorld, and old-World address closure.
+- Server/World actor tests assert 10 accepted / 11th rejected under concurrent Join, cancelled Join retry, strict rejection, authoritative/legacy LOAD behavior, bounded INIT and peer/entity visibility, dynamic AddWorld, idempotent RemoveWorld, and old-World address closure.
 - WebSocket tests assert empty legacy ID compatibility, malformed input closure, duplicate Origin rejection, authentication timeout, and bounded output overload.
 - Lifecycle tests assert detach/rebind ownership, public-ID resolver failure closure, distinct attach attempts, Join-attempt ABA isolation, duplicate receipt idempotency, timeout/admission linearization, stale lease cleanup, explicit Leave cleanup before rejoin, and no duplicate despawn.
 - Run `cargo test --lib --tests`, extraction-server tests, extraction-client tests, extraction E2E actor tests, and TypeScript unit tests for every boundary change.

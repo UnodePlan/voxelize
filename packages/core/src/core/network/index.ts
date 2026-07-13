@@ -10,6 +10,7 @@ import { WebRTCConnection } from "./webrtc";
 import DecodeWorker from "./workers/decode-worker.ts?worker&inline";
 
 export * from "./intercept";
+export { decodeMessage } from "./workers/decode-utils";
 export { WebRTCConnection } from "./webrtc";
 
 const { Message } = protocol;

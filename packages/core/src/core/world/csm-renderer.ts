@@ -91,6 +91,7 @@ export class CSMRenderer {
     THREE.Material | THREE.Material[]
   >();
   private originalEntityParents = new Map<Object3D, Object3D | null>();
+  private disposed = false;
 
   private frustumCenter = new Vector3();
   private frustumCameraDir = new Vector3();
@@ -566,11 +567,22 @@ export class CSMRenderer {
   }
 
   dispose() {
+    if (this.disposed) return;
+    this.disposed = true;
+
     for (const cascade of this.cascades) {
       cascade.renderTarget.dispose();
       cascade.renderTarget.depthTexture?.dispose();
     }
     this.depthMaterial.dispose();
-    this.cascades = [];
+    this.cascades.length = 0;
+    this.cascadeDirty.length = 0;
+    this.cascadeNeedsRender.length = 0;
+    this.skipShadowObjectsCache.length = 0;
+    this.hiddenObjects.length = 0;
+    this.hiddenEntities.length = 0;
+    this.poolOriginalMaterials.clear();
+    this.originalEntityParents.clear();
+    this.entityBatchScene.clear();
   }
 }

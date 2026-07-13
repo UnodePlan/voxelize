@@ -5,6 +5,11 @@ use crate::contracts::EquipmentKey;
 pub const MATCH_PLAYER_CAPACITY: usize = 10;
 pub const RESOURCE_BACKPACK_SLOTS: usize = 12;
 pub const MAX_HEALTH_HALF_HEARTS: u8 = 20;
+pub const PLAYER_BODY_WIDTH: f32 = 0.8;
+pub const PLAYER_BODY_HEIGHT: f32 = 1.8;
+pub const PLAYER_BODY_DEPTH: f32 = 0.8;
+pub const PLAYER_EYE_HEIGHT: f32 = 1.62;
+pub const PLAYER_EYE_OFFSET_FROM_CENTER: f32 = PLAYER_EYE_HEIGHT - PLAYER_BODY_HEIGHT / 2.0;
 pub const ENGINE_MIN_CHUNK: [i32; 2] = [-10, -10];
 pub const ENGINE_MAX_CHUNK: [i32; 2] = [9, 9];
 

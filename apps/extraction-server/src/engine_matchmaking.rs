@@ -10,8 +10,9 @@ use actix::Addr;
 use async_trait::async_trait;
 use uuid::Uuid;
 use voxelize::{
-    AddWorld, ClientAttachKind, ClientDisconnectPolicy, DespawnDetachedPrincipal,
-    EvictMatchPrincipal, RemoveWorld, Server, World, WorldConfig, WorldRequestPolicy,
+    AddWorld, ChunkLoadPolicy, ClientAttachKind, ClientDisconnectPolicy, DespawnDetachedPrincipal,
+    EntityVisibilityPolicy, EvictMatchPrincipal, RemoveWorld, Server, World, WorldConfig,
+    WorldRequestPolicy,
 };
 
 use crate::{
@@ -27,6 +28,8 @@ use crate::{
 };
 
 const WORLD_PRELOAD_RADIUS: usize = 10;
+const WORLD_CHUNK_LOAD_RADIUS: u32 = 6;
+const WORLD_ENTITY_VISIBLE_RADIUS: f32 = 96.0;
 
 pub(crate) struct EngineMatchWorldRuntime {
     server: Addr<Server>,
@@ -80,6 +83,9 @@ impl MatchWorldRuntime for EngineMatchWorldRuntime {
                     .allow_method("pvp:v1:attack")
                     .allow_method("pvp:v1:get-state"),
             )
+            .chunk_load_policy(ChunkLoadPolicy::authoritative_radius(
+                WORLD_CHUNK_LOAD_RADIUS,
+            ))
             .client_disconnect_policy(ClientDisconnectPolicy::Detach)
             .min_chunk(spec.engine_min_chunk)
             .max_chunk(spec.engine_max_chunk)
@@ -88,6 +94,8 @@ impl MatchWorldRuntime for EngineMatchWorldRuntime {
             .saving(spec.saving)
             .seed(engine_seed_v1(spec.seed))
             .max_height(plan.config().max_height)
+            .entity_visibility_policy(EntityVisibilityPolicy::bounded())
+            .entity_visible_radius(WORLD_ENTITY_VISIBLE_RADIUS)
             .water_level(0)
             .build();
         let mut world = World::new(&spec.world_name, &config);
@@ -103,6 +111,8 @@ impl MatchWorldRuntime for EngineMatchWorldRuntime {
             self.generations.clone(),
             spec.world_name.clone(),
         );
+        install_bounded_movement(&mut world, spec.playable_bounds, gameplay_authority.clone())
+            .map_err(|_| MatchWorldRuntimeError::Conflict)?;
         install_gameplay_runtime(&mut world, &spec, gameplay_authority)
             .map_err(|_| MatchWorldRuntimeError::Conflict)?;
         let forced_eliminations = {
@@ -123,14 +133,6 @@ impl MatchWorldRuntime for EngineMatchWorldRuntime {
             catalog_version: self.catalog.resources().catalog_version,
             loadout: spec.loadout,
         });
-        install_bounded_movement(
-            &mut world,
-            spec.playable_bounds,
-            self.matchmaking.clone(),
-            self.generations.clone(),
-            spec.world_name.clone(),
-        );
-
         let matchmaking = self.matchmaking.clone();
         let generations = self.generations.clone();
         let world_name = spec.world_name.clone();

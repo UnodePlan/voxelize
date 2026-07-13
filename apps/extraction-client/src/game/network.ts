@@ -1,4 +1,5 @@
 import { protocol } from "@voxelize/protocol";
+import type { MessageProtocol } from "@voxelize/protocol";
 
 import {
   type ExtractionManifest,
@@ -6,43 +7,52 @@ import {
 } from "../../../../contracts/extraction/v1/typescript";
 
 import { GameplayStateChannel } from "./gameplay-state-channel";
+import { GameplayNetworkEgress } from "./network-egress";
+import type { MovementInput } from "./network-egress";
 import { routeNetworkMessage } from "./network-message-router";
-import {
-  createIntent,
-  requireWorldName,
-  websocketUrl,
-} from "./network-protocol";
-import { IntentSequence } from "./network-sequence";
+import { requireWorldName, websocketUrl } from "./network-protocol";
+import { reconnectDelay, startReconnectExpiry } from "./network-reconnect";
 import { openGameSocket } from "./network-socket";
 import type { GameNetworkEvents } from "./network-types";
+import { ProtocolDecoder } from "./protocol-decoder";
 
 export { createIntent, websocketUrl } from "./network-protocol";
 export type { GameNetworkEvents } from "./network-types";
+export type { MovementInput } from "./network-egress";
 
-const RECONNECT_BASE_MS = 250;
-const RECONNECT_MAX_MS = 2_000;
-const RECONNECT_WINDOW_MS = 60_000;
 export class GameNetwork {
   private socket: WebSocket | null = null;
   private joinedWorld: string | null = null;
-  private readonly intentSequence = new IntentSequence();
   private readonly stateChannel;
+  private readonly egress;
   private connectPromise: Promise<void> | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectExpiryTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectAttempts = 0;
   private closedByClient = false;
+  private readonly decoder;
 
   constructor(
-    private readonly manifest: ExtractionManifest,
+    manifest: ExtractionManifest,
     private readonly events: GameNetworkEvents,
     private readonly serverUrl?: string,
   ) {
+    this.egress = new GameplayNetworkEgress(
+      manifest.protocolVersion,
+      (message) => this.send(message),
+    );
+    this.decoder = new ProtocolDecoder(
+      (message) => this.handleDecodedMessage(message),
+      () => {
+        this.events.onProtocolError("收到无法解析的体素世界消息");
+        if (this.joinedWorld !== null) this.closeSocketForReconnect();
+      },
+    );
     this.stateChannel = new GameplayStateChannel(
       manifest,
-      (name, payload) => this.sendMethod(name, payload),
+      (name, payload) => this.egress.sendMethod(name, payload),
       (state) => {
-        this.intentSequence.seed(state);
+        this.egress.seed(state);
         this.events.onGameplayState(state);
       },
     );
@@ -67,6 +77,8 @@ export class GameNetwork {
   }
 
   private openSocket(): Promise<void> {
+    if (this.joinedWorld !== null) this.events.onVoxelReset?.();
+    this.decoder.reset();
     const { opened, socket } = openGameSocket(
       websocketUrl(this.serverUrl),
       (event) => this.handleMessage(event),
@@ -114,6 +126,8 @@ export class GameNetwork {
       this.send({ type: protocol.Message.Type.LEAVE, text: this.joinedWorld });
     }
     this.joinedWorld = null;
+    this.decoder.reset();
+    this.events.onVoxelReset?.();
   }
 
   close(): void {
@@ -124,6 +138,8 @@ export class GameNetwork {
     this.socket = null;
     socket?.close(1000, "client logout");
     this.stateChannel.rejectAll("Network stopped");
+    this.decoder.dispose();
+    this.events.onVoxelReset?.();
     this.events.onConnection("offline");
   }
 
@@ -134,6 +150,8 @@ export class GameNetwork {
     if (event.code === 1008) {
       this.clearReconnectWindow();
       this.joinedWorld = null;
+      this.decoder.reset();
+      this.events.onVoxelReset?.();
       this.events.onConnection("offline");
       this.events.onAuthenticationInvalidated();
       return;
@@ -149,9 +167,8 @@ export class GameNetwork {
 
   private startReconnectWindow(): void {
     if (this.reconnectExpiryTimer !== null) return;
-    this.reconnectExpiryTimer = setTimeout(
-      () => this.expireReconnect(),
-      RECONNECT_WINDOW_MS,
+    this.reconnectExpiryTimer = startReconnectExpiry(() =>
+      this.expireReconnect(),
     );
   }
 
@@ -163,10 +180,7 @@ export class GameNetwork {
     ) {
       return;
     }
-    const delay = Math.min(
-      RECONNECT_BASE_MS * 2 ** this.reconnectAttempts,
-      RECONNECT_MAX_MS,
-    );
+    const delay = reconnectDelay(this.reconnectAttempts);
     this.reconnectAttempts += 1;
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
@@ -197,6 +211,8 @@ export class GameNetwork {
     this.socket = null;
     socket?.close(1000, "reconnect window expired");
     this.stateChannel.rejectAll("Reconnect window expired");
+    this.decoder.reset();
+    this.events.onVoxelReset?.();
     this.events.onConnection("offline");
     this.events.onReconnectExpired();
   }
@@ -217,42 +233,40 @@ export class GameNetwork {
   }
 
   attack(): void {
-    this.sendMethod(
-      "pvp:v1:attack",
-      createIntent(this.manifest.protocolVersion, this.intentSequence.next(), {
-        weaponSlot: "melee",
-      }),
-    );
+    this.requireOpen();
+    this.egress.attack();
   }
 
   mining(
     action: "cancel" | "maintain" | "start",
     voxel?: [number, number, number],
   ): void {
-    const payload = action === "start" ? { action, voxel } : { action };
-    this.sendMethod(
-      "pvp:v1:mining",
-      createIntent(
-        this.manifest.protocolVersion,
-        this.intentSequence.next(),
-        payload,
-      ),
-    );
+    this.requireOpen();
+    this.egress.mining(action, voxel);
   }
 
   dropSlot(slot: number, expectedInventoryRevision: number): void {
-    this.sendMethod(
-      "pvp:v1:drop-slot",
-      createIntent(this.manifest.protocolVersion, this.intentSequence.next(), {
-        slot,
-        expectedInventoryRevision,
-      }),
-    );
+    this.requireOpen();
+    this.egress.dropSlot(slot, expectedInventoryRevision);
+  }
+
+  movement(input: MovementInput): void {
+    if (this.socket?.readyState !== WebSocket.OPEN) return;
+    this.egress.movement(input);
+  }
+
+  sendWorldPacket(message: MessageProtocol): void {
+    if (this.socket?.readyState !== WebSocket.OPEN) return;
+    this.egress.sendWorldPacket(message);
   }
 
   private handleMessage(event: MessageEvent): void {
+    if (event.data instanceof ArrayBuffer) this.decoder.decode(event.data);
+  }
+
+  private handleDecodedMessage(message: MessageProtocol): void {
     try {
-      const routed = routeNetworkMessage(event);
+      const routed = routeNetworkMessage(message);
       if (routed?.kind === "error") {
         this.stateChannel.rejectAll("Server rejected the gameplay request");
         this.events.onProtocolError("服务端拒绝了实时请求");
@@ -260,18 +274,12 @@ export class GameNetwork {
         this.stateChannel.handleResult(routed.value);
       } else if (routed?.kind === "state") {
         this.stateChannel.scheduleSync();
+      } else if (routed?.kind === "voxel") {
+        this.events.onVoxelMessage?.(routed.message);
       }
     } catch {
       this.events.onProtocolError("收到无法解析的实时消息");
     }
-  }
-
-  private sendMethod(name: string, payload: unknown): void {
-    this.requireOpen();
-    this.send({
-      type: protocol.Message.Type.METHOD,
-      method: { name, payload: JSON.stringify(payload) },
-    });
   }
 
   private send(message: protocol.IMessage): void {

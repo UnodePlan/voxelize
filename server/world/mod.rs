@@ -1,5 +1,7 @@
 mod bookkeeping;
+mod chunk_load;
 mod client_admission;
+mod client_init;
 mod client_lifecycle;
 mod clients;
 mod components;
@@ -23,6 +25,7 @@ pub mod system_profiler;
 mod systems;
 mod types;
 mod utils;
+mod visibility;
 mod voxels;
 
 #[cfg(test)]
@@ -65,6 +68,7 @@ use crate::{
 use super::common::ClientFilter;
 
 pub use bookkeeping::*;
+pub use chunk_load::ChunkLoadPolicy;
 pub use client_admission::{ClientAttachKind, ClientAttachRequest};
 pub use clients::*;
 pub use components::*;
@@ -86,6 +90,7 @@ pub use system_profiler::*;
 pub use systems::*;
 pub use types::*;
 pub use utils::*;
+pub use visibility::EntityVisibilityPolicy;
 pub use voxels::*;
 
 pub type Transports = HashMap<String, WsSender>;
@@ -294,6 +299,9 @@ pub struct World {
 
     /// The modifier of the ECS dispatcher (builder factory).
     dispatcher: Arc<dyn Fn() -> DispatcherBuilder<'static, 'static> + Send + Sync>,
+
+    /// 可选的应用系统，固定在默认空间索引与玩家 metadata 更新前完成。
+    before_spatial_update: Arc<Mutex<Option<NamedDispatcherHook>>>,
 
     /// 可选的应用系统，固定在默认 ChunkUpdating 前完成。
     before_chunk_updating: Arc<Mutex<Option<NamedDispatcherHook>>>,
@@ -705,13 +713,19 @@ pub enum DispatcherHookError {
 }
 
 fn dispatcher(
+    before_spatial_update: Option<&NamedDispatcherHook>,
     before_chunk_updating: Option<&NamedDispatcherHook>,
     before_broadcast: Option<&NamedDispatcherHook>,
 ) -> TimedDispatcherBuilder<'static, 'static> {
-    let mut builder = TimedDispatcherBuilder::new()
-        .with(UpdateStatsSystem, "update-stats", &[])
-        .with(PeersMetaSystem, "peers-meta", &[])
-        .with(CurrentChunkSystem, "current-chunk", &[]);
+    let mut builder = TimedDispatcherBuilder::new().with(UpdateStatsSystem, "update-stats", &[]);
+    let mut spatial_dependencies = vec![];
+    if let Some(hook) = before_spatial_update {
+        builder = (hook.install)(builder);
+        spatial_dependencies.push(hook.name);
+    }
+    let mut builder = builder
+        .with(PeersMetaSystem, "peers-meta", &spatial_dependencies)
+        .with(CurrentChunkSystem, "current-chunk", &spatial_dependencies);
     let mut chunk_updating_dependencies = vec!["current-chunk"];
     if let Some(hook) = before_chunk_updating {
         builder = (hook.install)(builder);
@@ -767,13 +781,6 @@ fn dispatcher(
         .with(PathMetadataSystem, "path-meta", &[])
         .with(EntityTreeSystem, "entity-tree", &[])
         .with(WalkTowardsSystem, "walk-towards", &["path-finding"])
-}
-
-#[derive(Serialize, Deserialize)]
-struct OnLoadRequest {
-    center: Vec2<i32>,
-    direction: Vec2<f32>,
-    chunks: Vec<Vec2<i32>>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -878,8 +885,10 @@ impl World {
         ecs.insert(Profiler::new(Duration::from_secs_f64(0.001)));
         ecs.insert(EntityIDs::new());
 
+        let before_spatial_update = Arc::new(Mutex::new(None));
         let before_chunk_updating = Arc::new(Mutex::new(None));
         let before_broadcast = Arc::new(Mutex::new(None));
+        let dispatcher_spatial_hook = before_spatial_update.clone();
         let dispatcher_chunk_hook = before_chunk_updating.clone();
         let dispatcher_broadcast_hook = before_broadcast.clone();
         let mut world = Self {
@@ -893,10 +902,17 @@ impl World {
             ecs,
 
             dispatcher: Arc::new(move || {
+                let spatial_hook = dispatcher_spatial_hook.lock().unwrap().clone();
                 let chunk_hook = dispatcher_chunk_hook.lock().unwrap().clone();
                 let broadcast_hook = dispatcher_broadcast_hook.lock().unwrap().clone();
-                dispatcher(chunk_hook.as_ref(), broadcast_hook.as_ref()).into_inner()
+                dispatcher(
+                    spatial_hook.as_ref(),
+                    chunk_hook.as_ref(),
+                    broadcast_hook.as_ref(),
+                )
+                .into_inner()
             }),
+            before_spatial_update,
             before_chunk_updating,
             before_broadcast,
             uses_default_dispatcher: true,
@@ -1144,7 +1160,8 @@ impl World {
 
     /// Add a transport sender to this world.
     pub(crate) fn add_transport(&mut self, id: &str, sender: &WsSender) {
-        let (init_message, _) = self.generate_init_message(id, None, None, None, None, None);
+        let (init_message, _, _) =
+            self.generate_init_message(id, None, None, None, None, None, None);
         self.send(sender, &init_message);
         self.write_resource::<Transports>()
             .insert(id.to_owned(), sender.clone());
@@ -1164,6 +1181,39 @@ impl World {
         self.dispatcher = Arc::new(move || dispatch().into_inner());
         self.uses_default_dispatcher = false;
         *self.built_dispatcher.lock().unwrap() = None;
+    }
+
+    /// 在默认统计更新后、空间索引和玩家 metadata 更新前安装唯一的命名应用系统。
+    ///
+    /// 该入口用于必须先改变权威位置、再由默认系统消费位置的场景。自定义 dispatcher
+    /// 必须在自己的 factory 内保证等价顺序，不能使用这个默认链 hook。
+    pub fn install_before_spatial_update_system<T, F>(
+        &mut self,
+        name: &'static str,
+        factory: F,
+    ) -> Result<(), DispatcherHookError>
+    where
+        T: for<'a> specs::System<'a> + Send + 'static,
+        for<'a> <T as specs::System<'a>>::SystemData: specs::SystemData<'a>,
+        F: Fn() -> T + Send + Sync + 'static,
+    {
+        if !self.uses_default_dispatcher {
+            return Err(DispatcherHookError::CustomDispatcherUnsupported);
+        }
+        if name.is_empty() || DEFAULT_DISPATCHER_SYSTEM_NAMES.contains(&name) {
+            return Err(DispatcherHookError::NameConflict);
+        }
+        let mut slot = self.before_spatial_update.lock().unwrap();
+        if slot.is_some() {
+            return Err(DispatcherHookError::HookAlreadyInstalled);
+        }
+        *slot = Some(NamedDispatcherHook {
+            name,
+            install: Arc::new(move |builder| builder.with(factory(), name, &["update-stats"])),
+        });
+        drop(slot);
+        *self.built_dispatcher.lock().unwrap() = None;
+        Ok(())
     }
 
     /// 在 CurrentChunk 与 ChunkUpdating 之间安装唯一的命名应用系统。
@@ -1943,49 +1993,6 @@ impl World {
         })
     }
 
-    /// Handler for `Load` type messages.
-    fn on_load(&mut self, client_id: &str, data: Message) {
-        let client_ent = if let Some(client) = self.clients().get(client_id) {
-            client.entity.to_owned()
-        } else {
-            return;
-        };
-
-        let json: OnLoadRequest = match serde_json::from_str(&data.json) {
-            Ok(json) => json,
-            Err(e) => {
-                warn!("`on_load` error. Could not read JSON string: {}", data.json);
-                return;
-            }
-        };
-
-        let chunks = json.chunks;
-        if chunks.is_empty() {
-            return;
-        }
-
-        {
-            let mut storage = self.write_component::<ChunkRequestsComp>();
-
-            // Check for component existence
-            if let Some(requests) = storage.get_mut(client_ent) {
-                chunks.iter().for_each(|coords| {
-                    requests.add(coords);
-                });
-
-                requests.set_center(&json.center);
-                requests.set_direction(&json.direction);
-                requests.sort();
-            } else {
-                warn!(
-                    "Client entity doesn't have ChunkRequestsComp component: {}",
-                    client_id
-                );
-                //TODO: We could re-add the component here, server doesn't panic now though
-            }
-        }
-    }
-
     /// Handler for `Unload` type messages.
     fn on_unload(&mut self, client_id: &str, data: Message) {
         let client_ent = if let Some(client) = self.clients().get(client_id) {
@@ -2273,13 +2280,25 @@ impl World {
     fn generate_init_message(
         &self,
         id: &str,
+        viewer_position: Option<Vec3<f32>>,
         saved_position: Option<[f32; 3]>,
         saved_direction: Option<[f32; 3]>,
         saved_is_flying: Option<bool>,
         saved_is_ghost: Option<bool>,
         saved_is_swimming: Option<bool>,
-    ) -> (Message, Vec<String>) {
+    ) -> (Message, Vec<String>, Vec<String>) {
         let config = (*self.config()).to_owned();
+        let visibility_radius = visibility::bounded_visibility_radius(
+            config.entity_visibility_policy,
+            config.entity_visible_radius,
+        );
+        let is_visible = |target: Option<&Vec3<f32>>| match (visibility_radius, &viewer_position) {
+            (Some(radius), Some(viewer)) => {
+                target.is_some_and(|target| visibility::is_position_visible(viewer, target, radius))
+            }
+            (Some(_), None) => false,
+            (None, _) => true,
+        };
         let mut json = HashMap::new();
 
         json.insert("id".to_owned(), json!(id));
@@ -2319,26 +2338,55 @@ impl World {
         let flags = self.read_component::<ClientFlag>();
         let names = self.read_component::<NameComp>();
         let metadatas = self.read_component::<MetadataComp>();
+        let positions = self.read_component::<PositionComp>();
+        let directions = self.read_component::<DirectionComp>();
 
         let mut peers = vec![];
+        let mut peer_ids = vec![];
 
-        for (pid, name, metadata, _) in (&ids, &names, &metadatas, &flags).join() {
+        for (pid, name, metadata, position, direction, _) in
+            (&ids, &names, &metadatas, &positions, &directions, &flags).join()
+        {
+            if pid.0 != id && !is_visible(Some(&position.0)) {
+                continue;
+            }
+            let mut metadata = metadata.map.clone();
+            metadata.insert("position".to_owned(), json!(position));
+            metadata.insert("direction".to_owned(), json!(direction));
+            metadata.insert("username".to_owned(), json!(name));
             peers.push(PeerProtocol {
                 id: pid.0.to_owned(),
                 username: name.0.to_owned(),
-                metadata: metadata.to_string(),
-            })
+                metadata: serde_json::to_string(&metadata).unwrap(),
+            });
+            if pid.0 != id {
+                peer_ids.push(pid.0.to_owned());
+            }
         }
 
         /* -------------------------- Loading all entities -------------------------- */
         let etypes = self.read_component::<ETypeComp>();
         let metadatas = self.read_component::<MetadataComp>();
+        let positions = self.read_component::<PositionComp>();
+        let voxels = self.read_component::<VoxelComp>();
+        let ecs_entities = self.ecs.entities();
 
         let mut entities = vec![];
         let mut entity_ids = vec![];
 
-        for (id, etype, metadata) in (&ids, &etypes, &metadatas).join() {
+        for (entity, id, etype, metadata) in (&ecs_entities, &ids, &etypes, &metadatas).join() {
             if !etype.0.starts_with("block::") && metadata.is_empty() {
+                continue;
+            }
+            let entity_position = positions
+                .get(entity)
+                .map(|position| position.0.clone())
+                .or_else(|| {
+                    voxels
+                        .get(entity)
+                        .map(|voxel| Vec3(voxel.0 .0 as f32, voxel.0 .1 as f32, voxel.0 .2 as f32))
+                });
+            if !is_visible(entity_position.as_ref()) {
                 continue;
             }
 
@@ -2356,6 +2404,11 @@ impl World {
         drop(ids);
         drop(etypes);
         drop(metadatas);
+        drop(positions);
+        drop(voxels);
+        drop(ecs_entities);
+        peer_ids.sort();
+        entity_ids.sort();
 
         (
             Message::new(&MessageType::Init)
@@ -2365,6 +2418,7 @@ impl World {
                 .entities(&entities)
                 .build(),
             entity_ids,
+            peer_ids,
         )
     }
 }

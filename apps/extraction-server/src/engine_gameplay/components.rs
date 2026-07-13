@@ -15,7 +15,7 @@ use crate::{
     matchmaking::SeatId,
 };
 
-pub(super) struct MatchPlayerComp {
+pub(crate) struct MatchPlayerComp {
     account_id: Uuid,
     public_player_id: Uuid,
     seat_id: SeatId,
@@ -30,7 +30,7 @@ impl MatchPlayerComp {
         }
     }
 
-    pub(super) const fn account_id(&self) -> Uuid {
+    pub(crate) const fn account_id(&self) -> Uuid {
         self.account_id
     }
 
@@ -202,7 +202,7 @@ pub(super) struct EliminationRecord {
     pub notice_sent: bool,
 }
 
-pub(super) struct EliminationComp(Option<EliminationRecord>);
+pub(crate) struct EliminationComp(Option<EliminationRecord>);
 
 impl EliminationComp {
     pub(super) const fn alive() -> Self {
@@ -211,6 +211,10 @@ impl EliminationComp {
 
     pub(super) fn record(&self) -> Option<&EliminationRecord> {
         self.0.as_ref()
+    }
+
+    pub(crate) const fn is_eliminated(&self) -> bool {
+        self.0.is_some()
     }
 
     pub(super) fn record_mut(&mut self) -> Option<&mut EliminationRecord> {
@@ -236,7 +240,7 @@ pub(super) struct ExtractionRecord {
 }
 
 #[derive(Default)]
-pub(super) struct ExtractionComp {
+pub(crate) struct ExtractionComp {
     progress: ExtractionProgress,
     record: Option<ExtractionRecord>,
     last_published_revision: Option<u32>,
@@ -253,6 +257,10 @@ impl ExtractionComp {
 
     pub(super) fn record(&self) -> Option<&ExtractionRecord> {
         self.record.as_ref()
+    }
+
+    pub(crate) const fn is_settlement_pending(&self) -> bool {
+        self.record.is_some()
     }
 
     pub(super) fn record_mut(&mut self) -> Option<&mut ExtractionRecord> {

@@ -11,7 +11,7 @@
     "build:wasm:dev": "cd crates/wasm-mesher && wasm-pack build --target web --dev",
     "build:wasm:release": "cd crates/wasm-mesher && wasm-pack build --target web --release",
     "build": "pnpm build:wasm && pnpm -r --fail-if-no-match --workspace-concurrency=1 --filter \"./packages/*\" --filter \"!@voxelize/core\" build && pnpm --filter @voxelize/core --fail-if-no-match build",
-    "build:extraction": "cargo check --manifest-path apps/extraction-server/Cargo.toml --all-targets --features engine --locked && pnpm --filter @voxelize/extraction-client --fail-if-no-match build && pnpm --filter @voxelize/extraction-e2e --fail-if-no-match typecheck",
+    "build:extraction": "cargo check --manifest-path apps/extraction-server/Cargo.toml --all-targets --features engine --locked && pnpm build && pnpm --filter @voxelize/extraction-client --fail-if-no-match build && pnpm --filter @voxelize/extraction-e2e --fail-if-no-match typecheck",
     "demo:ts": "cd examples/client && pnpm demo",
     "demo:rs": "cross-env RUST_BACKTRACE=1 cargo watch -w examples/server -w server -x \"run --profile release-dev --example demo\"",
     "test-dev": "vitest",

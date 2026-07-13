@@ -79,6 +79,9 @@ jobs:
       PUPPETEER_SKIP_DOWNLOAD: "true"
     steps:
       - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.93.0
+        with:
+          targets: wasm32-unknown-unknown
       - uses: pnpm/action-setup@v4
         with:
           version: 10.9.0
@@ -88,6 +91,10 @@ jobs:
           cache: pnpm
       - name: 安装工作区依赖
         run: pnpm install --frozen-lockfile
+      - name: 安装固定版本 WASM 构建工具
+        run: cargo install wasm-pack --version 0.13.1 --locked
+      - name: 构建 WASM 与 Core 依赖
+        run: pnpm build
       - name: 测试客户端协议
         run: pnpm --filter @voxelize/extraction-client --fail-if-no-match test
       - name: 检查 Extraction TypeScript 代码
@@ -100,7 +107,5 @@ jobs:
         run: pnpm --filter @voxelize/extraction-e2e --fail-if-no-match test:actor
       - name: 生成现有协议包
         run: pnpm --filter @voxelize/protocol --fail-if-no-match proto
-      - name: 构建现有 TypeScript 依赖
-        run: pnpm -r --fail-if-no-match --workspace-concurrency=1 --filter './packages/*' --filter '!@voxelize/core' build
       - name: 测试现有 TypeScript 工作区
         run: pnpm test

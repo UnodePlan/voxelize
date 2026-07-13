@@ -43,28 +43,28 @@ async fn EngineMatchWorldRuntime::prepare_world(
 - V1 has 90,000 dirt surface columns, five connected middle-depth gold deposits, and three connected deeper center-biased diamond deposits. Spawn points are a ten-point outer ring; gold anchors are rotated between adjacent spawns. Eight extraction candidates form one symmetric inner ring. Seed only shuffles stable candidate arrays.
 - Dynamic Worlds use `saving(false)`, preload radius 10, and do not open the application attach generation until lifecycle `Ready`. Preparation polls the same generation for at most 60 seconds. Timeout, actor error, or generation mismatch starts a bounded five-second removal and clears both ownership and attach-generation maps.
 - The V1 actual-Chunk SHA-256 fingerprint for seed `0x1122334455667788` is `234903c7af2917afb0e3b9aa643f5848c40f8e12b5494cd2b4d18187bb881df5`.
-- Known production fairness gap: strict Worlds still accept client-selected Chunk `LOAD` coordinates. Before production PVP fairness is claimed, LOAD must be bounded by authoritative player position and a bounded visible radius, or an equivalent anti-Xray design must hide unrevealed ore. Client UI limits are not a security boundary.
+- PVP Worlds use `ChunkLoadPolicy::AuthoritativeRadius { max_chunk_radius: 6 }`: the center and sorting direction come from server-owned player components, and every requested coordinate must also remain inside the frozen World chunk envelope. This bounds remote discovery but does not hide ore inside the legal radius or erase chunks already observed by a client.
 
 ### 4. Validation & Error Matrix
 
-| Condition | Required result |
-| --- | --- |
-| Missing/duplicate resource or equipment key | Manifest validation error; abort startup |
-| Duplicate/zero/out-of-range voxel or item ID | Manifest validation error; never enter registry panic paths |
-| Unsupported catalog, generation, or config version | `CatalogError`/`GenerationError`; reject before `AddWorld` |
-| Same seed and exact versions | Byte-identical canonical Chunk voxel fingerprint |
-| Different full `u64` seeds with the same folded engine seed | Observably different map fingerprint |
-| Stage attempts a cross-Chunk write | Test failure because `extra_changes` must stay empty |
-| World is still `Preparing` | Keep attach generation closed and poll with the same World generation |
-| Preparation exceeds 60 seconds or World generation changes | Remove the World, clear runtime maps, return `Unavailable` |
-| A new match reuses a seed after an earlier Chunk was mutated | Generate fresh initial terrain; inherit no Chunk state |
-| Client requests arbitrary distant LOAD in production | Current known gap; production readiness must remain blocked until bounded |
+| Condition                                                    | Required result                                                                  |
+| ------------------------------------------------------------ | -------------------------------------------------------------------------------- |
+| Missing/duplicate resource or equipment key                  | Manifest validation error; abort startup                                         |
+| Duplicate/zero/out-of-range voxel or item ID                 | Manifest validation error; never enter registry panic paths                      |
+| Unsupported catalog, generation, or config version           | `CatalogError`/`GenerationError`; reject before `AddWorld`                       |
+| Same seed and exact versions                                 | Byte-identical canonical Chunk voxel fingerprint                                 |
+| Different full `u64` seeds with the same folded engine seed  | Observably different map fingerprint                                             |
+| Stage attempts a cross-Chunk write                           | Test failure because `extra_changes` must stay empty                             |
+| World is still `Preparing`                                   | Keep attach generation closed and poll with the same World generation            |
+| Preparation exceeds 60 seconds or World generation changes   | Remove the World, clear runtime maps, return `Unavailable`                       |
+| A new match reuses a seed after an earlier Chunk was mutated | Generate fresh initial terrain; inherit no Chunk state                           |
+| Client requests arbitrary distant LOAD in PVP                | Reject outside the authoritative six-chunk radius or frozen World chunk envelope |
 
 ### 5. Good / Base / Bad Cases
 
 - Good: the server validates the bundled manifest, builds explicit registries, constructs a fresh immutable plan from the complete match seed, preloads the spawn core, and publishes the generation only after `Ready`.
 - Base: two independent matches with the same seed/version generate identical initial maps; mutations in the first in-memory World do not appear in the second.
-- Bad: auto-assigning IDs from registration order, using `WorldConfig.seed` as the full seed, sharing an advancing RNG between Chunk jobs, writing neighboring Chunks, enabling saving for match Worlds, accepting an unknown version by falling back to latest, or updating the V1 golden hash after tuning V1.
+- Bad: auto-assigning IDs from registration order, using `WorldConfig.seed` as the full seed, sharing an advancing RNG between Chunk jobs, writing neighboring Chunks, enabling saving for match Worlds, trusting a client-selected PVP LOAD center, accepting an unknown version by falling back to latest, or updating the V1 golden hash after tuning V1.
 
 ### 6. Tests Required
 

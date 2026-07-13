@@ -62,7 +62,7 @@ impl GameplayAuthority {
         service.allows_gameplay(&self.world_name, &world_generation, client_id, account_id)
     }
 
-    pub(super) fn allows_entity(
+    pub(crate) fn allows_entity(
         &self,
         clients: &Clients,
         entity: Entity,

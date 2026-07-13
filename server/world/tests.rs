@@ -357,6 +357,90 @@ fn dispatcher_extension_preserves_the_current_factory() {
 }
 
 #[test]
+fn before_spatial_hook_precedes_position_consumers_and_gameplay() {
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let mut world = test_world("before-spatial-hook", &WorldConfig::default());
+
+    let movement_calls = calls.clone();
+    world
+        .install_before_spatial_update_system("authoritative-movement-test", move || {
+            OrderedSystem("movement", movement_calls.clone())
+        })
+        .unwrap();
+    let peer_calls = calls.clone();
+    world.extend_dispatcher(move |builder| {
+        builder.with(
+            OrderedSystem("peer-metadata", peer_calls.clone()),
+            "observe-after-peer-metadata",
+            &["peers-meta"],
+        )
+    });
+    let mining_calls = calls.clone();
+    world
+        .install_before_chunk_updating_system("mining-after-movement-test", move || {
+            OrderedSystem("mining", mining_calls.clone())
+        })
+        .unwrap();
+    let physics_calls = calls.clone();
+    world.extend_dispatcher(move |builder| {
+        builder.with(
+            OrderedSystem("physics-consumer", physics_calls.clone()),
+            "observe-after-physics",
+            &["physics"],
+        )
+    });
+
+    world.prepare();
+    world.tick();
+
+    let calls = calls.lock().unwrap();
+    let movement = calls.iter().position(|call| *call == "movement").unwrap();
+    let peer_metadata = calls
+        .iter()
+        .position(|call| *call == "peer-metadata")
+        .unwrap();
+    let mining = calls.iter().position(|call| *call == "mining").unwrap();
+    let physics = calls
+        .iter()
+        .position(|call| *call == "physics-consumer")
+        .unwrap();
+    assert!(movement < peer_metadata);
+    assert!(movement < mining);
+    assert!(mining < physics);
+}
+
+#[test]
+fn before_spatial_hook_rejects_conflicts_and_custom_dispatchers() {
+    let mut world = test_world("before-spatial-conflicts", &WorldConfig::default());
+    assert_eq!(
+        world.install_before_spatial_update_system("current-chunk", || CountingSystem(Arc::new(
+            AtomicUsize::new(0)
+        ))),
+        Err(DispatcherHookError::NameConflict)
+    );
+    world
+        .install_before_spatial_update_system("application-before-spatial", || {
+            CountingSystem(Arc::new(AtomicUsize::new(0)))
+        })
+        .unwrap();
+    assert_eq!(
+        world.install_before_spatial_update_system("second-spatial-hook", || CountingSystem(
+            Arc::new(AtomicUsize::new(0))
+        )),
+        Err(DispatcherHookError::HookAlreadyInstalled)
+    );
+
+    let mut custom = test_world("custom-before-spatial", &WorldConfig::default());
+    custom.set_dispatcher(TimedDispatcherBuilder::new);
+    assert_eq!(
+        custom.install_before_spatial_update_system("application-before-spatial", || {
+            CountingSystem(Arc::new(AtomicUsize::new(0)))
+        }),
+        Err(DispatcherHookError::CustomDispatcherUnsupported)
+    );
+}
+
+#[test]
 fn before_chunk_hook_rebuilds_cache_and_preserves_post_extensions() {
     let calls = Arc::new(Mutex::new(Vec::new()));
     let mut world = test_world("before-chunk-hook", &WorldConfig::default());
@@ -653,6 +737,210 @@ fn strict_policy_rejects_single_and_bulk_raw_voxel_updates_before_staging() {
     world.on_request("player-1", bulk);
 
     assert!(world.chunks().updates_staging.is_empty());
+}
+
+#[test]
+fn authoritative_chunk_load_ignores_client_center_and_rejects_far_or_outside_chunks() {
+    let config = WorldConfig::new()
+        .min_chunk([-10, -10])
+        .max_chunk([9, 9])
+        .chunk_load_policy(ChunkLoadPolicy::authoritative_radius(6))
+        .build();
+    let mut world = test_world("bounded-load", &config);
+    world.set_client_modifier(|world, entity| {
+        world
+            .write_component::<PositionComp>()
+            .insert(entity, PositionComp::new(-0.1, 20.0, -16.1))
+            .unwrap();
+        world
+            .write_component::<DirectionComp>()
+            .insert(entity, DirectionComp::new(0.0, 0.0, 1.0))
+            .unwrap();
+    });
+    world.prepare();
+    let (sender, _receiver) = ws_sender();
+    world
+        .add_client(
+            "player-1",
+            "Player",
+            &sender,
+            ClientPreferencesPatch::default(),
+            None,
+            "bounded-load-attempt".to_owned(),
+        )
+        .unwrap();
+
+    world.on_request(
+        "player-1",
+        Message::new(&MessageType::Load)
+            .json(
+                &serde_json::json!({
+                    "center": [999, 999],
+                    "direction": [1.0, 0.0],
+                    "chunks": [[-1, -2], [5, -2], [6, -2], [-11, -2]]
+                })
+                .to_string(),
+            )
+            .build(),
+    );
+
+    let entity = world.clients().get("player-1").unwrap().entity;
+    let requests = world.read_component::<ChunkRequestsComp>();
+    let requests = requests.get(entity).unwrap();
+    assert_eq!(requests.center, Vec2(-1, -2));
+    assert_eq!(requests.direction, Vec2(0.0, 1.0));
+    assert_eq!(requests.requests, vec![Vec2(-1, -2), Vec2(5, -2)]);
+}
+
+#[test]
+fn legacy_chunk_load_preserves_client_selected_center_and_coordinates() {
+    let mut world = test_world("legacy-load", &WorldConfig::default());
+    world.prepare();
+    let (sender, _receiver) = ws_sender();
+    world
+        .add_client(
+            "player-1",
+            "Player",
+            &sender,
+            ClientPreferencesPatch::default(),
+            None,
+            "legacy-load-attempt".to_owned(),
+        )
+        .unwrap();
+
+    world.on_request(
+        "player-1",
+        Message::new(&MessageType::Load)
+            .json(r#"{"center":[999,999],"direction":[1.0,0.0],"chunks":[[999,999]]}"#)
+            .build(),
+    );
+
+    let entity = world.clients().get("player-1").unwrap().entity;
+    let requests = world.read_component::<ChunkRequestsComp>();
+    let requests = requests.get(entity).unwrap();
+    assert_eq!(requests.center, Vec2(999, 999));
+    assert_eq!(requests.requests, vec![Vec2(999, 999)]);
+}
+
+#[actix::test]
+async fn legacy_transport_init_keeps_global_peer_and_entity_projection() {
+    let mut world = test_world("legacy-transport-init", &WorldConfig::default());
+    let mut metadata = MetadataComp::new();
+    metadata.set_value("loot", serde_json::json!({ "id": "far-loot" }));
+    world
+        .ecs_mut()
+        .create_entity()
+        .with(EntityFlag)
+        .with(IDComp::new("far-loot"))
+        .with(ETypeComp::new("loot", false))
+        .with(PositionComp::new(10_000.0, 20.0, 0.0))
+        .with(metadata)
+        .build();
+    world.prepare();
+
+    let (client_sender, _client_receiver) = ws_sender();
+    world
+        .add_client(
+            "legacy-peer",
+            "Legacy Peer",
+            &client_sender,
+            ClientPreferencesPatch::default(),
+            None,
+            "legacy-peer-attempt".to_owned(),
+        )
+        .unwrap();
+
+    let (transport_sender, mut transport_receiver) = ws_sender();
+    world.add_transport("legacy-transport", &transport_sender);
+    let init = crate::decode_message(&transport_receiver.recv().await.unwrap()).unwrap();
+
+    assert!(init.peers.iter().any(|peer| peer.id == "legacy-peer"));
+    assert!(init.entities.iter().any(|entity| entity.id == "far-loot"));
+}
+
+#[actix::test]
+async fn bounded_init_hides_far_peer_and_entity_metadata() {
+    let config = WorldConfig::new()
+        .entity_visibility_policy(EntityVisibilityPolicy::bounded())
+        .entity_visible_radius(96.0)
+        .build();
+    let mut world = test_world("bounded-init", &config);
+    world.set_client_modifier(|world, entity| {
+        let id = world.get_id(entity);
+        let x = match id.as_str() {
+            "near" => 10.0,
+            "far" => 200.0,
+            _ => 0.0,
+        };
+        world
+            .write_component::<PositionComp>()
+            .insert(entity, PositionComp::new(x, 20.0, 0.0))
+            .unwrap();
+    });
+    for (id, x) in [("near-loot", 10.0), ("far-loot", 200.0)] {
+        let mut metadata = MetadataComp::new();
+        metadata.set_value("loot", serde_json::json!({ "id": id }));
+        world
+            .ecs_mut()
+            .create_entity()
+            .with(EntityFlag)
+            .with(IDComp::new(id))
+            .with(ETypeComp::new("loot", false))
+            .with(PositionComp::new(x, 20.0, 0.0))
+            .with(metadata)
+            .build();
+    }
+    world.prepare();
+
+    let (viewer_sender, mut viewer_receiver) = ws_sender();
+    world
+        .add_client(
+            "viewer",
+            "Viewer",
+            &viewer_sender,
+            ClientPreferencesPatch::default(),
+            None,
+            "viewer-attempt".to_owned(),
+        )
+        .unwrap();
+    let viewer_init = crate::decode_message(&viewer_receiver.recv().await.unwrap()).unwrap();
+    assert!(viewer_init
+        .entities
+        .iter()
+        .any(|entity| entity.id == "near-loot"));
+    assert!(!viewer_init
+        .entities
+        .iter()
+        .any(|entity| entity.id == "far-loot"));
+
+    let (near_sender, mut near_receiver) = ws_sender();
+    world
+        .add_client(
+            "near",
+            "Near",
+            &near_sender,
+            ClientPreferencesPatch::default(),
+            None,
+            "near-attempt".to_owned(),
+        )
+        .unwrap();
+    let near_init = crate::decode_message(&near_receiver.recv().await.unwrap()).unwrap();
+    assert!(near_init.peers.iter().any(|peer| peer.id == "viewer"));
+
+    let (far_sender, mut far_receiver) = ws_sender();
+    world
+        .add_client(
+            "far",
+            "Far",
+            &far_sender,
+            ClientPreferencesPatch::default(),
+            None,
+            "far-attempt".to_owned(),
+        )
+        .unwrap();
+    let far_init = crate::decode_message(&far_receiver.recv().await.unwrap()).unwrap();
+    assert!(!far_init.peers.iter().any(|peer| peer.id == "viewer"));
+    assert!(!far_init.peers.iter().any(|peer| peer.id == "near"));
 }
 
 #[test]

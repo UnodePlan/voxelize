@@ -26,6 +26,8 @@ import { UV } from "./uv";
 export class AtlasTexture extends CanvasTexture {
   private static sharedUnknownTexture: AtlasTexture | null = null;
 
+  private disposed = false;
+
   /**
    * The number of textures per side of the texture atlas
    */
@@ -253,17 +255,22 @@ export class AtlasTexture extends CanvasTexture {
     keyframes: [number, Color | HTMLImageElement][],
     fadeFrames = 0,
   ) {
+    if (this.disposed) return;
+
     const animation = new FaceAnimation(range, keyframes, fadeFrames);
 
     const entry = { animation, timer: null };
 
     const start = (index = 0) => {
+      if (this.disposed) return;
+
       const keyframe = animation.keyframes[index];
 
       this.drawImageToRange(range, keyframe[1], this.countPerSide !== 1);
 
       entry.timer = setTimeout(() => {
         clearTimeout(entry.timer);
+        if (this.disposed) return;
 
         const nextIndex = (index + 1) % animation.keyframes.length;
 
@@ -271,6 +278,8 @@ export class AtlasTexture extends CanvasTexture {
           const nextKeyframe = animation.keyframes[nextIndex];
 
           const fade = (fraction = 0) => {
+            if (this.disposed) return;
+
             if (fraction > fadeFrames) {
               start(nextIndex);
               return;
@@ -307,6 +316,19 @@ export class AtlasTexture extends CanvasTexture {
     this.animations.push(entry);
 
     start();
+  }
+
+  override dispose() {
+    if (this.disposed) return;
+    this.disposed = true;
+
+    // 图集动画会循环创建计时任务，释放纹理时必须同步终止。
+    this.animations.forEach(({ timer }) => clearTimeout(timer));
+    this.animations.length = 0;
+    if (AtlasTexture.sharedUnknownTexture === this) {
+      AtlasTexture.sharedUnknownTexture = null;
+    }
+    super.dispose();
   }
 
   private makeCanvasPowerOfTwo(canvas?: HTMLCanvasElement | undefined) {
@@ -382,6 +404,10 @@ export class AtlasTexture extends CanvasTexture {
 
     AtlasTexture.sharedUnknownTexture = newAtlas;
     return newAtlas;
+  }
+
+  static isSharedUnknownTexture(texture: Texture): boolean {
+    return texture === AtlasTexture.sharedUnknownTexture;
   }
 }
 

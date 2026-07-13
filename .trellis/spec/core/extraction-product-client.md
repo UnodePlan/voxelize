@@ -38,7 +38,8 @@ This document records the implemented contracts for the extraction product clien
 ## Production Boundary
 
 - The E2E state bridge is loaded only in Vite `e2e` mode and a production artifact scan rejects its markers.
-- The current decorative Three scene is not authoritative gameplay. Release requires Voxelize INIT/UPDATE/LOAD rendering, real input wiring, and server-authoritative movement before the match flow can be described as playable.
+- Production creates the actual Voxelize World from decoded `INIT`, routes World/peer/entity messages, forwards bounded `LOAD`/`UNLOAD`, wires pointer-lock movement/mining/combat/drop controls, and reconciles server-owned movement. The decorative scene remains only before a match World exists.
+- Every leave, policy close, reconnect expiry, logout, wallet/chain change, and replacement INIT disposes the prior World, decoder state, workers, timers, listeners, controls, and owned Three resources exactly once.
 
 ## Forbidden Patterns
 

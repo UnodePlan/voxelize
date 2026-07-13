@@ -43,6 +43,7 @@ mod mining_tests;
 mod tests;
 
 pub(crate) use authority::GameplayAuthority;
+pub(crate) use components::{EliminationComp, ExtractionComp, MatchPlayerComp};
 pub(crate) use forced_elimination::ForcedEliminationQueue;
 pub(crate) use hard_deadline::{HardDeadlineControl, HardDeadlineRequest};
 pub(crate) use runtime::install_gameplay_runtime;
