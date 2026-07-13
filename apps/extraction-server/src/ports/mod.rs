@@ -13,7 +13,8 @@ pub use match_repository::{
     MatchRepository, MatchRepositoryError, SettlingTrigger, TransitionOutcome,
 };
 pub use match_world_runtime::{
-    MatchWorldRuntime, MatchWorldRuntimeError, MatchWorldSpec, PreparedMatchWorld,
+    MatchWorldRuntime, MatchWorldRuntimeError, MatchWorldRuntimeResourceSnapshot, MatchWorldSpec,
+    PreparedMatchWorld,
 };
 pub use repository::{
     BootstrapRepositoryProbe, RepositoryError, RepositoryFuture, RepositoryProbe,

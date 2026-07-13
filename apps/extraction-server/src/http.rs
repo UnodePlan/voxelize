@@ -1,4 +1,8 @@
 mod auth;
+#[cfg(all(feature = "e2e-control", feature = "engine"))]
+mod e2e_resources;
+#[cfg(feature = "e2e-control")]
+mod e2e_settlement;
 mod error;
 mod health;
 mod matchmaking;
@@ -12,6 +16,8 @@ use actix_web::web;
 
 #[cfg(feature = "engine")]
 use crate::engine_catalog::EngineCatalog;
+#[cfg(feature = "e2e-control")]
+use crate::persistence::PgRepository;
 use crate::{
     auth::{AuthService, NonceRateLimiter},
     contracts::ExtractionManifest,
@@ -36,6 +42,8 @@ pub struct AppState {
     verification_rate_limiter: NonceRateLimiter,
     #[cfg(feature = "engine")]
     engine_catalog: Option<Arc<EngineCatalog>>,
+    #[cfg(feature = "e2e-control")]
+    e2e_repository: Option<Arc<PgRepository>>,
 }
 
 impl AppState {
@@ -53,6 +61,8 @@ impl AppState {
             verification_rate_limiter: NonceRateLimiter::default(),
             #[cfg(feature = "engine")]
             engine_catalog: None,
+            #[cfg(feature = "e2e-control")]
+            e2e_repository: None,
         }
     }
 
@@ -84,6 +94,12 @@ impl AppState {
         self
     }
 
+    #[cfg(feature = "e2e-control")]
+    pub(crate) fn with_e2e_repository(mut self, repository: Arc<PgRepository>) -> Self {
+        self.e2e_repository = Some(repository);
+        self
+    }
+
     pub fn with_readiness_timeout(mut self, readiness_timeout: Duration) -> Self {
         self.readiness_timeout = readiness_timeout;
         self
@@ -108,6 +124,11 @@ impl AppState {
     #[cfg(feature = "engine")]
     pub(crate) fn engine_catalog(&self) -> Option<&Arc<EngineCatalog>> {
         self.engine_catalog.as_ref()
+    }
+
+    #[cfg(feature = "e2e-control")]
+    pub(crate) fn e2e_repository(&self) -> Option<&Arc<PgRepository>> {
+        self.e2e_repository.as_ref()
     }
 
     pub(crate) fn allow_nonce_request(&self, peer_addr: Option<std::net::SocketAddr>) -> bool {
@@ -138,4 +159,8 @@ pub fn configure_api(config: &mut web::ServiceConfig) {
         .configure(warehouse::configure)
         .configure(matchmaking::configure)
         .configure(results::configure);
+    #[cfg(all(feature = "e2e-control", feature = "engine"))]
+    config.configure(e2e_resources::configure);
+    #[cfg(feature = "e2e-control")]
+    config.configure(e2e_settlement::configure);
 }

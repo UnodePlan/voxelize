@@ -5,6 +5,7 @@ mod connections;
 mod detached_lifecycle;
 mod join;
 mod models;
+mod resource_stats;
 mod websocket;
 mod world_lifecycle;
 mod ws_auth;
@@ -43,6 +44,7 @@ use connections::{DetachedConnection, LeavingSession, PendingJoin, PendingRebind
 pub use connections::{WsReceiver, WsSendError, WsSender};
 pub use detached_lifecycle::{DespawnDetachedPrincipal, EvictMatchPrincipal};
 pub use models::*;
+pub use resource_stats::{GetServerResourceSnapshot, ServerResourceSnapshot};
 pub(crate) use websocket::{ws_route, HandshakeConfig};
 pub use world_lifecycle::{
     AddWorld, PrepareWorld, PrepareWorldError, PrepareWorldOutcome, RemoveWorld, RemoveWorldOutcome,

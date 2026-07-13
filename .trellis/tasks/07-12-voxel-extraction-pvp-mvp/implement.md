@@ -193,9 +193,9 @@ PostgreSQL 结算使用数据库事务时间、5 秒锁超时、15 秒语句超�
 
 响应式验收覆盖 1440x900、390x844、320x844、568x320 和 667x375：10 颗心、12 格背包与固定装备不越界，短横屏准星不覆盖生命条，登录/大厅/结果面板末端操作可滚动触达；canvas 非空且连续帧发生变化。`state.ts` 为 310 行，仅超过 300 行软上限且低于 500 行硬上限；它集中定义同一 reducer 的完整判别联合与转换，当前拆分会分散状态所有权，因此暂不拆分。
 
-当前明确阻断：生产客户端仍未消费 Voxelize 压缩 INIT/UPDATE/LOAD，也没有把键鼠、指针锁、移动、瞄准、挖掘、攻击和丢弃接到真实 300x300 服务端 World。现有 Three 场景只用于 UI 与视觉验证，不能称为实际可玩的对局；第一项必须在阶段 11 的真实世界接入和权威移动闭环完成后才能勾选。
+阶段 9 当时的真实 World 接入阻断已由阶段 11 解决：生产客户端现已消费 Voxelize 压缩协议，并把键鼠、指针锁、移动、瞄准、挖掘、攻击和丢弃接到真实 300x300 服务端 World。当前唯一外部验收缺口是缺少 `VITE_REOWN_PROJECT_ID` 与用户真实钱包会话，因此不能把确定性 EOA 的服务端 SIWE 门禁冒充为 Reown AppKit 钱包弹窗验收。
 
-验证记录：客户端 Vitest 22 个文件、154/154 通过；TypeScript、全 extraction ESLint、生产 build 与测试后门扫描通过。Rust `cargo fmt --all -- --check` 与应用 `engine` Clippy `--no-deps -D warnings` 通过；根 Voxelize 仍只有既有 84 条 warning。浏览器逐视口检查无页面横向溢出或不可达操作。真实 PostgreSQL 未配置且未执行 migration。
+阶段 9 当时验证记录：客户端 Vitest 22 个文件、154/154 通过；TypeScript、全 extraction ESLint、生产 build 与测试后门扫描通过。Rust `cargo fmt --all -- --check` 与应用 `engine` Clippy `--no-deps -D warnings` 通过；根 Voxelize 仍只有既有 84 条 warning。浏览器逐视口检查无页面横向溢出或不可达操作；当时尚未运行后续阶段的真实 PostgreSQL 门禁。
 
 阶段 11 补充实现（2026-07-13）：比赛 `INIT` 现在创建真实 Voxelize World，协议 Worker 解码并路由 Chunk、Peer、Entity 与生命周期消息；客户端以 20Hz 上限发送移动意图并只转发 World 的 `LOAD/UNLOAD`。指针锁输入接入挖掘、近战、整槽丢弃，服务端权威 PEER 纠正本地预测。离场、策略关闭、重连过期、显式登出、钱包/链变化和替换 INIT 都会幂等销毁旧 World、Worker、监听器、定时器、控制器及实例资源，异步初始化在 dispose 后不能复活。生产构建只链接真实 Core，测试 facade 仅由 Vitest alias 注入并由产物扫描阻断。
 
@@ -211,9 +211,9 @@ PostgreSQL 结算使用数据库事务时间、5 秒锁超时、15 秒语句超�
 
 实现记录（2026-07-13）：新增默认关闭的独立 `ops` 二进制，只允许绑定 loopback，不接入公开游戏 HTTP listener；固定六类 GET 资源，不提供任意 SQL、修改余额或重放 settlement 的入口。运维 token 至少 32 字节且只保存 SHA-256，Bearer 校验使用常量时间比较；请求采用独立限流、最大 5 秒超时、最大 100 条分页、`no-store` 响应和脱敏 JSON 审计，审计不记录 subject ID、钱包、token、查询参数或 SQL。
 
-PostgreSQL repository 每次读取使用 `REPEATABLE READ READ ONLY` 快照，连接同时设置只读、statement/lock timeout 与固定 search path。启动角色探针要求 `current_user = session_user`，目标七张表全部可 SELECT，并枚举当前登录角色可达的全部直接/间接成员角色，拒绝任何表级或列级写权限、PostgreSQL 预定义 `pg_*` 角色，以及 superuser、createdb、createrole、replication、bypassrls；`default_transaction_read_only` 只作为纵深防护，不能替代数据库最小权限。部署者必须通过独立 `EXTRACTION_OPS_DATABASE_URL` 提供只读账号，本阶段没有创建角色、连接数据库或执行 migration。
+PostgreSQL repository 每次读取使用 `REPEATABLE READ READ ONLY` 快照，连接同时设置只读、statement/lock timeout 与固定 search path。启动角色探针要求 `current_user = session_user`，目标七张表全部可 SELECT，并枚举当前登录角色可达的全部直接/间接成员角色，拒绝任何表级或列级写权限、PostgreSQL 预定义 `pg_*` 角色，以及 superuser、createdb、createrole、replication、bypassrls；`default_transaction_read_only` 只作为纵深防护，不能替代数据库最小权限。部署者仍须通过独立 `EXTRACTION_OPS_DATABASE_URL` 提供只读账号，本任务没有创建、提权或修改数据库角色。
 
-验证记录：运维 HTTP 集成测试 5/5，覆盖六类脱敏查询、匿名/玩家 Cookie/错误 token、分页、限流、超时、任意写请求和逐条审计；角色权限判定与 SQL 契约单元测试 2/2。应用全目标 Clippy `--no-deps -D warnings`、新增 Rust 文件定向 rustfmt 与 `git diff --check` 通过。全应用 `cargo fmt -- --check` 仍被本阶段未修改的 `matchmaking/coordinator.rs` 既有排版差异阻塞，未顺带修改。当前没有 `TEST_DATABASE_URL/DATABASE_URL` 授权，因此不声称真实 PostgreSQL 角色探针已执行；上线前必须在受控环境验证探针接受只读角色并拒绝表级、列级和继承写权限。所有新增生产文件低于 300 行，451 行 HTTP 测试适用测试文件规模例外。
+验证记录：运维 HTTP 集成测试 5/5，覆盖六类脱敏查询、匿名/玩家 Cookie/错误 token、分页、限流、超时、任意写请求和逐条审计；角色权限判定与 SQL 契约单元测试 2/2。受控本地真实角色探针已执行：受保护 GET 为 200、匿名为 401、POST 为 405；`current_user = session_user`，目标表 `SELECT=true`、`UPDATE=false`，只读事务中的 UPDATE 被 PostgreSQL 拒绝。记录未保存 DSN、token 或其他 secret。应用全目标 Clippy `--no-deps -D warnings`、Rust fmt 与 `git diff --check` 通过；所有新增生产文件低于 300 行，451 行 HTTP 测试适用测试文件规模例外。
 
 验收：授权查询成功，所有写入尝试失败且访问有不泄密的审计记录。
 
@@ -222,22 +222,26 @@ PostgreSQL repository 每次读取使用 `REPEATABLE READ READ ONLY` 快照，�
 ## 阶段 11：E2E、观测与发布门禁
 
 - [x] 在公平 PVP 验收前实现服务端体素碰撞 sweep、重力、落地和跳跃权威；合法速率内的小步穿墙/飞行也必须拒绝。
-- [ ] 轻量协议客户端覆盖容量与竞态；每次变更由 2 个 Playwright 浏览器 + 8 个轻量协议客户端组成合法 10 人闭环，10 浏览器完整场景用于 nightly/发布前。
-- [ ] 完整闭环：10 人 -> 挖掘 -> 10 次近战 -> 唯一掉落 -> 自动拾取 -> 8 分钟开放 -> 8 秒撤离 -> 一次入仓。
-- [ ] 覆盖第 11 人、迟到加入、断线重连/被杀/超时、满包、重复消息、DB 故障和 Aborted。
-- [ ] 连续多局检查 worlds、connections、pending ticks、掉落实体与内存不线性增长。
+- [x] 轻量协议客户端覆盖容量与竞态；每次变更由 2 个 Playwright 浏览器 + 8 个轻量协议客户端组成合法 10 人闭环，10 浏览器完整场景用于 nightly/发布前。
+- [x] 完整闭环：10 人 -> 挖掘 -> 10 次近战 -> 唯一掉落 -> 自动拾取 -> 8 分钟开放 -> 8 秒撤离 -> 一次入仓。
+- [x] 覆盖第 11 人、迟到加入、断线重连/被杀/超时、满包、重复消息、DB 故障和 Aborted。
+- [x] 连续多局检查 worlds、connections、pending ticks、掉落实体与内存不线性增长。
 - [x] 结构化记录阶段、拒绝、死亡、settlement 和恢复结果，严禁记录签名/token/secret。
-- [ ] Playwright 检查桌面/移动 HUD 不重叠、canvas 非空、场景移动且资产可见。
+- [x] Playwright 检查桌面/移动 HUD 不重叠、canvas 非空、场景移动且资产可见。
 
 实现记录（2026-07-13）：服务端移动只接受有限单位轴、跳跃边沿和视线方向，客户端 position 兼容字段被忽略；服务端以 30/s、burst 6、250ms 失效窗口驱动固定 `0.8 x 1.8 x 0.8` 刚体、6 格/秒、8 跳跃冲量、重力和 Voxelize swept-AABB。完整刚体必须位于 300 边界与高度范围，物理 delta 超过 50ms、3x3 邻区未 Ready、权限失效、死亡或待结算均失败关闭。命名调度 hook 显式保证移动先于玩家 metadata、当前区块、挖掘、默认 Physics/Rapier 同步、战斗与撤离判定；Rapier 与刚体统一使用中心坐标，公开 `PositionComp` 保持 1.62 眼高。
 
-PVP World 显式启用权威 6 Chunk `LOAD` 半径和 96 格玩家/实体可见半径；客户端 center/direction 不参与准入，INIT 与持续投影不再泄露远端 metadata。受限模式每 Tick 向本人定向回传权威 PEER，即使越界回滚后 metadata 未变化也能纠正持续本地预测；稳定广播合并保留消息组首次入队位置，确保进入范围的编码顺序仍为 `JOIN -> PEER`。该边界不是矿石混淆，合法半径内完整体素与历史缓存仍是明确残余风险。新增强类型 JSON 观测事件，只容纳 match ID、固定枚举、时间和计数；容量编排器覆盖 2 browser + 8 protocol 的接口形状与第 11 人拒绝，Rust 内存协调器覆盖真实 10/11 原子规则及连续 5 局 runtime/timer/route 回基线。
+PVP World 显式启用权威 6 Chunk `LOAD` 半径和 96 格玩家/实体可见半径；客户端 center/direction 不参与准入，INIT 与持续投影不泄露远端 metadata。受限模式每 Tick 向本人定向回传权威 PEER，即使越界回滚后 metadata 未变化也能纠正持续本地预测。服务端 Anti-Xray 把未暴露的黄金/钻石仅在出站投影为泥土，权威 Chunk、碰撞、挖掘与指纹保持真实矿石；Air 更新可跨 Chunk 单调揭示相邻矿石，且只通知感兴趣客户端。根 Chunk 投影、固定种子遮蔽/跨 Chunk 揭示及真实生成矿 `1.5s/3s` 唯一产出均有回归。
 
-验证记录：根引擎 79 个库测试及全部集成测试、应用 `engine` 146 个库测试与 46 个非数据库集成测试、客户端 25 文件 165/165、Core 7 文件 14/14、E2E Actor 2 文件 5/5 全部通过；客户端/Core TypeScript、extraction ESLint、Rust fmt 与应用 Clippy 零新增错误。安装固定 `wasm-pack 0.13.1` 后生成真实 WASM/Core 产物，并以不清空既有 dist 的临时目录完成生产构建，产物不含测试 bridge/facade 标记。桌面 1440x900 与移动 390x844 的生产首屏无重叠、无浏览器错误，canvas 裁剪像素非空且包含数千采样颜色；未配置数据库、未连接 PostgreSQL、未执行 migration。
+真实发布门禁记录（2026-07-13）：`test:live:smoke` 以 2 个真实浏览器 + 8 个协议客户端验证恰好十人同局、第 11 人和迟到 JOIN 拒绝；`test:live:10p` 以 10 个真实浏览器验证容量、桌面/移动布局、非空 WebGL、帧推进与权威位移。`test:live:gameplay` 连续 5 局逐局完成真实泥土 `+1`、十次服务端生命 `18..0`、唯一死亡掉落、自动拾取、8 分钟开放、8 秒撤离和一次结算入仓；终态生命值来自真实 `health-state`，不使用硬编码证据。
 
-未完成边界：当前容量 Actor 使用 scripted driver，尚未执行真实 2 Playwright + 8 WebSocket 网络闭环；未跑 10 人完整挖掘/击杀/撤离/入仓、DB 故障、10 浏览器 nightly、RSS/WebGL 多局内存或真实比赛内移动画面，因此对应清单保持未勾选。
+资源与故障门禁记录：五轮完全释放的 `liveAllocatedBytes` 为 `3,035,291 / 3,080,608 / 3,169,667 / 3,215,175 / 3,292,091` 字节，首尾仅增加 `256,800` 字节；每轮 World、连接、路由、计时任务、`liveWorldInstances` 与 `worldBackgroundTasks` 均连续归零。RSS 首尾增加 `112,902,144` 字节，仅作为系统 allocator 高水位诊断，不再冒充存活对象泄漏。`test:live:reconnect`、`test:live:crash-recovery` 两种提交边界、`test:live:settlement-uncertainty` 与同页三局 `test:live:multi-round` 均通过；多局比较只比较生命周期画像，累计 allocator 计数由专门内存门禁评估。
 
-文件规模说明：本阶段新增/拆分生产模块均低于 300 行。`apps/extraction-client/src/game/network.ts` 为 304 行，已将 egress、reconnect、decoder 和 router 拆为专责模块，剩余主体是单一 socket 生命周期编排，略超软上限但低于 500 行硬上限；继续为 4 行机械拆分会降低可读性。既有 `server/world/config.rs` 已把构建校验拆入 `config/build.rs`，主体降至约 450 行；既有 `server/world/mod.rs` 当前 2420 行且同目录已有 `SIZE_NOTES.md`，新 LOAD、INIT 与 visibility 逻辑均已拆到小模块，仅通用默认 dispatcher hook 留在聚合文件。测试文件适用规模例外。
+World 生命周期已改为进程共享 Rayon 池，并以每 World RAII 任务许可跟踪生成、meshing、编码和 dispatcher 工作；停止时先拒绝新任务、等待在途任务归零，再确认 Stopped。E2E Actor 当前 16 文件 65/65 通过；CI 每次运行 smoke/gameplay，nightly 或手动运行 10p、multi-round、reconnect、crash-recovery 与 uncertainty，并上传唯一产物目录。进程监督只清理由当前 runner 的 PID/PPID/PGID 证明拥有的进程，未影响持续监听 4100 的用户服务。
+
+最终质量门禁：客户端 28 文件 181/181、Core 8 文件 15/15、E2E Actor 16 文件 65/65、进程监督/编排 30/30；TypeScript、ESLint、Prettier、Rust fmt 与 `git diff --check` 全部通过。根引擎 89 个库测试及全部集成测试通过；应用 `engine,e2e-control` 168 个库测试和全部集成测试通过；本地专用 PostgreSQL 串行执行认证 11、匹配 9、结算 7 项全部通过；应用 `engine,e2e-control,db-tests` Clippy `--no-deps -D warnings` 通过。根依赖仍输出 79 条既有 warning，未纳入本任务改动。
+
+文件规模说明：本阶段新增/拆分生产模块均低于 300 行。`apps/extraction-client/src/game/network.ts` 为 304 行，已将 egress、reconnect、decoder 和 router 拆为专责模块，剩余主体是单一 socket 生命周期编排，略超软上限但低于 500 行硬上限；继续为 4 行机械拆分会降低可读性。既有 `server/world/generators/pipeline.rs` 约 414 行，仍是单一生成阶段编排且低于硬上限，本次只注入共享池与任务许可；既有 `server/world/mod.rs` 超过 500 行且同目录已有 `SIZE_NOTES.md`，新增投影、生命周期和资源统计均拆到小模块，仅接线留在聚合文件。测试文件适用规模例外。
 
 验收：受控环境核心闭环全绿，故障不复制永久资产，连续多局无泄漏。
 
@@ -286,8 +290,8 @@ pnpm --filter @voxelize/extraction-e2e test:browser:10p
 
 ## 开始实现前门禁
 
-- [ ] 用户审核并批准 `prd.md`、`design.md` 和本文件。
-- [ ] PRD 已完成无损收敛，无重复事实或已解决开放问题。
-- [ ] `implement.jsonl`、`check.jsonl` 均有真实 research/spec 条目并通过校验。
-- [ ] 用户对新增依赖和实际数据库 migration 的危险操作范围另行确认。
-- [ ] 以上完成后才执行 `task.py start`，当前阶段不得开始业务实现。
+- [x] 用户审核并批准 `prd.md`、`design.md` 和本文件。
+- [x] PRD 已完成无损收敛，无重复事实或已解决开放问题。
+- [x] `implement.jsonl`、`check.jsonl` 均有真实 research/spec 条目并通过校验。
+- [x] 用户对新增依赖和实际数据库 migration 的危险操作范围另行确认。
+- [x] 以上完成后执行 `task.py start`；任务已进入实现并完成当前仓库内门禁。

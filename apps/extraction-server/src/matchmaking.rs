@@ -8,7 +8,7 @@ mod coordinator;
 mod coordinator_connections;
 #[cfg(any(feature = "engine", test))]
 mod coordinator_deaths;
-#[cfg(test)]
+#[cfg(any(test, feature = "e2e-control"))]
 mod coordinator_diagnostics;
 mod coordinator_events;
 mod coordinator_extraction;
@@ -41,6 +41,8 @@ mod settlement_tests;
 mod state;
 mod terminal;
 
+#[cfg(feature = "e2e-control")]
+pub(crate) use coordinator_diagnostics::CoordinatorResourceSnapshot;
 #[cfg(feature = "engine")]
 pub(crate) use gate_types::GameplayTimeline;
 pub use model::{

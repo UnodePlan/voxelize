@@ -216,7 +216,7 @@ async fn unavailable_authenticated_client_id_rejects_before_world_admission_but_
             })
             .await
             .unwrap(),
-        Some("Authenticated client ID is unavailable.".to_owned())
+        Some("Client admission was denied.".to_owned())
     );
     assert_eq!(
         server
@@ -226,7 +226,7 @@ async fn unavailable_authenticated_client_id_rejects_before_world_admission_but_
             })
             .await
             .unwrap(),
-        Some("Authenticated client ID is unavailable.".to_owned())
+        Some("Client admission was denied.".to_owned())
     );
     assert_eq!(admission_calls.load(std::sync::atomic::Ordering::SeqCst), 0);
     assert_eq!(world.send(GetWorldStats).await.unwrap().client_count, 0);

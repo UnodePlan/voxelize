@@ -1,6 +1,9 @@
 name: 撤离玩法第一阶段
 
 on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
   pull_request:
     paths:
       - ".cargo/**"
@@ -55,6 +58,23 @@ jobs:
   server:
     name: Rust 服务端与引擎
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: voxelize_extraction_e2e
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d voxelize_extraction_e2e"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/voxelize_extraction_e2e
+      TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/voxelize_extraction_e2e
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.93.0
@@ -67,21 +87,62 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: 检查格式
         run: cargo fmt --manifest-path apps/extraction-server/Cargo.toml -- --check
+      - name: 检查核心矿石遮蔽格式
+        run: >-
+          rustfmt --edition 2021 --check
+          server/world/chunk_projection.rs
+          server/world/chunk_projection_tests.rs
+          server/world/systems/chunk/requests.rs
+          server/world/systems/chunk/sending.rs
+          server/world/systems/chunk/updating.rs
       - name: 检查默认骨架代码
         run: cargo clippy --manifest-path apps/extraction-server/Cargo.toml --all-targets --locked -- -D warnings
-      - name: 测试引擎链接骨架
-        run: cargo test --manifest-path apps/extraction-server/Cargo.toml --all-targets --features engine --locked
+      - name: 检查 E2E 控制边界
+        run: >-
+          cargo clippy --manifest-path apps/extraction-server/Cargo.toml
+          --all-targets --features engine,e2e-control --locked --no-deps
+          -- -D warnings
+      - name: 测试核心矿石遮蔽
+        run: cargo test --lib chunk_projection --locked
+      - name: 测试根引擎完整回归
+        run: cargo test --lib --tests --locked
+      - name: 测试 E2E 控制边界
+        run: >-
+          cargo test --manifest-path apps/extraction-server/Cargo.toml
+          --lib --features engine,e2e-control --locked
+      - name: 测试引擎与真实 PostgreSQL
+        run: cargo test --manifest-path apps/extraction-server/Cargo.toml --all-targets --features engine,db-tests --locked -- --test-threads=1
 
   web:
     name: TypeScript 协议与客户端
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: voxelize_extraction_e2e
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d voxelize_extraction_e2e"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     env:
+      DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/voxelize_extraction_e2e
       PUPPETEER_SKIP_DOWNLOAD: "true"
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.93.0
         with:
           targets: wasm32-unknown-unknown
+      - name: 安装固定版本 Protobuf 编译器
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
+        with:
+          version: "25.3"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
       - uses: pnpm/action-setup@v4
         with:
           version: 10.9.0
@@ -91,6 +152,13 @@ jobs:
           cache: pnpm
       - name: 安装工作区依赖
         run: pnpm install --frozen-lockfile
+      - name: 测试 E2E 进程监督器
+        run: >-
+          node --test
+          apps/extraction-e2e/scripts/process-supervisor.test.mjs
+          apps/extraction-e2e/scripts/live-smoke.test.mjs
+      - name: 安装 Playwright Chromium
+        run: pnpm --filter @voxelize/extraction-e2e --fail-if-no-match exec playwright install --with-deps chromium
       - name: 安装固定版本 WASM 构建工具
         run: cargo install wasm-pack --version 0.13.1 --locked
       - name: 构建 WASM 与 Core 依赖
@@ -105,6 +173,33 @@ jobs:
         run: pnpm --filter @voxelize/extraction-e2e --fail-if-no-match typecheck
       - name: 测试演员测试工具
         run: pnpm --filter @voxelize/extraction-e2e --fail-if-no-match test:actor
+      - name: 真实双浏览器加八协议客户端容量门禁
+        run: xvfb-run --auto-servernum pnpm --filter @voxelize/extraction-e2e --fail-if-no-match test:live:smoke
+      - name: 真实十人挖掘战斗撤离入仓门禁
+        run: pnpm --filter @voxelize/extraction-e2e --fail-if-no-match test:live:gameplay
+      - name: Nightly 真实十浏览器容量与渲染门禁
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        run: xvfb-run --auto-servernum pnpm --filter @voxelize/extraction-e2e --fail-if-no-match test:live:10p
+      - name: Nightly 同一浏览器连续三局资源清理门禁
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        run: xvfb-run --auto-servernum pnpm --filter @voxelize/extraction-e2e --fail-if-no-match test:live:multi-round
+      - name: Nightly 真实断线重连与唯一终态门禁
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        run: pnpm --filter @voxelize/extraction-e2e --fail-if-no-match test:live:reconnect
+      - name: Nightly 真实结算崩溃与重启幂等门禁
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        run: pnpm --filter @voxelize/extraction-e2e --fail-if-no-match test:live:crash-recovery
+      - name: Nightly 真实 COMMIT 结果不确定与宽限门禁
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        run: pnpm --filter @voxelize/extraction-e2e --fail-if-no-match test:live:settlement-uncertainty
+      - name: 上传真实发布门禁产物
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: extraction-live-smoke
+          path: apps/extraction-e2e/test-results/live-*
+          if-no-files-found: warn
+          retention-days: 7
       - name: 生成现有协议包
         run: pnpm --filter @voxelize/protocol --fail-if-no-match proto
       - name: 测试现有 TypeScript 工作区

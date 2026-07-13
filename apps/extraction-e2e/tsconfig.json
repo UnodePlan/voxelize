@@ -15,7 +15,10 @@
   },
   "include": [
     "src",
+    "playwright.config.ts",
     "vitest.actor.config.ts",
+    "vitest.live.config.ts",
+    "vitest.reconnect.config.ts",
     "../../contracts/extraction/v1/**/*.ts"
   ]
 }

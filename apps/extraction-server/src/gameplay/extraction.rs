@@ -4,7 +4,7 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 use super::inventory::{InventoryError, MatchInventory};
-use crate::matchmaking::{ExtractionQualification, SettlementResources};
+use crate::matchmaking::{ExtractionQualification, ParticipantMatchStats, SettlementResources};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct ExtractionZone {
@@ -164,6 +164,7 @@ pub(crate) fn freeze_inventory_for_extraction(
     match_id: Uuid,
     account_id: Uuid,
     qualified_at: OffsetDateTime,
+    stats: ParticipantMatchStats,
     config_version: &str,
 ) -> Result<ExtractionQualification, ExtractionFreezeError> {
     let snapshot = inventory.snapshot();
@@ -185,6 +186,7 @@ pub(crate) fn freeze_inventory_for_extraction(
         account_id,
         qualified_at,
         SettlementResources::new(dirt, gold, diamond),
+        stats,
         config_version.to_owned(),
     )
     .ok_or(ExtractionFreezeError::InvalidQualification)?;

@@ -23,6 +23,7 @@ This document records the implemented contracts for the extraction product clien
 ## Authoritative Gameplay State
 
 - One strict decoder and reducer own health, inventory, mining, extraction, and attack cursor state.
+- The shared Core message decoder is side-effect free. Environment detection, decompression loading, Worker lifecycle, and fallback selection stay at the caller boundary so browser workers, main-thread fallback, and Node tests decode the same bytes without import-time global mutation.
 - Revisions never move backward. Missing, unknown, malformed, unsafe-integer, or cross-match fields fail closed.
 - Attack, mining, and drop intents share one global gameplay sequence. After refresh, the next sequence follows the maximum server-confirmed cursor, including `inventory.lastDropSequence`.
 - UI must show a synchronization state until a complete authoritative snapshot exists. It must not synthesize full health, empty inventory, warehouse zeroes, or committed settlement amounts.

@@ -1,12 +1,22 @@
 import { describe, expect, it } from "vitest";
 
+import gameplayFixtures from "../../../../contracts/extraction/v1/fixtures/get-state-results.json";
 import manifestJson from "../../../../contracts/extraction/v1/manifest.json";
-import { decodeExtractionManifest } from "../../../../contracts/extraction/v1/typescript";
+import {
+  decodeExtractionManifest,
+  decodeGameplayStateData,
+} from "../../../../contracts/extraction/v1/typescript";
 import type { MatchResult, QueueSnapshot } from "../api/models";
 
 import { INITIAL_APP_STATE, reduceAppState } from "./state";
 
 const manifest = decodeExtractionManifest(manifestJson);
+const gameplay = decodeGameplayStateData(
+  gameplayFixtures.cases.find(
+    ({ name }) => name === "valid-alive-gameplay-state",
+  )?.value,
+  manifest,
+);
 const authenticatedState = {
   ...INITIAL_APP_STATE,
   session: {
@@ -162,6 +172,48 @@ describe("app state", () => {
       worldName: null,
       gameplay: null,
     });
+  });
+
+  it("clears a stale realtime failure notice after an authoritative snapshot", () => {
+    const active = {
+      ...authenticatedState,
+      screen: "match" as const,
+      activeMatchId: gameplay.matchId,
+      notice: "实时状态刷新失败，正在等待重试",
+    };
+    const recovered = reduceAppState(active, {
+      type: "GAMEPLAY_STATE",
+      state: gameplay,
+    });
+    const duplicateFailure = reduceAppState(
+      { ...recovered, notice: "实时状态刷新失败，正在等待重试" },
+      { type: "GAMEPLAY_STATE", state: gameplay },
+    );
+
+    expect(recovered.notice).toBeNull();
+    expect(recovered.gameplay).toEqual(gameplay);
+    expect(duplicateFailure.notice).toBeNull();
+  });
+
+  it("clears a terminal transport race after result and lobby recovery", () => {
+    const failed = {
+      ...authenticatedState,
+      screen: "match" as const,
+      notice: "服务端拒绝了实时请求",
+    };
+    const terminal = reduceAppState(failed, {
+      type: "MATCH_RESULT",
+      result: matchResult("timedOut"),
+    });
+    const lateFailure = { ...terminal, notice: "服务端拒绝了实时请求" };
+    const lobby = reduceAppState(lateFailure, {
+      type: "QUEUE_CHANGED",
+      queue: { status: "idle" },
+    });
+
+    expect(terminal.notice).toBeNull();
+    expect(lobby.screen).toBe("lobby");
+    expect(lobby.notice).toBeNull();
   });
 });
 

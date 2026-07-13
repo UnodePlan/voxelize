@@ -53,7 +53,7 @@ impl Coordinator {
                         .map_err(|_| MatchmakingError::Unavailable);
                     let _ = reply.send(result);
                 }
-                #[cfg(test)]
+                #[cfg(any(test, feature = "e2e-control"))]
                 Command::InspectResources { reply } => {
                     let _ = reply.send(self.resource_snapshot());
                 }

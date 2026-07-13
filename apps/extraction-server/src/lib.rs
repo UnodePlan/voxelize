@@ -2,8 +2,14 @@ pub mod auth;
 mod bootstrap;
 mod config;
 pub mod contracts;
+#[cfg(feature = "e2e-control")]
+mod e2e_allocator;
+#[cfg(feature = "e2e-control")]
+mod e2e_control;
 #[cfg(feature = "engine")]
 mod engine;
+#[cfg(feature = "engine")]
+mod engine_anti_xray;
 #[cfg(feature = "engine")]
 mod engine_catalog;
 #[cfg(feature = "engine")]
@@ -26,7 +32,11 @@ pub mod ops;
 pub mod persistence;
 pub mod ports;
 
-use std::io;
+use std::{io, sync::Arc};
+
+#[cfg(feature = "e2e-control")]
+#[global_allocator]
+static E2E_ALLOCATOR: e2e_allocator::TrackingAllocator = e2e_allocator::TrackingAllocator::new();
 
 #[cfg(not(feature = "engine"))]
 use actix_cors::Cors;
@@ -42,8 +52,29 @@ pub async fn run(config: ServerConfig) -> io::Result<()> {
     config
         .validate()
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
-    let application = bootstrap::build(&config).await?;
+    run_validated(config).await
+}
+
+#[cfg(not(feature = "e2e-control"))]
+async fn run_validated(config: ServerConfig) -> io::Result<()> {
+    let clock: Arc<dyn ports::Clock> = Arc::new(ports::SystemClock::default());
+    let application = bootstrap::build(&config, clock).await?;
     run_application(config, application).await
+}
+
+#[cfg(feature = "e2e-control")]
+async fn run_validated(config: ServerConfig) -> io::Result<()> {
+    let clock = Arc::new(e2e_control::E2eControlClock::default());
+    let application = bootstrap::build(&config, clock.clone()).await?;
+    let control_failure = e2e_control::start_stdin_controller(clock)?;
+
+    tokio::select! {
+        biased;
+        failure = control_failure => Err(failure.unwrap_or_else(|_| {
+            io::Error::other("e2e clock control thread terminated")
+        })),
+        result = run_application(config, application) => result,
+    }
 }
 
 #[cfg(feature = "engine")]

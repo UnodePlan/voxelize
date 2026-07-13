@@ -4,7 +4,11 @@ use super::extraction::{
     freeze_inventory_for_extraction, ExtractionProgress, ExtractionProgressError,
     ExtractionProgressOutcome, ExtractionZone,
 };
-use crate::{contracts::ResourceKey, gameplay::inventory::MatchInventory};
+use crate::{
+    contracts::ResourceKey,
+    gameplay::inventory::MatchInventory,
+    matchmaking::{ParticipantMatchStats, ParticipantResourceCounts},
+};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
@@ -137,11 +141,25 @@ fn qualification_freezes_inventory_and_aggregates_slot_layout() {
     let mut inventory = MatchInventory::new(64).unwrap();
     inventory.insert(ResourceKey::Gold, 65).unwrap();
     inventory.insert(ResourceKey::Dirt, 3).unwrap();
+    let stats = ParticipantMatchStats {
+        mined: ParticipantResourceCounts {
+            dirt: 3,
+            gold: 65,
+            diamond: 0,
+        },
+        picked_up: ParticipantResourceCounts {
+            dirt: 1,
+            gold: 2,
+            diamond: 0,
+        },
+        lost: ParticipantResourceCounts::default(),
+    };
     let qualification = freeze_inventory_for_extraction(
         &mut inventory,
         Uuid::new_v4(),
         Uuid::new_v4(),
         OffsetDateTime::UNIX_EPOCH,
+        stats,
         "balance-v1",
     )
     .unwrap();
@@ -150,6 +168,7 @@ fn qualification_freezes_inventory_and_aggregates_slot_layout() {
     assert_eq!(qualification.resources.dirt, 3);
     assert_eq!(qualification.resources.gold, 65);
     assert_eq!(qualification.resources.diamond, 0);
+    assert_eq!(qualification.stats, stats);
     assert_eq!(
         qualification.inventory_digest,
         qualification.resources.digest()

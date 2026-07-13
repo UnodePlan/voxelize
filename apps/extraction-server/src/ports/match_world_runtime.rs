@@ -57,8 +57,20 @@ pub struct PreparedMatchWorld {
     pub world_generation: String,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct MatchWorldRuntimeResourceSnapshot {
+    pub generations: usize,
+    pub owned_matches: usize,
+    pub forced_eliminations: usize,
+    pub hard_deadlines: usize,
+}
+
 #[async_trait]
 pub trait MatchWorldRuntime: Send + Sync {
+    fn resource_snapshot(&self) -> MatchWorldRuntimeResourceSnapshot {
+        MatchWorldRuntimeResourceSnapshot::default()
+    }
+
     async fn prepare_world(
         &self,
         spec: MatchWorldSpec,

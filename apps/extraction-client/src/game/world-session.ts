@@ -7,6 +7,7 @@ import type { ExtractionManifest } from "../../../../contracts/extraction/v1/typ
 import { disposeObjectTree } from "./object-disposal";
 import { createWorldActors } from "./world-actors";
 import { WorldInputController, type WorldInputActions } from "./world-input";
+import { runWorldSessionCleanup } from "./world-session-disposal";
 import { applyExtractionTextures } from "./world-textures";
 
 export interface WorldSessionActions extends WorldInputActions {
@@ -127,13 +128,16 @@ export class VoxelWorldSession {
     if (this.disposed) return;
     this.disposed = true;
     this.initialized = false;
-    this.input.dispose();
-    this.disconnectControls();
-    this.inputs.reset();
-    disposeObjectTree(this.interact, true);
-    disposeObjectTree(this.actors.entities, false);
-    disposeObjectTree(this.actors.peers, true);
-    this.world.dispose();
+    const error = runWorldSessionCleanup([
+      () => this.input.dispose(),
+      () => this.disconnectControls(),
+      () => this.inputs.reset(),
+      () => disposeObjectTree(this.interact, true),
+      () => disposeObjectTree(this.actors.entities, false),
+      () => disposeObjectTree(this.actors.peers, true),
+      () => this.world.dispose(),
+    ]);
+    if (error !== null) this.actions.onError("体素世界资源释放失败");
   }
 
   private async applyMessage(message: MessageProtocol): Promise<void> {

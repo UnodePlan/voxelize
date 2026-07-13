@@ -1,6 +1,10 @@
 import { fetchExtractionManifest } from "../api";
 import { createAuthApi, type AuthSession } from "../api/auth";
-import { createReownWallet, type ReownWallet } from "../auth/appkit";
+import {
+  createReownWallet,
+  type CreateReownWalletOptions,
+  type ReownWallet,
+} from "../auth/appkit";
 import { LogoutCoordinator } from "../auth/logout-coordinator";
 import { waitForAuthenticatedSession } from "../auth/wait-for-session";
 import {
@@ -30,8 +34,15 @@ export class ProductController {
   private readonly walletIdentity = new WalletIdentityGuard();
   private readonly match;
   private wallet: ReownWallet | null = null;
+  private readonly createWallet;
 
-  constructor(root: HTMLElement) {
+  constructor(
+    root: HTMLElement,
+    createWallet: (
+      options: CreateReownWalletOptions,
+    ) => Promise<ReownWallet> = createReownWallet,
+  ) {
+    this.createWallet = createWallet;
     this.elements = mountProductShell(root);
     let scene: VoxelBackdrop | null = null;
     this.match = new MatchCoordinator({
@@ -81,7 +92,7 @@ export class ProductController {
       ]);
       this.dispatch({ type: "BOOTSTRAP_READY", manifest, session });
       if (session !== null) this.logout.activate();
-      this.wallet = await createReownWallet({
+      this.wallet = await this.createWallet({
         auth: this.auth,
         logout: this.logout,
       });
@@ -93,7 +104,7 @@ export class ProductController {
     } catch {
       this.dispatch({ type: "BOOTSTRAP_FAILED", message: "游戏服务暂不可用" });
       if (this.wallet === null) {
-        this.wallet = await createReownWallet({
+        this.wallet = await this.createWallet({
           auth: this.auth,
           logout: this.logout,
         });

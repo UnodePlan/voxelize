@@ -3,3 +3,8 @@
 {"file":".trellis/tasks/07-12-voxel-extraction-pvp-mvp/research/repository-integration.md","reason":"包含引擎可复用边界、现有安全缺口、应用目录划分和核心通用扩展约束。"}
 {"file":".trellis/tasks/07-12-voxel-extraction-pvp-mvp/research/auth-persistence.md","reason":"包含 Reown/SIWE 会话、PostgreSQL schema、幂等结算与迁移约束。"}
 {"file":".trellis/tasks/07-12-voxel-extraction-pvp-mvp/research/gameplay-runtime.md","reason":"包含比赛状态机、ECS 顺序、挖掘原子 claim、资产守恒与掉落保管模型。"}
+{"file":".trellis/spec/core/backend/authoritative-movement-visibility.md","reason":"实施真实 World、权威移动确认、Anti-Xray 投影和射线动作前的全三维稳定契约。"}
+{"file":".trellis/spec/core/backend/deterministic-world-generation.md","reason":"实施版本化地图、真实矿石挖掘、进程共享线程池和每 World 后台任务许可。"}
+{"file":".trellis/spec/core/backend/match-lifecycle-persistence.md","reason":"实施 World 停止、后台任务排空、重连终态和唯一结算恢复边界。"}
+{"file":".trellis/spec/core/extraction-product-client.md","reason":"实施 AppKit/SIWE、严格解码、真实 Voxelize World 生命周期和生产测试隔离。"}
+{"file":".trellis/spec/workspace/command-contracts.md","reason":"实施跨平台进程监督、串行真实门禁、生命周期画像和实时分配内存判定。"}

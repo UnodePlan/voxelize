@@ -1,4 +1,5 @@
-import init, { mesh_chunk_fast, set_registry } from "@voxelize/wasm-mesher";
+import { initSync, mesh_chunk_fast, set_registry } from "@voxelize/wasm-mesher";
+import wasmUrl from "@voxelize/wasm-mesher/pkg/voxelize_wasm_mesher_bg.wasm?url";
 
 import { Coords3 } from "../../../types";
 import { type WorldOptions } from "../index";
@@ -232,7 +233,10 @@ onmessage = async function (e) {
 
   if (type && type.toLowerCase() === "init") {
     if (!wasmInitialized) {
-      await init();
+      const response = await fetch(wasmUrl);
+      if (!response.ok) throw new Error("WASM mesher failed to load");
+      const module = await WebAssembly.compile(await response.arrayBuffer());
+      initSync({ module });
       wasmInitialized = true;
     }
 

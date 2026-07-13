@@ -99,6 +99,7 @@ impl ParticipantRow {
         let state = self.parsed_state()?;
         let seat = usize::try_from(self.seat_id).map_err(|_| MatchRepositoryError::Unavailable)?;
         let seat_id = SeatId::try_from(seat).map_err(|_| MatchRepositoryError::Unavailable)?;
+        let stats = self.stats();
         Ok(ParticipantRecord {
             match_id: self.match_id,
             account_id: self.account_id,
@@ -119,13 +120,17 @@ impl ParticipantRow {
                 .map(u32::try_from)
                 .transpose()
                 .map_err(|_| MatchRepositoryError::Unavailable)?,
-            stats: ParticipantMatchStats {
-                mined: self.mined_counts.0,
-                picked_up: self.pickup_counts.0,
-                lost: self.lost_counts.0,
-            },
+            stats,
             extracted_at: self.extracted_at,
             settlement_qualified_at: self.settlement_qualified_at,
         })
+    }
+
+    pub fn stats(&self) -> ParticipantMatchStats {
+        ParticipantMatchStats {
+            mined: self.mined_counts.0,
+            picked_up: self.pickup_counts.0,
+            lost: self.lost_counts.0,
+        }
     }
 }

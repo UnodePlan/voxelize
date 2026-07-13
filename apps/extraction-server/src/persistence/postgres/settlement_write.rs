@@ -1,4 +1,4 @@
-use sqlx::{PgPool, Postgres, Transaction};
+use sqlx::{types::Json, PgPool, Postgres, Transaction};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
@@ -37,7 +37,9 @@ pub(super) async fn mark_pending(
         state,
         ParticipantState::SettlementPending | ParticipantState::Extracted
     ) {
-        if participant.settlement_qualified_at != Some(qualification.qualified_at) {
+        if participant.settlement_qualified_at != Some(qualification.qualified_at)
+            || participant.stats() != qualification.stats
+        {
             return Err(SettlementRepositoryError::Conflict);
         }
         let record = participant.into_record().map_err(map_match_error)?;
@@ -59,12 +61,16 @@ pub(super) async fn mark_pending(
     }
     let result = sqlx::query(
         "UPDATE match_participants SET state = 'settlement_pending', \
-         settlement_qualified_at = $3, reconnect_deadline = NULL \
+         settlement_qualified_at = $3, reconnect_deadline = NULL, \
+         mined_counts = $4, pickup_counts = $5, lost_counts = $6 \
          WHERE match_id = $1 AND account_id = $2 AND state = 'active'",
     )
     .bind(qualification.match_id)
     .bind(qualification.account_id)
     .bind(qualification.qualified_at)
+    .bind(Json(qualification.stats.mined))
+    .bind(Json(qualification.stats.picked_up))
+    .bind(Json(qualification.stats.lost))
     .execute(&mut *transaction)
     .await
     .map_err(classify_write_error)?;
@@ -74,6 +80,9 @@ pub(super) async fn mark_pending(
     participant.state = ParticipantState::SettlementPending.as_str().to_owned();
     participant.settlement_qualified_at = Some(qualification.qualified_at);
     participant.reconnect_deadline = None;
+    participant.mined_counts = Json(qualification.stats.mined);
+    participant.pickup_counts = Json(qualification.stats.picked_up);
+    participant.lost_counts = Json(qualification.stats.lost);
     let record = participant.into_record().map_err(map_match_error)?;
     transaction.commit().await.map_err(unavailable)?;
     Ok(TransitionOutcome::Applied(record))

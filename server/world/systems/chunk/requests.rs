@@ -2,8 +2,9 @@ use hashbrown::{HashMap, HashSet};
 use specs::{Join, ReadExpect, ReadStorage, System, WriteExpect, WriteStorage};
 
 use crate::{
-    ChunkInterests, ChunkProtocol, ChunkRequestsComp, ChunkStatus, Chunks, ClientFilter, IDComp,
-    Mesher, Message, MessageQueues, MessageType, Pipeline, Vec2, WorldConfig,
+    ChunkInterests, ChunkProjection, ChunkProtocol, ChunkRequestsComp, ChunkStatus, Chunks,
+    ClientFilter, IDComp, Mesher, Message, MessageQueues, MessageType, Pipeline, Registry, Vec2,
+    WorldConfig,
 };
 
 pub struct ChunkRequestsSystem;
@@ -12,6 +13,8 @@ impl<'a> System<'a> for ChunkRequestsSystem {
     type SystemData = (
         ReadExpect<'a, Chunks>,
         ReadExpect<'a, WorldConfig>,
+        ReadExpect<'a, Registry>,
+        WriteExpect<'a, ChunkProjection>,
         WriteExpect<'a, ChunkInterests>,
         WriteExpect<'a, Pipeline>,
         WriteExpect<'a, Mesher>,
@@ -21,8 +24,18 @@ impl<'a> System<'a> for ChunkRequestsSystem {
     );
 
     fn run(&mut self, data: Self::SystemData) {
-        let (chunks, config, mut interests, mut pipeline, mut mesher, mut queue, ids, mut requests) =
-            data;
+        let (
+            chunks,
+            config,
+            registry,
+            mut projection,
+            mut interests,
+            mut pipeline,
+            mut mesher,
+            mut queue,
+            ids,
+            mut requests,
+        ) = data;
 
         let max_response_per_tick = config.max_response_per_tick;
 
@@ -63,12 +76,20 @@ impl<'a> System<'a> for ChunkRequestsSystem {
         }
 
         for (id, coords) in to_send {
-            let include_meshes = !config.client_only_meshing;
+            // 服务器网格由权威体素生成，会绕过投影。投影世界必须抑制该网格并失败关闭，
+            // 客户端只能从投影后的体素载荷生成安全网格。
+            let include_meshes = !config.client_only_meshing && projection.is_identity();
             let chunks: Vec<ChunkProtocol> = coords
                 .into_iter()
                 .filter_map(|coords| {
                     chunks.get(&coords).map(|chunk| {
-                        chunk.to_model(include_meshes, true, 0..config.sub_chunks as u32)
+                        projection.project_chunk(
+                            chunk,
+                            &chunks,
+                            &registry,
+                            include_meshes,
+                            0..config.sub_chunks as u32,
+                        )
                     })
                 })
                 .collect();

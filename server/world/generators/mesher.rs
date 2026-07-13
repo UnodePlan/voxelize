@@ -2,7 +2,7 @@ use std::{collections::VecDeque, sync::Arc};
 
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use hashbrown::{HashMap, HashSet};
-use rayon::{iter::IntoParallelIterator, prelude::ParallelIterator, ThreadPool, ThreadPoolBuilder};
+use rayon::{iter::IntoParallelIterator, prelude::ParallelIterator, ThreadPool};
 
 use crate::{
     Chunk, GeometryProtocol, LightColor, MeshProtocol, MessageType, Registry, Space, Vec2, Vec3,
@@ -10,6 +10,7 @@ use crate::{
 };
 
 use super::lights::Lights;
+use crate::world::background_tasks::{shared_worker_pool, BackgroundTaskTracker};
 
 pub struct Mesher {
     pub(crate) queue: std::collections::VecDeque<Vec2<i32>>,
@@ -17,11 +18,16 @@ pub struct Mesher {
     pub(crate) pending_remesh: HashSet<Vec2<i32>>,
     sender: Arc<Sender<(Chunk, MessageType)>>,
     receiver: Arc<Receiver<(Chunk, MessageType)>>,
-    pool: ThreadPool,
+    pool: Arc<ThreadPool>,
+    tasks: BackgroundTaskTracker,
 }
 
 impl Mesher {
     pub fn new() -> Self {
+        Self::with_runtime(shared_worker_pool(), BackgroundTaskTracker::new())
+    }
+
+    pub(crate) fn with_runtime(pool: Arc<ThreadPool>, tasks: BackgroundTaskTracker) -> Self {
         let (sender, receiver) = unbounded();
 
         Self {
@@ -30,15 +36,8 @@ impl Mesher {
             pending_remesh: HashSet::new(),
             sender: Arc::new(sender),
             receiver: Arc::new(receiver),
-            pool: ThreadPoolBuilder::new()
-                .thread_name(|index| format!("chunk-meshing-{index}"))
-                .num_threads(
-                    std::thread::available_parallelism()
-                        .map(|p| p.get())
-                        .unwrap_or(4),
-                )
-                .build()
-                .unwrap(),
+            pool,
+            tasks,
         }
     }
 
@@ -108,7 +107,11 @@ impl Mesher {
         let registry = Arc::new(registry.clone());
         let config = Arc::new(config.clone());
 
+        let Some(task) = self.tasks.begin() else {
+            return;
+        };
         self.pool.spawn(move || {
+            let _task = task;
             processes
                 .into_par_iter()
                 .for_each(|(mut chunk, mut space)| {

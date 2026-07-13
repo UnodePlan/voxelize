@@ -164,7 +164,8 @@ impl Coordinator {
             && self
                 .current
                 .as_ref()
-                .is_some_and(|current| current.participants.contains_key(&account_id))
+                .and_then(|current| current.participants.get(&account_id))
+                .is_some_and(|participant| participant.state == ParticipantState::Active)
         {
             self.mark_disconnected(account_id).await?;
         }

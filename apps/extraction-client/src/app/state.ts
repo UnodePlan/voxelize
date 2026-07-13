@@ -174,7 +174,9 @@ export function reduceAppState(state: AppState, action: AppAction): AppState {
     case "GAMEPLAY_STATE":
       return applyGameplayState(state, action.state);
     case "MATCH_RESULT":
-      if (isFinalResult(state.result, action.result)) return state;
+      if (isFinalResult(state.result, action.result)) {
+        return state.notice === null ? state : { ...state, notice: null };
+      }
       return {
         ...state,
         screen: "result",
@@ -182,6 +184,7 @@ export function reduceAppState(state: AppState, action: AppAction): AppState {
         worldName: null,
         gameplay: null,
         connection: "offline",
+        notice: null,
       };
     case "SHOW_LOBBY":
       return {
@@ -190,6 +193,7 @@ export function reduceAppState(state: AppState, action: AppAction): AppState {
         activeMatchId: null,
         worldName: null,
         gameplay: null,
+        notice: null,
       };
     case "BUSY":
       return { ...state, busy: action.operation };
@@ -247,6 +251,7 @@ function applyQueue(state: AppState, queue: QueueSnapshot): AppState {
       worldName: assignment.worldName,
       connection:
         state.connection === "offline" ? "connecting" : state.connection,
+      notice: null,
     };
   }
   if (queue.status === "settling") {
@@ -261,6 +266,7 @@ function applyQueue(state: AppState, queue: QueueSnapshot): AppState {
       worldName: null,
       gameplay: null,
       connection: "offline",
+      notice: null,
     };
   }
   const waiting = queue.status === "queued" || queue.status === "preparing";
@@ -272,6 +278,8 @@ function applyQueue(state: AppState, queue: QueueSnapshot): AppState {
     worldName: null,
     gameplay: null,
     connection: "offline",
+    // 成功的权威队列快照表示控制面已恢复，旧的实时拒绝提示不得跨局残留。
+    notice: null,
   };
 }
 
@@ -287,9 +295,10 @@ function applyGameplayState(
     incoming,
     state.activeMatchId,
   );
-  return reduced.snapshot === state.gameplay
-    ? state
-    : { ...state, gameplay: reduced.snapshot };
+  if (reduced.snapshot === state.gameplay && state.notice === null)
+    return state;
+  // 一次成功的权威快照表示实时同步已经恢复，旧的瞬时失败提示不能继续遮挡对局。
+  return { ...state, gameplay: reduced.snapshot, notice: null };
 }
 
 function clearSessionState(state: AppState, notice: string | null): AppState {

@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite --clearScreen false",
+    "dev:live-e2e": "vite --mode live-e2e --clearScreen false",
     "typecheck": "tsc --noEmit",
     "test": "vitest --run",
     "build": "tsc --noEmit && vite build && node scripts/assert-production-boundary.mjs",

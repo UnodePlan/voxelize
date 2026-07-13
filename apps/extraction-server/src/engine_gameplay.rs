@@ -38,6 +38,8 @@ mod combat_tests;
 #[cfg(test)]
 mod extraction_state_tests;
 #[cfg(test)]
+mod generated_ore_mining_tests;
+#[cfg(test)]
 mod mining_tests;
 #[cfg(test)]
 mod tests;

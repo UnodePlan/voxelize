@@ -139,6 +139,7 @@ fn qualify_player(world: &mut World, player: TestPlayer, qualified_at: OffsetDat
             match_spec().match_id,
             player.account_id,
             qualified_at,
+            crate::matchmaking::ParticipantMatchStats::default(),
             "balance-v1",
         )
         .unwrap()

@@ -15,11 +15,20 @@ const FIXED_SEED: u64 = 0x1122_3344_5566_7788;
 
 fn plan(seed: u64) -> (Arc<GenerationPlan>, EngineCatalog) {
     let manifest = bundled_manifest().unwrap();
+    plan_for_versions(seed, &manifest.generation_version, &manifest.config_version)
+}
+
+fn plan_for_versions(
+    seed: u64,
+    generation_version: &str,
+    config_version: &str,
+) -> (Arc<GenerationPlan>, EngineCatalog) {
+    let manifest = bundled_manifest().unwrap();
     let catalog = EngineCatalog::from_manifest(&manifest).unwrap();
     let plan = GenerationPlan::new(
         seed,
-        &manifest.generation_version,
-        &manifest.config_version,
+        generation_version,
+        config_version,
         catalog.resources(),
     )
     .unwrap();
@@ -57,8 +66,17 @@ fn process_chunk(
     )
 }
 
-fn fingerprint(seed: u64, mut chunk_order: Vec<(i32, i32)>) -> String {
-    let (plan, catalog) = plan(seed);
+fn fingerprint(seed: u64, chunk_order: Vec<(i32, i32)>) -> String {
+    fingerprint_for_versions(seed, chunk_order, "generation-v1", "balance-v1")
+}
+
+fn fingerprint_for_versions(
+    seed: u64,
+    mut chunk_order: Vec<(i32, i32)>,
+    generation_version: &str,
+    config_version: &str,
+) -> String {
+    let (plan, catalog) = plan_for_versions(seed, generation_version, config_version);
     let config = world_config(&plan);
     let mut chunk_digests = BTreeMap::new();
     for (cx, cz) in chunk_order.drain(..) {
@@ -187,6 +205,71 @@ fn resource_counts_depth_and_components_follow_v1_balance() {
 }
 
 #[test]
+fn v2_can_tune_ore_topology_without_drifting_v1() {
+    let manifest = bundled_manifest().unwrap();
+    let catalog = EngineCatalog::from_manifest(&manifest).unwrap();
+    let v1 = GenerationPlan::new(
+        FIXED_SEED,
+        "generation-v1",
+        "balance-v1",
+        catalog.resources(),
+    )
+    .unwrap();
+    let v2 = GenerationPlan::new(
+        FIXED_SEED,
+        "generation-v2",
+        "balance-v2",
+        catalog.resources(),
+    )
+    .unwrap();
+    assert!(GenerationPlan::new(
+        FIXED_SEED,
+        "generation-v2",
+        "balance-v1",
+        catalog.resources(),
+    )
+    .is_err());
+    assert!(GenerationPlan::new(
+        FIXED_SEED,
+        "generation-v1",
+        "balance-v2",
+        catalog.resources(),
+    )
+    .is_err());
+
+    assert_eq!(v1.config().generation_version, "generation-v1");
+    assert_eq!(v1.config().config_version, "balance-v1");
+    assert_eq!(v2.config().generation_version, "generation-v2");
+    assert_eq!(v2.config().config_version, "balance-v2");
+    assert_ne!(v1.config().gold.min_y, v2.config().gold.min_y);
+    assert_ne!(
+        v1.config().gold.min_horizontal_radius,
+        v2.config().gold.min_horizontal_radius
+    );
+    assert_ne!(v1.config().gold.segments, v2.config().gold.segments);
+    assert_ne!(v1.config().diamond.min_y, v2.config().diamond.min_y);
+    assert_ne!(
+        v1.config().diamond.max_vertical_radius,
+        v2.config().diamond.max_vertical_radius
+    );
+
+    let v1_counts = ore_counts(&v1);
+    let v2_counts = ore_counts(&v2);
+    let v2_fingerprint = fingerprint_for_versions(
+        FIXED_SEED,
+        all_chunk_coords(),
+        "generation-v2",
+        "balance-v2",
+    );
+    assert_eq!(v1_counts, (20_265, 2_565));
+    assert_eq!(v2_counts, (21_071, 2_769));
+    assert_eq!(
+        v2_fingerprint,
+        "dd84ca5d5645179d763442904ac72dd10c9a5a10119de2f6a55e7fbc3fb9f19a"
+    );
+}
+
+#[test]
 fn spawn_and_extraction_candidates_are_valid_and_fair() {
     let (plan, _) = plan(FIXED_SEED);
     let spawns = plan.layout().spawn_points();
@@ -296,4 +379,22 @@ fn horizontal_distance_squared(left: MapPoint, right: MapPoint) -> i32 {
     let dx = left.x - right.x;
     let dz = left.z - right.z;
     dx * dx + dz * dz
+}
+
+fn ore_counts(plan: &GenerationPlan) -> (usize, usize) {
+    let resources = plan.resources();
+    let mut gold = 0;
+    let mut diamond = 0;
+    for x in plan.config().min_xz..plan.config().max_xz_exclusive {
+        for z in plan.config().min_xz..plan.config().max_xz_exclusive {
+            for y in 0..=plan.config().surface_y {
+                match plan.voxel_at(MapPoint::new(x, y, z)) {
+                    id if id == resources.gold.voxel_id => gold += 1,
+                    id if id == resources.diamond.voxel_id => diamond += 1,
+                    _ => {}
+                }
+            }
+        }
+    }
+    (gold, diamond)
 }

@@ -12,7 +12,7 @@ use crate::{
     persistence::{acquire_matchmaking_process_lock, MatchmakingProcessLock, PgRepository},
     ports::{
         AuthRepository, Clock, MatchmakingRepository, RandomIdGenerator, RandomSeedGenerator,
-        RepositoryProbe, SystemClock,
+        RepositoryProbe,
     },
     AppState, ServerConfig,
 };
@@ -30,7 +30,9 @@ pub(crate) struct Application {
     pub auth: AuthService,
 }
 
-pub(crate) async fn build(config: &ServerConfig) -> io::Result<Application> {
+pub(crate) async fn build(config: &ServerConfig, clock: Arc<dyn Clock>) -> io::Result<Application> {
+    #[cfg(feature = "e2e-control")]
+    crate::persistence::validate_e2e_settlement_crash_configuration()?;
     let matchmaking_process_lock = acquire_matchmaking_process_lock(config.database_url())
         .await
         .map_err(io_other)?
@@ -47,8 +49,7 @@ pub(crate) async fn build(config: &ServerConfig) -> io::Result<Application> {
     );
     let repository_probe: Arc<dyn RepositoryProbe> = repository.clone();
     let auth_repository: Arc<dyn AuthRepository> = repository.clone();
-    let match_repository: Arc<dyn MatchmakingRepository> = repository;
-    let clock: Arc<dyn Clock> = Arc::new(SystemClock::default());
+    let match_repository: Arc<dyn MatchmakingRepository> = repository.clone();
     match match_repository
         .abort_unrecoverable_matches(STARTUP_ABORT_REASON.to_owned(), clock.utc_now().into())
         .await
@@ -97,6 +98,8 @@ pub(crate) async fn build(config: &ServerConfig) -> io::Result<Application> {
     let state = AppState::new(repository_probe, manifest)
         .with_services(auth.clone(), matchmaking.clone(), clock)
         .with_feature_flags(config.auth_login_enabled(), config.matchmaking_enabled());
+    #[cfg(feature = "e2e-control")]
+    let state = state.with_e2e_repository(repository);
     #[cfg(feature = "engine")]
     let state = state.with_engine_catalog(engine_catalog.clone());
     Ok(Application {

@@ -5,8 +5,9 @@ use super::{
     authority::GameplayAuthority,
     components::{
         EliminationComp, ExtractionComp, FixedEquipmentComp, HealthComp, MatchPlayerComp,
-        MiningComp, ResourceInventoryComp,
+        MiningComp, ResourceInventoryComp, RoundStatsComp,
     },
+    death_outbox::participant_match_stats,
     extraction_messaging::{extraction_state, queue_extraction_state, ExtractionStateAccess},
     messaging::{player_inventory_state, queue_inventory_state},
     runtime::GameplayRuntimeContext,
@@ -35,11 +36,12 @@ pub(super) struct ExtractionResolutionAccess<'a, 'world> {
     pub extractions: &'a mut WriteStorage<'world, ExtractionComp>,
     pub inventories: &'a mut WriteStorage<'world, ResourceInventoryComp>,
     pub mining: &'a mut WriteStorage<'world, MiningComp>,
+    pub stats: &'a WriteStorage<'world, RoundStatsComp>,
 }
 
 pub(super) fn process_extractions(access: ExtractionResolutionAccess<'_, '_>) {
     let Some(timeline) = access.authority.gameplay_timeline() else {
-        access.authority.fail_closed();
+        // Preparing 阶段世界已经开始 tick，但撤离时间线要等全部玩家 JOIN 后才建立。
         return;
     };
     let Some(now) = access.authority.monotonic_now() else {
@@ -114,12 +116,17 @@ pub(super) fn process_extractions(access: ExtractionResolutionAccess<'_, '_>) {
                         access.authority.fail_closed();
                         return;
                     };
+                    let Some(stats) = access.stats.get(entity) else {
+                        access.authority.fail_closed();
+                        return;
+                    };
                     let mut inventory_candidate = inventory.inventory().clone();
                     let qualification = match freeze_inventory_for_extraction(
                         &mut inventory_candidate,
                         access.context.match_id,
                         player.account_id(),
                         qualified_utc,
+                        participant_match_stats(stats.stats()),
                         access.context.config.config_version,
                     ) {
                         Ok(qualification) => qualification,

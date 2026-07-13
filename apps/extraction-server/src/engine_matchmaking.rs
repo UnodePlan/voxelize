@@ -1,4 +1,5 @@
 mod lifecycle;
+mod resource_stats;
 mod terminal_control;
 
 use std::{
@@ -16,6 +17,7 @@ use voxelize::{
 };
 
 use crate::{
+    engine_anti_xray::install_anti_xray,
     engine_catalog::EngineCatalog,
     engine_gameplay::{
         install_gameplay_runtime, ForcedEliminationQueue, GameplayAuthority, HardDeadlineControl,
@@ -24,7 +26,10 @@ use crate::{
     generation::{install_generation_stage, install_spawn_assignment, GenerationPlan},
     match_world::{engine_seed_v1, MatchWorldMetadata},
     matchmaking::{MatchAttachKind, MatchmakingService},
-    ports::{MatchWorldRuntime, MatchWorldRuntimeError, MatchWorldSpec, PreparedMatchWorld},
+    ports::{
+        MatchWorldRuntime, MatchWorldRuntimeError, MatchWorldRuntimeResourceSnapshot,
+        MatchWorldSpec, PreparedMatchWorld,
+    },
 };
 
 const WORLD_PRELOAD_RADIUS: usize = 10;
@@ -41,26 +46,12 @@ pub(crate) struct EngineMatchWorldRuntime {
     catalog: Arc<EngineCatalog>,
 }
 
-impl EngineMatchWorldRuntime {
-    pub(crate) fn new(
-        server: Addr<Server>,
-        matchmaking: Weak<MatchmakingService>,
-        catalog: Arc<EngineCatalog>,
-    ) -> Self {
-        Self {
-            server,
-            matchmaking,
-            generations: Arc::new(Mutex::new(HashMap::new())),
-            owned_matches: Mutex::new(HashMap::new()),
-            forced_eliminations: Mutex::new(HashMap::new()),
-            hard_deadlines: Mutex::new(HashMap::new()),
-            catalog,
-        }
-    }
-}
-
 #[async_trait]
 impl MatchWorldRuntime for EngineMatchWorldRuntime {
+    fn resource_snapshot(&self) -> MatchWorldRuntimeResourceSnapshot {
+        self.diagnostic_snapshot()
+    }
+
     async fn prepare_world(
         &self,
         spec: MatchWorldSpec,
@@ -96,10 +87,13 @@ impl MatchWorldRuntime for EngineMatchWorldRuntime {
             .max_height(plan.config().max_height)
             .entity_visibility_policy(EntityVisibilityPolicy::bounded())
             .entity_visible_radius(WORLD_ENTITY_VISIBLE_RADIUS)
+            .client_only_meshing(true)
             .water_level(0)
             .build();
         let mut world = World::new(&spec.world_name, &config);
         world.set_item_registry(self.catalog.items().clone());
+        install_anti_xray(&mut world, self.catalog.resources())
+            .map_err(|_| MatchWorldRuntimeError::Conflict)?;
         install_generation_stage(&mut world, plan.clone());
         install_spawn_assignment(&mut world, &spec.roster, plan.layout());
         world.ecs_mut().insert(spec.playable_bounds);

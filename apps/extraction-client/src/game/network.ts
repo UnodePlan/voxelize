@@ -274,7 +274,7 @@ export class GameNetwork {
         this.stateChannel.handleResult(routed.value);
       } else if (routed?.kind === "state") {
         this.stateChannel.scheduleSync();
-      } else if (routed?.kind === "voxel") {
+      } else if (routed?.kind === "voxel" && this.joinedWorld !== null) {
         this.events.onVoxelMessage?.(routed.message);
       }
     } catch {

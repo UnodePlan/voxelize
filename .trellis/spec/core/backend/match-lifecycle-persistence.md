@@ -135,7 +135,10 @@ pub struct DespawnDetachedPrincipal {
 - Persist `seed`, `generation_version`, `gameplay_version`, and `config_version`. The engine seed is derived only by the named `engine_seed_v1` fold. Reusing a World name must create a new generation; delayed prepare, detach, rebind, or despawn work must compare that generation before mutating state.
 - Activation persists absolute UTC deadlines at `started_at + 8m`, `started_at + 12m`, and hard deadline `+ 30s` settlement grace. Runtime scheduling derives monotonic deadlines from the persisted UTC values after the write returns. A separate watchdog closes the synchronous gate and stops the World at the hard deadline even while the coordinator awaits database I/O; its `(world, generation)` closure is latched so a stale Active sync cannot reopen gameplay. The queued Tick later persists Settling/Finished.
 - Active disconnect detaches the entity and records a reconnect deadline. Rebind is allowed only for the same account and World before the deadline (`now < deadline`). Rebind admission and timeout claim share one account-level lock: an attach reserved before the deadline may commit after it, while a timeout claim that linearizes first prevents a stale snapshot from adding a reservation. A rejected/disconnected attach clears only its exact reservation. At exactly sixty seconds (`now >= deadline`), a participant without an admitted attempt is claimed once for terminal timeout and generation-safe despawn, with retry allowed only while persistence/despawn remains pending.
+- A socket close may arrive after hard-deadline eviction or another terminal transition. Only an `Active` participant may enter `mark_disconnected`; `Dead`, `TimedOut`, `SettlementPending`, `Extracted`, and `Aborted` closes are terminal no-ops. A late close must never turn a completed result into `connection_event_failed` or abort the next lobby flow.
 - Settling and abort paths close the gate and stop the World before awaiting lifecycle persistence. Every runtime stop attempt has a finite timeout; the hard-deadline watchdog retries a timed-out/error result, while a later coordinator Tick retries an incomplete stop. If persistence fails, later Ticks retry the write without reopening gameplay or stopping the World twice.
+- `World::stop` clears clients and transports, closes its background-task tracker, and waits until every accepted generation, meshing, encoded-message, and dispatcher job releases its RAII permit before emitting the stopped acknowledgement. Merely signaling an actor or Arbiter to stop is not physical World release, and late work is rejected after the tracker closes.
+- Disposable Worlds share one process-wide Rayon pool instead of creating pools per match. E2E lifecycle diagnostics expose live World instances and in-flight World background tasks; both must be zero before a match is considered released.
 - If an uncertain create may already be committed, cancel/disconnect must first look up and abort that exact prepare attempt before mutating its queue entry. On lookup/abort failure, retain the attempt and fail closed; never clear the attempt and orphan a persisted Preparing match.
 - `Finished` and `Aborted` close admission, remove the World generation route, pending World ticks/requests, connection reservations, and all match-local coordinator state. Stop/remove/despawn operations are idempotent.
 - Before matchmaking starts, process startup first obtains the process advisory lock, then atomically marks every persisted nonterminal match and nonterminal participant Aborted with a restart reason. Terminal participants and committed settlements are preserved. Recovery uses bounded PostgreSQL lock/statement timeouts; failure aborts service startup, repeated recovery returns zero, and a second live process receives `AddrInUse` before recovery can abort the first process's match.
@@ -143,27 +146,30 @@ pub struct DespawnDetachedPrincipal {
 
 ### 4. Validation & Error Matrix
 
-| Condition | Required result |
-| --- | --- |
-| Authenticated HTTP session has no connected game socket | `MATCH_ROSTER_LOCKED`; do not queue |
-| No bound World runtime or coordinator unavailable | `503` / `MATCHMAKING_UNAVAILABLE`; do not queue |
-| Same account queues again while waiting | Return its existing position and timestamp |
-| Account already has a nonterminal persisted seat | `MATCH_ROSTER_LOCKED` |
-| Tenth connected unique account queues | Persist exactly ten seats, freeze roster, prepare one World |
-| Eleventh account while a match is nonterminal | `MATCH_FULL`; never enter the World gate |
-| Roster account disconnects during Preparing | Abort and stop World; restore connected peers in original FIFO order |
+| Condition                                                              | Required result                                                                             |
+| ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| Authenticated HTTP session has no connected game socket                | `MATCH_ROSTER_LOCKED`; do not queue                                                         |
+| No bound World runtime or coordinator unavailable                      | `503` / `MATCHMAKING_UNAVAILABLE`; do not queue                                             |
+| Same account queues again while waiting                                | Return its existing position and timestamp                                                  |
+| Account already has a nonterminal persisted seat                       | `MATCH_ROSTER_LOCKED`                                                                       |
+| Tenth connected unique account queues                                  | Persist exactly ten seats, freeze roster, prepare one World                                 |
+| Eleventh account while a match is nonterminal                          | `MATCH_FULL`; never enter the World gate                                                    |
+| Roster account disconnects during Preparing                            | Abort and stop World; restore connected peers in original FIFO order                        |
 | Preparing attach socket disconnects while a backup lobby socket exists | Abort the old batch; the connected account may enter a new batch with its original FIFO key |
-| Join or rebind is not present in the frozen gate snapshot | Deny before World client state changes |
-| Rebind admitted at `deadline - 1ms`, receipt arrives later | Commit the exact reserved attempt; timeout claim must not overtake it |
-| Fresh Rebind at `deadline` or later with no reservation | Deny; claim once, transition to TimedOut, and despawn once |
-| Delayed/duplicate Join or Rebound receipt | Consume only its exact attempt; stale or repeated receipts are no-ops |
-| Delayed callback carries a stale World generation | Ignore/reject without touching the replacement World |
-| Hard deadline reached | Enter Settling, time out remaining active/disconnected participants, finish, stop World |
-| Settling persistence fails after local stop | Keep gate closed and World stopped; retry the same transition on a later Tick |
-| Queue changes after an uncertain create result | Resolve and abort the exact prepare attempt before removing the queue entry |
-| Process starts with persisted nonterminal matches | Atomically abort them before opening matchmaking; preserve terminal asset results |
-| A second process targets the same database | Fail startup before recovery or matchmaking mutation |
-| Repeated lifecycle transition or cleanup | Return `AlreadyApplied`/`false` or equivalent idempotent success |
+| Join or rebind is not present in the frozen gate snapshot              | Deny before World client state changes                                                      |
+| Rebind admitted at `deadline - 1ms`, receipt arrives later             | Commit the exact reserved attempt; timeout claim must not overtake it                       |
+| Fresh Rebind at `deadline` or later with no reservation                | Deny; claim once, transition to TimedOut, and despawn once                                  |
+| Delayed/duplicate Join or Rebound receipt                              | Consume only its exact attempt; stale or repeated receipts are no-ops                       |
+| Delayed callback carries a stale World generation                      | Ignore/reject without touching the replacement World                                        |
+| Socket close arrives after participant became terminal                 | Ignore it; preserve the existing terminal result and match outcome                          |
+| Hard deadline reached                                                  | Enter Settling, time out remaining active/disconnected participants, finish, stop World     |
+| Settling persistence fails after local stop                            | Keep gate closed and World stopped; retry the same transition on a later Tick               |
+| Queue changes after an uncertain create result                         | Resolve and abort the exact prepare attempt before removing the queue entry                 |
+| Process starts with persisted nonterminal matches                      | Atomically abort them before opening matchmaking; preserve terminal asset results           |
+| A second process targets the same database                             | Fail startup before recovery or matchmaking mutation                                        |
+| Repeated lifecycle transition or cleanup                               | Return `AlreadyApplied`/`false` or equivalent idempotent success                            |
+| Stop acknowledgement is requested while World work is in flight        | Close admission to new work, wait for all accepted permits, then acknowledge                |
+| Logical route maps are empty but a World/task remains physically live  | Keep the release gate closed and report the non-zero lifecycle diagnostic                   |
 
 ### 5. Good / Base / Bad Cases
 
@@ -176,9 +182,11 @@ pub struct DespawnDetachedPrincipal {
 - Domain tests for exact roster size, duplicate account/public ID rejection, seats, match transitions, participant transitions, and `+8m/+12m/+30s` deadlines.
 - Coordinator tests with an injectable UTC/monotonic clock for sequential and concurrent 9/10/11 admission, no-runtime failure closure, uncertain-create retry, Preparing disconnect restoration with backup sockets, all-ten activation, terminal requeue, stop-before-persist retry, and repeated cleanup.
 - Boundary tests at `59.999s` and `60.000s`, including both linearization orders between an admitted Rebind and timeout claim, exact rejection cleanup, one terminal timeout, and one generation-safe despawn despite repeated ticks.
+- Reconnect tests must close the physical socket after hard deadline and after death, then assert the terminal result remains unique, no `connection_event_failed` abort is recorded, and a later queue attempt starts from lobby state.
 - World specification tests for the 320-block engine envelope, exact 300-by-300 playable bounds, fixed capacity/health/backpack/loadout, disabled saving, and deterministic named seed fold.
 - PostgreSQL tests for exact-ten atomic creation, duplicate/nonterminal seat exclusion, UUID lock order behavior, idempotent transitions, reconnect boundary, hard-deadline settlement, process-lock exclusion/reacquisition, startup recovery/asset preservation, and transaction rollback. Tests that invoke global startup recovery or the process advisory lock must be serialized within their shared test database.
 - Root engine actor tests for attach-guard denial before mutation, lifecycle observer events carrying the exact attach attempt, generation-checked prepare, detach/rebind rejection restoration, idempotent remove, and stale-generation despawn isolation.
+- Background lifecycle tests cover one shared pool, close-and-wait behavior, late-job rejection, RAII release, and physical World/task counters. Multi-round E2E must observe three consecutive released snapshots after each round before starting the next.
 
 ### 7. Wrong vs Correct
 

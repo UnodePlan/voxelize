@@ -1,3 +1,5 @@
+import { settleConcurrentPhase } from "./concurrent-phase";
+
 export const CAPACITY_MATCH_SIZE = 10;
 export const CAPACITY_SCENARIO_ACTORS = CAPACITY_MATCH_SIZE + 1;
 
@@ -49,6 +51,10 @@ export interface CapacityScenarioResult {
   protocolActors: number;
 }
 
+export interface CapacityScenarioOptions {
+  beforeDisconnect?(result: CapacityScenarioResult): Promise<void>;
+}
+
 /**
  * 编排器只验证真实驱动返回的协议结果，不在客户端复制服务端容量算法。
  * 驱动可以是 Playwright 页面、轻量 WebSocket 客户端或确定性的服务端 fake harness。
@@ -56,11 +62,16 @@ export interface CapacityScenarioResult {
  */
 export async function runExactTenCapacityScenario(
   actors: readonly CapacityActor[],
+  options: CapacityScenarioOptions = {},
 ): Promise<CapacityScenarioResult> {
   validateActors(actors);
   try {
-    await Promise.all(actors.map((actor) => actor.connect()));
-    const admissions = await Promise.all(
+    await settleConcurrentPhase(
+      "capacity scenario connect",
+      actors.map((actor) => actor.connect()),
+    );
+    const admissions = await settleConcurrentPhase(
+      "capacity scenario enqueue",
       actors.map((actor) => actor.enqueue()),
     );
     const accepted = admissions.flatMap((admission, index) =>
@@ -100,7 +111,8 @@ export async function runExactTenCapacityScenario(
       "accepted actors did not converge on one match and world",
     );
 
-    const joins = await Promise.all(
+    const joins = await settleConcurrentPhase(
+      "capacity scenario join",
       accepted.map(({ actor }) => actor.join(first.matchId, first.worldName)),
     );
     requireScenario(
@@ -123,7 +135,7 @@ export async function runExactTenCapacityScenario(
       "the eleventh actor was able to join the frozen world",
     );
 
-    return {
+    const result: CapacityScenarioResult = {
       matchId: first.matchId,
       worldName: first.worldName,
       admittedActorIds: accepted.map(({ actor }) => actor.actorId),
@@ -133,6 +145,8 @@ export async function runExactTenCapacityScenario(
       protocolActors: accepted.filter(({ actor }) => actor.kind === "protocol")
         .length,
     };
+    await options.beforeDisconnect?.(result);
+    return result;
   } finally {
     const cleanup = await Promise.allSettled(
       actors.map((actor) => actor.disconnect()),

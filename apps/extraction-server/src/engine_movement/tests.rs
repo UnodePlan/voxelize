@@ -181,6 +181,58 @@ fn gravity_lands_and_syncs_the_eye_position() {
 }
 
 #[test]
+fn horizontal_control_wakes_a_settled_body() {
+    let fixture = physics_fixture(false);
+    let (mut body, mut position) = player_at([1.5, 1.9, 1.5]);
+    body.resting.1 = -1;
+    body.sleep_frame_count = 0;
+    let mut intent = MovementIntentComp::default();
+    assert!(intent
+        .accept(update(1.0, 0.0, false, [1.0, 0.0, 0.0]), STEP)
+        .is_some());
+
+    step_body(
+        &mut body,
+        &mut position,
+        &mut intent,
+        true,
+        STEP,
+        true,
+        &fixture,
+    );
+
+    let center = body.get_position();
+    assert!(center.0 > 1.5, "休眠角色收到移动输入后必须前进");
+    assert!(body.sleep_frame_count > 0, "非零水平控制必须唤醒刚体");
+    assert!(
+        (position.0 .0 - center.0).abs() < 0.001,
+        "公开眼睛位置必须同步权威刚体"
+    );
+}
+
+#[test]
+fn settled_body_stays_asleep_without_control() {
+    let fixture = physics_fixture(false);
+    let (mut body, mut position) = player_at([1.5, 1.9, 1.5]);
+    body.resting.1 = -1;
+    body.sleep_frame_count = 0;
+    let mut intent = MovementIntentComp::default();
+
+    step_body(
+        &mut body,
+        &mut position,
+        &mut intent,
+        true,
+        STEP,
+        true,
+        &fixture,
+    );
+
+    assert!((body.get_position().0 - 1.5).abs() < 0.001);
+    assert_eq!(body.sleep_frame_count, 0, "无输入的接地角色应保持休眠");
+}
+
+#[test]
 fn repeated_legal_steps_cannot_cross_a_voxel_wall() {
     let fixture = physics_fixture(true);
     let (mut body, mut position) = player_at([1.5, 1.9, 1.5]);

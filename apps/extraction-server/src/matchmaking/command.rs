@@ -3,7 +3,7 @@ use std::sync::{atomic::AtomicBool, Arc};
 use tokio::sync::oneshot;
 use uuid::Uuid;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "e2e-control"))]
 use super::coordinator_diagnostics::CoordinatorResourceSnapshot;
 use super::{MatchConnectionEvent, MatchResultRecord, MatchmakingError, QueueSnapshot};
 #[cfg(any(feature = "engine", test))]
@@ -36,7 +36,7 @@ pub(super) enum Command {
         account_id: Uuid,
         reply: oneshot::Sender<Result<Option<MatchResultRecord>, MatchmakingError>>,
     },
-    #[cfg(test)]
+    #[cfg(any(test, feature = "e2e-control"))]
     InspectResources {
         reply: oneshot::Sender<CoordinatorResourceSnapshot>,
     },

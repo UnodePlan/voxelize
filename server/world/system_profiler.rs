@@ -247,6 +247,11 @@ impl<'a, 'b> TimedDispatcherBuilder<'a, 'b> {
         self
     }
 
+    pub(crate) fn with_pool(mut self, pool: Arc<rayon::ThreadPool>) -> Self {
+        self.inner = self.inner.with_pool(pool);
+        self
+    }
+
     pub fn into_inner(self) -> DispatcherBuilder<'a, 'b> {
         self.inner
     }

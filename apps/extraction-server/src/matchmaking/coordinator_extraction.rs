@@ -54,13 +54,23 @@ impl Coordinator {
                 .ok_or(MatchmakingError::RosterLocked);
         }
         if participant_state == ParticipantState::Extracted {
-            let record = self
+            let result = self
                 .repository
-                .find_settlement(key.0, key.1)
+                .find_match_result(key.0, key.1)
                 .await
                 .map_err(settlement_error)?
                 .ok_or(MatchmakingError::RosterLocked)?;
-            return verify_qualification(qualification, &record);
+            if result.match_id != qualification.match_id
+                || result.participant_state != ParticipantState::Extracted
+                || result.stats != qualification.stats
+            {
+                return Err(MatchmakingError::RosterLocked);
+            }
+            let record = result
+                .settlement
+                .as_ref()
+                .ok_or(MatchmakingError::RosterLocked)?;
+            return verify_qualification(qualification, record);
         }
         if participant_state != ParticipantState::Active {
             return Err(MatchmakingError::RosterLocked);

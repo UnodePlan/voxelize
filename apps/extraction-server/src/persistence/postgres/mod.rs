@@ -1,4 +1,10 @@
 mod auth;
+#[cfg(feature = "e2e-control")]
+mod e2e_settlement_audit;
+#[cfg(feature = "e2e-control")]
+mod e2e_settlement_crash;
+#[cfg(feature = "e2e-control")]
+mod e2e_settlement_fault;
 mod matchmaking;
 mod process_lock;
 mod session;
@@ -9,6 +15,8 @@ mod settlement_results;
 mod settlement_write;
 mod warehouse;
 
+#[cfg(feature = "e2e-control")]
+use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -34,6 +42,8 @@ pub use process_lock::{acquire_matchmaking_process_lock, MatchmakingProcessLock}
 #[derive(Clone, Debug)]
 pub struct PgRepository {
     pool: PgPool,
+    #[cfg(feature = "e2e-control")]
+    settlement_fault: Arc<e2e_settlement_fault::E2eSettlementFaultControl>,
 }
 
 impl PgRepository {
@@ -43,15 +53,42 @@ impl PgRepository {
             .acquire_timeout(Duration::from_secs(3))
             .connect(database_url)
             .await?;
-        Ok(Self { pool })
+        Ok(Self {
+            pool,
+            #[cfg(feature = "e2e-control")]
+            settlement_fault: Arc::new(Default::default()),
+        })
     }
 
     pub fn from_pool(pool: PgPool) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            #[cfg(feature = "e2e-control")]
+            settlement_fault: Arc::new(Default::default()),
+        }
     }
 
     pub fn pool(&self) -> &PgPool {
         &self.pool
+    }
+}
+
+#[cfg(feature = "e2e-control")]
+pub(crate) use e2e_settlement_crash::validate_configuration as validate_e2e_settlement_crash_configuration;
+#[cfg(feature = "e2e-control")]
+pub(crate) use e2e_settlement_fault::{E2eSettlementFaultAction, E2eSettlementFaultSnapshot};
+
+#[cfg(feature = "e2e-control")]
+impl PgRepository {
+    pub(crate) fn apply_e2e_settlement_fault(
+        &self,
+        action: E2eSettlementFaultAction,
+    ) -> E2eSettlementFaultSnapshot {
+        self.settlement_fault.apply(action)
+    }
+
+    pub(crate) fn e2e_settlement_fault_snapshot(&self) -> E2eSettlementFaultSnapshot {
+        self.settlement_fault.snapshot()
     }
 }
 
@@ -244,6 +281,8 @@ impl SettlementRepository for PgRepository {
         &self,
         qualification: ExtractionQualification,
     ) -> Result<TransitionOutcome<ParticipantRecord>, SettlementRepositoryError> {
+        #[cfg(feature = "e2e-control")]
+        self.settlement_fault.record_mark();
         settlement_write::mark_pending(&self.pool, qualification).await
     }
 
@@ -251,7 +290,14 @@ impl SettlementRepository for PgRepository {
         &self,
         command: CommitSettlement,
     ) -> Result<TransitionOutcome<SettlementRecord>, SettlementRepositoryError> {
-        settlement_commit::commit(&self.pool, command).await
+        #[cfg(feature = "e2e-control")]
+        self.settlement_fault.record_commit();
+        let outcome = settlement_commit::commit(&self.pool, command).await?;
+        #[cfg(feature = "e2e-control")]
+        if outcome.was_applied() {
+            self.settlement_fault.after_applied_commit()?;
+        }
+        Ok(outcome)
     }
 
     async fn find_settlement(
@@ -259,6 +305,8 @@ impl SettlementRepository for PgRepository {
         match_id: Uuid,
         account_id: Uuid,
     ) -> Result<Option<SettlementRecord>, SettlementRepositoryError> {
+        #[cfg(feature = "e2e-control")]
+        self.settlement_fault.before_settlement_read()?;
         settlement_read::find_settlement(&self.pool, match_id, account_id).await
     }
 
@@ -268,6 +316,8 @@ impl SettlementRepository for PgRepository {
         account_id: Uuid,
         at: OffsetDateTime,
     ) -> Result<TransitionOutcome<ParticipantRecord>, SettlementRepositoryError> {
+        #[cfg(feature = "e2e-control")]
+        self.settlement_fault.record_abort();
         settlement_write::abort_pending(&self.pool, match_id, account_id, at).await
     }
 
@@ -276,6 +326,8 @@ impl SettlementRepository for PgRepository {
         match_id: Uuid,
         account_id: Uuid,
     ) -> Result<Option<MatchResultRecord>, SettlementRepositoryError> {
+        #[cfg(feature = "e2e-control")]
+        self.settlement_fault.before_result_read()?;
         settlement_results::find_match_result(&self.pool, match_id, account_id).await
     }
 
@@ -283,6 +335,8 @@ impl SettlementRepository for PgRepository {
         &self,
         account_id: Uuid,
     ) -> Result<Option<MatchResultRecord>, SettlementRepositoryError> {
+        #[cfg(feature = "e2e-control")]
+        self.settlement_fault.before_result_read()?;
         settlement_results::find_latest_match_result(&self.pool, account_id).await
     }
 }

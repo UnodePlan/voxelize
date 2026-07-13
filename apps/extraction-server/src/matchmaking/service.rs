@@ -10,7 +10,7 @@ use time::OffsetDateTime;
 use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "e2e-control"))]
 use super::coordinator_diagnostics::CoordinatorResourceSnapshot;
 use super::{command::Command, coordinator::Coordinator, gate::AttachGate, MatchVersions};
 use crate::observability::{MatchEvent, MatchEventSink, RejectionReason, StderrMatchEventSink};
@@ -117,6 +117,7 @@ pub struct MatchmakingService {
     pub(super) sender: mpsc::Sender<Command>,
     pub(super) gate: Arc<AttachGate>,
     pub(super) clock: Arc<dyn Clock>,
+    runtime: tokio::runtime::Handle,
     pub(super) tick_pending: Arc<AtomicBool>,
     pub(super) events: Arc<dyn MatchEventSink>,
     overflow_recovery_started: AtomicBool,
@@ -151,6 +152,7 @@ impl MatchmakingService {
         let (sender, receiver) = mpsc::channel(COMMAND_CAPACITY);
         let gate = Arc::new(AttachGate::default());
         let tick_pending = Arc::new(AtomicBool::new(false));
+        let runtime = tokio::runtime::Handle::current();
         let coordinator = Coordinator::new(
             repository,
             clock.clone(),
@@ -161,19 +163,20 @@ impl MatchmakingService {
             sender.clone(),
         )
         .with_event_sink(events.clone());
-        tokio::spawn(coordinator.run(receiver));
+        runtime.spawn(coordinator.run(receiver));
         Arc::new(Self {
             sender,
             gate,
             clock,
+            runtime,
             tick_pending,
             events,
             overflow_recovery_started: AtomicBool::new(false),
         })
     }
 
-    #[cfg(test)]
-    pub(super) async fn resource_snapshot(
+    #[cfg(any(test, feature = "e2e-control"))]
+    pub(crate) async fn resource_snapshot(
         &self,
     ) -> Result<CoordinatorResourceSnapshot, MatchmakingError> {
         let (reply, response) = oneshot::channel();
@@ -181,7 +184,9 @@ impl MatchmakingService {
             .send(Command::InspectResources { reply })
             .await
             .map_err(|_| MatchmakingError::Unavailable)?;
-        response.await.map_err(|_| MatchmakingError::Unavailable)
+        let mut snapshot = response.await.map_err(|_| MatchmakingError::Unavailable)?;
+        snapshot.ticker_pending = self.tick_pending.load(Ordering::Acquire);
+        Ok(snapshot)
     }
 
     pub async fn bind_runtime(
@@ -288,7 +293,7 @@ impl MatchmakingService {
             return;
         }
         let sender = self.sender.clone();
-        tokio::spawn(async move {
+        self.runtime.spawn(async move {
             let _ = sender.send(Command::FailClosed).await;
         });
     }

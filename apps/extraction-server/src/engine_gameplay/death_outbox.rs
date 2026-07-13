@@ -28,11 +28,7 @@ pub(super) fn flush_death_notices<'a>(
         if record.notice_sent {
             continue;
         }
-        let match_stats = ParticipantMatchStats {
-            mined: counts(stats.stats().mined()),
-            picked_up: counts(stats.stats().picked_up()),
-            lost: counts(stats.stats().lost()),
-        };
+        let match_stats = participant_match_stats(stats.stats());
         let reported = match record.result.data.cause {
             DeathCause::Melee => record.killer_account_id.is_some_and(|killer_account_id| {
                 authority.report_death(ParticipantDeath {
@@ -61,6 +57,16 @@ pub(super) fn flush_death_notices<'a>(
         if reported {
             record.notice_sent = true;
         }
+    }
+}
+
+pub(super) fn participant_match_stats(
+    stats: &crate::gameplay::round_stats::RoundStats,
+) -> ParticipantMatchStats {
+    ParticipantMatchStats {
+        mined: counts(stats.mined()),
+        picked_up: counts(stats.picked_up()),
+        lost: counts(stats.lost()),
     }
 }
 

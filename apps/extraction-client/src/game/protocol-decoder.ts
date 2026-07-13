@@ -1,4 +1,4 @@
-import { decodeMessage } from "@voxelize/core";
+import { decodeMessage } from "@voxelize/core/decode-message";
 import type { MessageProtocol } from "@voxelize/protocol";
 
 import ProtocolWorker from "./protocol-worker?worker&inline";

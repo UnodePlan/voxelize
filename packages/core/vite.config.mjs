@@ -40,11 +40,14 @@ export default defineConfig({
   build: {
     minify: false,
     lib: {
-      entry: path.resolve(__dirname, "src/index.ts"),
+      entry: {
+        index: path.resolve(__dirname, "src/index.ts"),
+        "decode-message": path.resolve(__dirname, "src/decode-message.ts"),
+      },
       name: "index",
       formats: ["es", "cjs"],
-      fileName: (format) => {
-        return format === 'es' ? 'index.mjs' : 'index.js';
+      fileName: (format, entryName) => {
+        return `${entryName}.${format === "es" ? "mjs" : "js"}`;
       },
     },
     rollupOptions: {},

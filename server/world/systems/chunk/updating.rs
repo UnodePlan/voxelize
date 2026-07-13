@@ -5,9 +5,10 @@ use nanoid::nanoid;
 use specs::{Entities, LazyUpdate, ReadExpect, System, WorldExt, WriteExpect, WriteStorage};
 
 use crate::{
-    BlockUtils, ChunkUtils, Chunks, ClientFilter, CurrentChunkComp, ETypeComp, EntityFlag, IDComp,
-    JsonComp, LightColor, LightNode, Lights, Mesher, Message, MessageQueues, MessageType,
-    MetadataComp, Registry, Stats, UpdateProtocol, Vec2, Vec3, VoxelAccess, VoxelComp, WorldConfig,
+    BlockUtils, ChunkInterests, ChunkProjection, ChunkUtils, Chunks, ClientFilter,
+    CurrentChunkComp, ETypeComp, EntityFlag, IDComp, JsonComp, LightColor, LightNode, Lights,
+    Mesher, Message, MessageQueues, MessageType, MetadataComp, Registry, Stats, UpdateProtocol,
+    Vec2, Vec3, VoxelAccess, VoxelComp, WorldConfig,
 };
 
 pub const VOXEL_NEIGHBORS: [[i32; 3]; 6] = [
@@ -793,6 +794,8 @@ impl<'a> System<'a> for ChunkUpdatingSystem {
         ReadExpect<'a, WorldConfig>,
         ReadExpect<'a, Registry>,
         ReadExpect<'a, Stats>,
+        ReadExpect<'a, ChunkInterests>,
+        WriteExpect<'a, ChunkProjection>,
         WriteExpect<'a, MessageQueues>,
         WriteExpect<'a, Chunks>,
         WriteExpect<'a, Mesher>,
@@ -806,6 +809,8 @@ impl<'a> System<'a> for ChunkUpdatingSystem {
             config,
             registry,
             stats,
+            interests,
+            mut projection,
             mut message_queue,
             mut chunks,
             mut mesher,
@@ -879,11 +884,44 @@ impl<'a> System<'a> for ChunkUpdatingSystem {
         );
         all_results.extend(results);
 
+        let uses_identity_projection = projection.is_identity();
+        let all_results = projection.project_updates(
+            all_results,
+            &chunks,
+            &registry,
+            config.chunk_size,
+            config.max_height as i32,
+        );
+
         if !all_results.is_empty() {
-            let new_message = Message::new(&MessageType::Update)
-                .updates(&all_results)
-                .build();
-            message_queue.push((new_message, ClientFilter::All));
+            if uses_identity_projection {
+                let new_message = Message::new(&MessageType::Update)
+                    .updates(&all_results)
+                    .build();
+                message_queue.push((new_message, ClientFilter::All));
+            } else {
+                let mut client_updates: HashMap<String, Vec<UpdateProtocol>> = HashMap::new();
+                for update in all_results {
+                    let coords = ChunkUtils::map_voxel_to_chunk(
+                        update.vx,
+                        update.vy,
+                        update.vz,
+                        config.chunk_size,
+                    );
+                    if let Some(client_ids) = interests.get_interests(&coords) {
+                        for client_id in client_ids {
+                            client_updates
+                                .entry(client_id.clone())
+                                .or_default()
+                                .push(update.clone());
+                        }
+                    }
+                }
+                for (client_id, updates) in client_updates {
+                    let message = Message::new(&MessageType::Update).updates(&updates).build();
+                    message_queue.push((message, ClientFilter::Direct(client_id)));
+                }
+            }
         }
     }
 }

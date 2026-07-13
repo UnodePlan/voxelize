@@ -344,6 +344,7 @@ describe("game network boundary", () => {
     const socket = FakeWebSocket.instances[0];
     socket?.open();
     await connected;
+    network.resume("match:v1:route-test");
 
     socket?.receive({
       type: protocol.Message.Type.INIT,
@@ -441,6 +442,76 @@ describe("game network boundary", () => {
 
     expect(voxelMessage).not.toHaveBeenCalled();
     expect(voxelReset).toHaveBeenCalledTimes(1);
+    network.close();
+  });
+
+  it("drops world messages received by the lobby socket after leaving", async () => {
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    const voxelMessage = vi.fn();
+    const network = new GameNetwork(
+      manifest,
+      {
+        onAuthenticationInvalidated: vi.fn(),
+        onConnection: vi.fn(),
+        onGameplayState: vi.fn(),
+        onProtocolError: vi.fn(),
+        onReconnectExpired: vi.fn(),
+        onVoxelMessage: voxelMessage,
+      },
+      "https://play.example",
+    );
+    const connected = network.connect();
+    const socket = FakeWebSocket.instances[0];
+    socket?.open();
+    await connected;
+    network.join("match:v1:late-world-frame-test");
+    network.leave();
+
+    socket?.receive({
+      type: protocol.Message.Type.INIT,
+      json: JSON.stringify({ id: "late-player" }),
+    });
+    await Promise.resolve();
+
+    expect(voxelMessage).not.toHaveBeenCalled();
+    network.close();
+  });
+
+  it("leaves one world and reuses the open socket for the next round", async () => {
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    const voxelReset = vi.fn();
+    const network = new GameNetwork(
+      manifest,
+      {
+        onAuthenticationInvalidated: vi.fn(),
+        onConnection: vi.fn(),
+        onGameplayState: vi.fn(),
+        onProtocolError: vi.fn(),
+        onReconnectExpired: vi.fn(),
+        onVoxelReset: voxelReset,
+      },
+      "https://play.example",
+    );
+    const connected = network.connect();
+    const socket = FakeWebSocket.instances[0];
+    socket?.open();
+    await connected;
+    network.join("match:v1:first-round");
+
+    network.leave();
+
+    expect(voxelReset).toHaveBeenCalledTimes(1);
+    expect(socket?.readyState).toBe(FakeWebSocket.OPEN);
+    expect(decodedMessages(socket).at(-1)).toMatchObject({
+      type: protocol.Message.Type.LEAVE,
+      text: "match:v1:first-round",
+    });
+
+    network.join("match:v1:second-round");
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(decodedMessages(socket).at(-1)).toMatchObject({
+      type: protocol.Message.Type.JOIN,
+    });
     network.close();
   });
 });

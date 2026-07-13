@@ -5,9 +5,28 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test:actor": "vitest --run --config vitest.actor.config.ts"
+    "test:actor": "vitest --run --config vitest.actor.config.ts",
+    "test:live:gameplay": "node scripts/run-live-gameplay.mjs",
+    "test:live:crash-recovery": "node scripts/run-live-gameplay.mjs --crash-recovery",
+    "test:live:settlement-uncertainty": "node scripts/run-live-gameplay.mjs --settlement-uncertainty",
+    "test:live:reconnect": "node scripts/run-live-reconnect.mjs",
+    "test:live:smoke": "node scripts/run-live-smoke.mjs",
+    "test:live:10p": "node scripts/run-live-smoke.mjs --10p",
+    "test:live:multi-round": "node scripts/run-live-smoke.mjs --multi-round",
+    "test:browser:smoke": "playwright test --config playwright.config.ts --grep @smoke",
+    "test:browser:10p": "playwright test --config playwright.config.ts --grep @10p"
+  },
+  "dependencies": {
+    "@voxelize/core": "workspace:*",
+    "@voxelize/protocol": "workspace:*",
+    "ethers": "6.17.0",
+    "lz4js": "0.2.0",
+    "siwe": "3.0.0",
+    "ws": "8.21.0"
   },
   "devDependencies": {
+    "@playwright/test": "1.61.1",
+    "@types/ws": "8.18.0",
     "typescript": "^5.8.2",
     "vitest": "^1.6.1"
   }

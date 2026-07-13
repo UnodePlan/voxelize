@@ -149,6 +149,7 @@ impl<'a> System<'a> for CombatResolutionSystem {
             extractions: &mut extractions,
             inventories: &mut inventories,
             mining: &mut mining,
+            stats: &stats,
         });
         if let Some(request) = hard_deadline.pending_request() {
             process_hard_deadline_eliminations(

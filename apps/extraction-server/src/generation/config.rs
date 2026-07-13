@@ -45,6 +45,7 @@ impl GenerationConfig {
     pub(crate) fn resolve(generation_version: &str, config_version: &str) -> Option<&'static Self> {
         match (generation_version, config_version) {
             ("generation-v1", "balance-v1") => Some(&GENERATION_V1),
+            ("generation-v2", "balance-v2") => Some(&GENERATION_V2),
             _ => None,
         }
     }
@@ -120,5 +121,44 @@ pub(crate) const GENERATION_V1: GenerationConfig = GenerationConfig {
         segments: 3,
         segment_step: 2,
         stream: 0x4449_414d_5f56_3101,
+    },
+};
+
+// 新版本只能通过显式版本对启用；生产 manifest 仍指向已冻结的 V1。
+pub(crate) const GENERATION_V2: GenerationConfig = GenerationConfig {
+    generation_version: "generation-v2",
+    config_version: "balance-v2",
+    min_xz: -150,
+    max_xz_exclusive: 150,
+    max_height: 64,
+    surface_y: 48,
+    unbreakable_floor_y: 0,
+    spawn_points: &SPAWN_POINTS,
+    extraction_candidates: &EXTRACTION_CANDIDATES,
+    gold: OreFieldConfig {
+        anchors: &GOLD_ANCHORS,
+        horizontal_jitter: 10,
+        min_y: 22,
+        max_y: 28,
+        min_horizontal_radius: 9,
+        max_horizontal_radius: 11,
+        min_vertical_radius: 4,
+        max_vertical_radius: 6,
+        segments: 5,
+        segment_step: 3,
+        stream: 0x474f_4c44_5f56_3201,
+    },
+    diamond: OreFieldConfig {
+        anchors: &DIAMOND_ANCHORS,
+        horizontal_jitter: 5,
+        min_y: 6,
+        max_y: 10,
+        min_horizontal_radius: 5,
+        max_horizontal_radius: 8,
+        min_vertical_radius: 2,
+        max_vertical_radius: 4,
+        segments: 5,
+        segment_step: 2,
+        stream: 0x4449_414d_5f56_3201,
     },
 };

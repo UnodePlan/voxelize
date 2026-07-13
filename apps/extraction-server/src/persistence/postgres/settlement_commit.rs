@@ -56,6 +56,7 @@ pub(super) async fn commit(
             &existing,
             participant.parsed_state().map_err(map_match_error)?,
             participant.settlement_qualified_at,
+            participant.stats(),
         )?;
         transaction.commit().await.map_err(unavailable)?;
         return Ok(TransitionOutcome::AlreadyApplied(existing));
@@ -63,6 +64,7 @@ pub(super) async fn commit(
     validate_qualification(&match_row, qualification)?;
     if participant.parsed_state().map_err(map_match_error)? != ParticipantState::SettlementPending
         || participant.settlement_qualified_at != Some(qualification.qualified_at)
+        || participant.stats() != qualification.stats
     {
         return Err(SettlementRepositoryError::Conflict);
     }
@@ -117,11 +119,19 @@ pub(super) async fn commit(
     if updated.rows_affected() != 1 {
         return Err(SettlementRepositoryError::Conflict);
     }
+    #[cfg(feature = "e2e-control")]
+    super::e2e_settlement_crash::exit_if_configured(
+        super::e2e_settlement_crash::SettlementCrashPoint::BeforeCommit,
+    );
     // COMMIT 响应失败不能推断事务已回滚；调用方必须查询唯一结算记录后再收敛结果。
     transaction
         .commit()
         .await
         .map_err(|_| SettlementRepositoryError::OutcomeUnknown)?;
+    #[cfg(feature = "e2e-control")]
+    super::e2e_settlement_crash::exit_if_configured(
+        super::e2e_settlement_crash::SettlementCrashPoint::AfterCommit,
+    );
     Ok(TransitionOutcome::Applied(record))
 }
 
@@ -130,10 +140,12 @@ fn verify_existing(
     existing: &SettlementRecord,
     participant_state: ParticipantState,
     settlement_qualified_at: Option<OffsetDateTime>,
+    participant_stats: crate::matchmaking::ParticipantMatchStats,
 ) -> Result<(), SettlementRepositoryError> {
     let qualification = &command.qualification;
     if participant_state != ParticipantState::Extracted
         || settlement_qualified_at != Some(qualification.qualified_at)
+        || participant_stats != qualification.stats
         || existing.inventory_digest != qualification.inventory_digest
         || existing.config_version != qualification.config_version
         || existing.resources != qualification.resources

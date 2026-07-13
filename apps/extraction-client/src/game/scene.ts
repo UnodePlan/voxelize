@@ -249,8 +249,9 @@ export class VoxelBackdrop {
   }
 
   private disposeLiveWorld(): void {
-    this.liveWorld?.dispose();
+    const liveWorld = this.liveWorld;
     this.liveWorld = null;
     delete this.canvas.dataset.liveWorld;
+    liveWorld?.dispose();
   }
 }

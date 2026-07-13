@@ -3,3 +3,8 @@
 {"file":".trellis/tasks/07-12-voxel-extraction-pvp-mvp/research/repository-integration.md","reason":"复核原子 Join、strict policy、连接重绑、World 清理及 legacy 兼容风险。"}
 {"file":".trellis/tasks/07-12-voxel-extraction-pvp-mvp/research/auth-persistence.md","reason":"复核 SIWE 信任边界、session 安全、唯一约束、事务幂等和只读运维边界。"}
 {"file":".trellis/tasks/07-12-voxel-extraction-pvp-mvp/research/gameplay-runtime.md","reason":"复核同 tick 竞态、资产守恒、死亡优先级、pending drop 和撤离状态机。"}
+{"file":".trellis/spec/core/backend/authoritative-movement-visibility.md","reason":"复核动作只在新权威 PEER 后发生、全三维位置稳定、矿石投影不改变权威 Chunk。"}
+{"file":".trellis/spec/core/backend/deterministic-world-generation.md","reason":"复核固定种子指纹、矿脉拓扑、真实挖掘时长、共享线程池与任务许可。"}
+{"file":".trellis/spec/core/backend/match-lifecycle-persistence.md","reason":"复核停止确认只在后台任务排空后返回，且重连、硬截止和结算终态幂等。"}
+{"file":".trellis/spec/core/extraction-product-client.md","reason":"复核钱包事件立即失效会话、解码无导入副作用、离场完整释放客户端资源。"}
+{"file":".trellis/spec/workspace/command-contracts.md","reason":"复核 runner 只清理自有进程，真实门禁串行，存活分配为主门禁而 RSS 仅作诊断。"}

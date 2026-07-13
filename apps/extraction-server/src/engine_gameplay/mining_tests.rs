@@ -27,7 +27,13 @@ const TARGET: [i32; 3] = [2, 2, 0];
 const ORIGIN: [f32; 3] = [0.5, 2.5, 0.5];
 
 fn test_world(now: Duration) -> World {
-    let spec = match_spec();
+    let seed = match_spec().seed;
+    test_world_with_seed(now, seed)
+}
+
+pub(super) fn test_world_with_seed(now: Duration, seed: u64) -> World {
+    let mut spec = match_spec();
+    spec.seed = seed;
     let config = WorldConfig::new().max_height(64).max_light_level(1).build();
     let mut world = World::new(&spec.world_name, &config);
     install_gameplay_runtime(&mut world, &spec, GameplayAuthority::allow_all_at(now)).unwrap();
@@ -55,6 +61,16 @@ fn add_player(
     direction: [f32; 3],
     inventory: MatchInventory,
 ) -> (specs::Entity, Uuid) {
+    add_player_at(world, roster_index, ORIGIN, direction, inventory)
+}
+
+pub(super) fn add_player_at(
+    world: &mut World,
+    roster_index: usize,
+    origin: [f32; 3],
+    direction: [f32; 3],
+    inventory: MatchInventory,
+) -> (specs::Entity, Uuid) {
     let spec = match_spec();
     let participant = spec.roster.iter().nth(roster_index).unwrap();
     let entity = world
@@ -71,13 +87,13 @@ fn add_player(
         .with(RoundStatsComp::new(RoundStats::new(Duration::ZERO)))
         .with(EliminationComp::alive())
         .with(ExtractionComp::default())
-        .with(PositionComp::new(ORIGIN[0], ORIGIN[1], ORIGIN[2]))
+        .with(PositionComp::new(origin[0], origin[1], origin[2]))
         .with(DirectionComp::new(direction[0], direction[1], direction[2]))
         .build();
     (entity, participant.public_player_id)
 }
 
-fn resource_voxel_id(world: &World, resource: ResourceKey) -> u32 {
+pub(super) fn resource_voxel_id(world: &World, resource: ResourceKey) -> u32 {
     world
         .read_resource::<GameplayRuntimeContext>()
         .manifest
@@ -126,7 +142,7 @@ fn add_ready_light_neighbors(world: &mut World) {
     }
 }
 
-fn queue_mining(
+pub(super) fn queue_mining(
     world: &mut World,
     entity: specs::Entity,
     public_player_id: Uuid,

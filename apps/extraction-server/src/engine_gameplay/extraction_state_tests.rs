@@ -13,7 +13,9 @@ use crate::{
     gameplay::{config::GAMEPLAY_V1, extraction::ExtractionProgressOutcome},
     generation::MapPoint,
     match_world::PlayableBounds,
-    matchmaking::{ExtractionQualification, GameplayTimeline, SettlementResources},
+    matchmaking::{
+        ExtractionQualification, GameplayTimeline, ParticipantMatchStats, SettlementResources,
+    },
 };
 
 fn context() -> GameplayRuntimeContext {
@@ -124,6 +126,7 @@ fn extraction_state_hides_zone_then_publishes_progress_and_pending() {
         Uuid::from_u128(2),
         OffsetDateTime::from_unix_timestamp(1_799_999_768).unwrap(),
         SettlementResources::new(3, 2, 1),
+        ParticipantMatchStats::default(),
         context.config.config_version.to_owned(),
     )
     .unwrap();

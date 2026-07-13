@@ -26,10 +26,18 @@ async fn settlement_commit_is_atomic_and_same_digest_retry_is_idempotent() {
     let fixture = extraction_fixture(&repository, now - Duration::minutes(9)).await;
     let resources = SettlementResources::new(7, 2, 1);
     let qualification = make_qualification(&fixture, now - Duration::seconds(30), resources);
-    repository
+    let pending = repository
         .mark_settlement_pending(qualification.clone())
         .await
         .expect("撤离资格应先持久化为待结算");
+    assert_eq!(pending.value().stats, qualification.stats);
+    let mut conflicting_stats = qualification.clone();
+    conflicting_stats.stats.picked_up.dirt += 1;
+    assert_eq!(
+        repository.mark_settlement_pending(conflicting_stats).await,
+        Err(SettlementRepositoryError::Conflict),
+        "同一撤离资格不能用不同局内统计覆盖"
+    );
 
     let first_command = CommitSettlement {
         settlement_id: Uuid::new_v4(),
@@ -100,6 +108,7 @@ async fn settlement_commit_is_atomic_and_same_digest_retry_is_idempotent() {
         .await
         .unwrap()
         .expect("本人比赛结果应存在");
+    assert_eq!(exact_result.stats, qualification.stats);
     assert_eq!(exact_result.settlement.as_ref(), Some(outcomes[0].value()));
     let latest_result = repository
         .find_latest_match_result(fixture.account_id)
@@ -291,6 +300,7 @@ async fn closed_grace_window_performs_no_asset_writes() {
         fixture.second_account_id,
         closed_hard_deadline - Duration::seconds(1),
         SettlementResources::new(1, 0, 0),
+        qualification_stats(),
         "balance-v1".to_owned(),
     )
     .unwrap();
@@ -490,9 +500,28 @@ fn make_qualification(
         fixture.account_id,
         qualified_at,
         resources,
+        qualification_stats(),
         "balance-v1".to_owned(),
     )
     .unwrap()
+}
+
+fn qualification_stats() -> extraction_server::matchmaking::ParticipantMatchStats {
+    use extraction_server::matchmaking::{ParticipantMatchStats, ParticipantResourceCounts};
+
+    ParticipantMatchStats {
+        mined: ParticipantResourceCounts {
+            dirt: 4,
+            gold: 2,
+            diamond: 1,
+        },
+        picked_up: ParticipantResourceCounts {
+            dirt: 3,
+            gold: 1,
+            diamond: 0,
+        },
+        lost: ParticipantResourceCounts::default(),
+    }
 }
 
 async fn count_rows(repository: &PgRepository, table: &str, account_id: Uuid) -> i64 {

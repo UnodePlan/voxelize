@@ -4,8 +4,8 @@
 
 ### 1. Scope / Trigger
 
-- Applies to `contracts/extraction/v1/manifest.json`, Rust/TypeScript manifest decoders, `engine_catalog`, `generation`, and dynamic World preparation in `engine_matchmaking`.
-- Trigger this spec when changing resource or equipment IDs, map dimensions, terrain, ore topology, spawn/extraction candidates, generation/config versions, preloading, or map fingerprint tests.
+- Applies to `contracts/extraction/v1/manifest.json`, Rust/TypeScript manifest decoders, `engine_catalog`, `generation`, dynamic World preparation in `engine_matchmaking`, and the extraction World's ore projection setup.
+- Trigger this spec when changing resource or equipment IDs, map dimensions, terrain, ore topology, spawn/extraction candidates, generation/config versions, preloading, ore projection mappings, or map fingerprint tests.
 - `generation-v1` and `balance-v1` are immutable once referenced by a match. Balance changes require a new named version and a new golden fingerprint; never update the V1 expectation to approve an in-place map change.
 
 ### 2. Signatures
@@ -42,29 +42,35 @@ async fn EngineMatchWorldRuntime::prepare_world(
 - `ExtractionTerrainStage` is a pure global-coordinate function. It owns immutable plan data, uses integer hashing, writes only the current Chunk, has no mutable RNG/cache, and never emits `extra_changes`. Chunk request order, Rayon scheduling, and prior matches cannot affect output.
 - V1 has 90,000 dirt surface columns, five connected middle-depth gold deposits, and three connected deeper center-biased diamond deposits. Spawn points are a ten-point outer ring; gold anchors are rotated between adjacent spawns. Eight extraction candidates form one symmetric inner ring. Seed only shuffles stable candidate arrays.
 - Dynamic Worlds use `saving(false)`, preload radius 10, and do not open the application attach generation until lifecycle `Ready`. Preparation polls the same generation for at most 60 seconds. Timeout, actor error, or generation mismatch starts a bounded five-second removal and clears both ownership and attach-generation maps.
+- Generation, meshing, encoded-message work, and ECS dispatchers use the injected process-shared Rayon pool. Each asynchronous World job acquires a permit from that World's tracker before spawn; stages must not create a per-World pool or a nested untracked Rayon job.
 - The V1 actual-Chunk SHA-256 fingerprint for seed `0x1122334455667788` is `234903c7af2917afb0e3b9aa643f5848c40f8e12b5494cd2b4d18187bb881df5`.
-- PVP Worlds use `ChunkLoadPolicy::AuthoritativeRadius { max_chunk_radius: 6 }`: the center and sorting direction come from server-owned player components, and every requested coordinate must also remain inside the frozen World chunk envelope. This bounds remote discovery but does not hide ore inside the legal radius or erase chunks already observed by a client.
+- PVP Worlds use `ChunkLoadPolicy::AuthoritativeRadius { max_chunk_radius: 6 }`: the center and sorting direction come from server-owned player components, and every requested coordinate must also remain inside the frozen World chunk envelope.
+- After installing the immutable generation stage, extraction World preparation installs `ChunkProjection::obfuscating([(gold,dirt),(diamond,dirt)])` and `client_only_meshing(true)`. This projection changes only outbound visibility; generated fingerprints, ore counts, mining validation, and replay identity always use authoritative Chunks.
+- Reveal state belongs to the disposable World generation. A new match starts with no inherited reveals even when seed/version are identical; a revealed voxel remains revealed only for the lifetime of its current World.
 
 ### 4. Validation & Error Matrix
 
-| Condition                                                    | Required result                                                                  |
-| ------------------------------------------------------------ | -------------------------------------------------------------------------------- |
-| Missing/duplicate resource or equipment key                  | Manifest validation error; abort startup                                         |
-| Duplicate/zero/out-of-range voxel or item ID                 | Manifest validation error; never enter registry panic paths                      |
-| Unsupported catalog, generation, or config version           | `CatalogError`/`GenerationError`; reject before `AddWorld`                       |
-| Same seed and exact versions                                 | Byte-identical canonical Chunk voxel fingerprint                                 |
-| Different full `u64` seeds with the same folded engine seed  | Observably different map fingerprint                                             |
-| Stage attempts a cross-Chunk write                           | Test failure because `extra_changes` must stay empty                             |
-| World is still `Preparing`                                   | Keep attach generation closed and poll with the same World generation            |
-| Preparation exceeds 60 seconds or World generation changes   | Remove the World, clear runtime maps, return `Unavailable`                       |
-| A new match reuses a seed after an earlier Chunk was mutated | Generate fresh initial terrain; inherit no Chunk state                           |
-| Client requests arbitrary distant LOAD in PVP                | Reject outside the authoritative six-chunk radius or frozen World chunk envelope |
+| Condition                                                    | Required result                                                                   |
+| ------------------------------------------------------------ | --------------------------------------------------------------------------------- |
+| Missing/duplicate resource or equipment key                  | Manifest validation error; abort startup                                          |
+| Duplicate/zero/out-of-range voxel or item ID                 | Manifest validation error; never enter registry panic paths                       |
+| Unsupported catalog, generation, or config version           | `CatalogError`/`GenerationError`; reject before `AddWorld`                        |
+| Same seed and exact versions                                 | Byte-identical canonical Chunk voxel fingerprint                                  |
+| Different full `u64` seeds with the same folded engine seed  | Observably different map fingerprint                                              |
+| Stage attempts a cross-Chunk write                           | Test failure because `extra_changes` must stay empty                              |
+| World is still `Preparing`                                   | Keep attach generation closed and poll with the same World generation             |
+| Preparation exceeds 60 seconds or World generation changes   | Remove the World, clear runtime maps, return `Unavailable`                        |
+| A new match reuses a seed after an earlier Chunk was mutated | Generate fresh initial terrain; inherit no Chunk state                            |
+| Client requests arbitrary distant LOAD in PVP                | Reject outside the authoritative six-chunk radius or frozen World chunk envelope  |
+| Enclosed generated gold/diamond is sent to a client          | Project its outbound ID to dirt without changing the generated Chunk              |
+| A replacement World reuses the same seed and versions        | Reproduce authoritative terrain but start with an empty reveal set                |
+| World shutdown closes its background-task tracker            | Reject late jobs and wait for every accepted generation/mesh/encode job to finish |
 
 ### 5. Good / Base / Bad Cases
 
 - Good: the server validates the bundled manifest, builds explicit registries, constructs a fresh immutable plan from the complete match seed, preloads the spawn core, and publishes the generation only after `Ready`.
 - Base: two independent matches with the same seed/version generate identical initial maps; mutations in the first in-memory World do not appear in the second.
-- Bad: auto-assigning IDs from registration order, using `WorldConfig.seed` as the full seed, sharing an advancing RNG between Chunk jobs, writing neighboring Chunks, enabling saving for match Worlds, trusting a client-selected PVP LOAD center, accepting an unknown version by falling back to latest, or updating the V1 golden hash after tuning V1.
+- Bad: auto-assigning IDs from registration order, using `WorldConfig.seed` as the full seed, sharing an advancing RNG between Chunk jobs, writing neighboring Chunks, mutating authoritative ore IDs for anti-Xray, enabling saving for match Worlds, trusting a client-selected PVP LOAD center, accepting an unknown version by falling back to latest, or updating the V1 golden hash after tuning V1.
 
 ### 6. Tests Required
 
@@ -75,6 +81,8 @@ async fn EngineMatchWorldRuntime::prepare_world(
 - Scan actual generated voxels with six-neighbor BFS. For the frozen seed assert dirt `4,387,170`, gold `20,265` in five components of `4,053`, diamond `2,565` in three components of `855`, plus depth and center-bias constraints.
 - Assert all 90,000 surface columns are dirt, gameplay padding is Air, Stage output equals the pure plan at Chunk boundaries, and `extra_changes` is empty.
 - Assert ten unique safe spawns, fair nearest-gold distance, eight symmetric extraction candidates, multi-seed candidate coverage, and fresh-match isolation after mutating a prior Chunk.
+- Drive the actual generation stage into a real Chunk, locate generated gold and diamond, expose them through authoritative dirt removal, and assert mining still requires exactly `1.5s/3s`, produces one matching resource, and cannot produce twice on retry. Projection tests separately assert enclosed outbound ore is dirt and fresh Worlds do not inherit reveals.
+- Assert independent Worlds share one process pool, every asynchronous path holds a tracker permit, closing rejects late work, and shutdown waits for accepted work to release its permit.
 
 ### 7. Wrong vs Correct
 

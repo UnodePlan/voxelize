@@ -28,6 +28,7 @@ pub(crate) async fn run(config: ServerConfig, application: Application) -> io::R
     let server = Server::new()
         .addr(&bind.ip().to_string())
         .port(bind.port())
+        .debug(false)
         .registry(application.engine_catalog.blocks())
         .http_config(http)
         .connection_lifecycle_observer(connection_observer)

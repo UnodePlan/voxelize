@@ -3,7 +3,9 @@ use std::sync::Arc;
 use crossbeam_channel::{Receiver, Sender};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
+use crate::world::background_tasks::{shared_worker_pool, BackgroundTaskTracker};
 use crate::{common::ClientFilter, encode_message, server::Message, EntityOperation, MessageType};
+use rayon::ThreadPool;
 
 #[derive(Clone)]
 pub struct EncodedMessage {
@@ -66,16 +68,24 @@ pub struct EncodedMessageQueue {
     pub processed: Vec<(EncodedMessage, ClientFilter)>,
     sender: Arc<Sender<Vec<(EncodedMessage, ClientFilter)>>>,
     receiver: Arc<Receiver<Vec<(EncodedMessage, ClientFilter)>>>,
+    pool: Arc<ThreadPool>,
+    tasks: BackgroundTaskTracker,
 }
 
 impl EncodedMessageQueue {
     pub fn new() -> Self {
+        Self::with_runtime(shared_worker_pool(), BackgroundTaskTracker::new())
+    }
+
+    pub(crate) fn with_runtime(pool: Arc<ThreadPool>, tasks: BackgroundTaskTracker) -> Self {
         let (sender, receiver) = crossbeam_channel::unbounded();
         Self {
             pending: vec![],
             processed: vec![],
             sender: Arc::new(sender),
             receiver: Arc::new(receiver),
+            pool,
+            tasks,
         }
     }
 
@@ -94,7 +104,11 @@ impl EncodedMessageQueue {
         }
 
         let sender = Arc::clone(&self.sender);
-        rayon::spawn_fifo(move || {
+        let Some(task) = self.tasks.begin() else {
+            return;
+        };
+        self.pool.spawn_fifo(move || {
+            let _task = task;
             let encoded: Vec<(EncodedMessage, ClientFilter)> = all_pending
                 .into_par_iter()
                 .map(|(message, filter)| {

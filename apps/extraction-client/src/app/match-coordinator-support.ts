@@ -146,7 +146,12 @@ export function createMatchNetworkEvents(
       if (hasTerminalGameplay(snapshot)) options.startResultPoll();
     },
     onProtocolError: (message) => {
-      if (options.isCurrent()) options.dispatch({ type: "NOTICE", message });
+      if (!options.isCurrent()) return;
+      const state = options.getState();
+      // 终态驱逐可能与最后一帧输入交错；结果核对负责收敛，不能把预期拒绝显示成新故障。
+      if (state.screen === "result" || hasTerminalGameplay(state.gameplay))
+        return;
+      options.dispatch({ type: "NOTICE", message });
     },
     onReconnectExpired: () => {
       if (options.isCurrent()) options.onReconnectExpired();

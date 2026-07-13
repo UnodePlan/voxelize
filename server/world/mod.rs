@@ -1,5 +1,7 @@
+mod background_tasks;
 mod bookkeeping;
 mod chunk_load;
+mod chunk_projection;
 mod client_admission;
 mod client_init;
 mod client_lifecycle;
@@ -28,6 +30,8 @@ mod utils;
 mod visibility;
 mod voxels;
 
+#[cfg(test)]
+mod chunk_projection_tests;
 #[cfg(test)]
 mod tests;
 
@@ -69,6 +73,7 @@ use super::common::ClientFilter;
 
 pub use bookkeeping::*;
 pub use chunk_load::ChunkLoadPolicy;
+pub use chunk_projection::{ChunkProjection, ChunkProjectionError};
 pub use client_admission::{ClientAttachKind, ClientAttachRequest};
 pub use clients::*;
 pub use components::*;
@@ -296,6 +301,12 @@ pub struct World {
 
     /// Entity component system world.
     ecs: ECSWorld,
+
+    /// Process-wide pool reused by every disposable World.
+    worker_pool: Arc<rayon::ThreadPool>,
+
+    /// Drop-based proof that the actor no longer retains this World.
+    _lifetime: background_tasks::WorldLifetimeGuard,
 
     /// The modifier of the ECS dispatcher (builder factory).
     dispatcher: Arc<dyn Fn() -> DispatcherBuilder<'static, 'static> + Send + Sync>,
@@ -830,6 +841,8 @@ impl World {
         let timing_context = WorldTimingContext::new(name);
 
         let mut ecs = ECSWorld::new();
+        let worker_pool = background_tasks::shared_worker_pool();
+        let background_tasks = background_tasks::BackgroundTaskTracker::new();
 
         ecs.register::<AddrComp>();
         ecs.register::<BrainComp>();
@@ -871,17 +884,28 @@ impl World {
             config.default_time,
         ));
 
-        ecs.insert(Mesher::new());
-        ecs.insert(Pipeline::new());
+        ecs.insert(Mesher::with_runtime(
+            worker_pool.clone(),
+            background_tasks.clone(),
+        ));
+        ecs.insert(Pipeline::with_runtime(
+            worker_pool.clone(),
+            background_tasks.clone(),
+        ));
         ecs.insert(Clients::new());
         ecs.insert(MessageQueues::new());
         ecs.insert(Physics::new());
         ecs.insert(Events::new());
         ecs.insert(Transports::new());
         ecs.insert(ChunkInterests::new());
+        ecs.insert(ChunkProjection::default());
         ecs.insert(Bookkeeping::new());
         ecs.insert(KdTree::new());
-        ecs.insert(EncodedMessageQueue::new());
+        ecs.insert(EncodedMessageQueue::with_runtime(
+            worker_pool.clone(),
+            background_tasks.clone(),
+        ));
+        ecs.insert(background_tasks);
         ecs.insert(Profiler::new(Duration::from_secs_f64(0.001)));
         ecs.insert(EntityIDs::new());
 
@@ -901,6 +925,9 @@ impl World {
 
             ecs,
 
+            worker_pool: worker_pool.clone(),
+            _lifetime: background_tasks::WorldLifetimeGuard::new(),
+
             dispatcher: Arc::new(move || {
                 let spatial_hook = dispatcher_spatial_hook.lock().unwrap().clone();
                 let chunk_hook = dispatcher_chunk_hook.lock().unwrap().clone();
@@ -910,6 +937,7 @@ impl World {
                     chunk_hook.as_ref(),
                     broadcast_hook.as_ref(),
                 )
+                .with_pool(worker_pool.clone())
                 .into_inner()
             }),
             before_spatial_update,
@@ -1178,7 +1206,8 @@ impl World {
         &mut self,
         dispatch: F,
     ) {
-        self.dispatcher = Arc::new(move || dispatch().into_inner());
+        let worker_pool = self.worker_pool.clone();
+        self.dispatcher = Arc::new(move || dispatch().with_pool(worker_pool.clone()).into_inner());
         self.uses_default_dispatcher = false;
         *self.built_dispatcher.lock().unwrap() = None;
     }
@@ -2420,5 +2449,19 @@ impl World {
             entity_ids,
             peer_ids,
         )
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct WorldLifecycleResourceSnapshot {
+    pub live_world_instances: usize,
+    pub world_background_tasks: usize,
+}
+
+pub fn world_lifecycle_resource_snapshot() -> WorldLifecycleResourceSnapshot {
+    let (live_world_instances, world_background_tasks) = background_tasks::resource_counts();
+    WorldLifecycleResourceSnapshot {
+        live_world_instances,
+        world_background_tasks,
     }
 }

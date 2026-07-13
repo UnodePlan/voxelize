@@ -3,10 +3,18 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AuthApi } from "../api/auth";
 
 import { createReownWallet } from "./appkit";
-import type { LogoutCoordinator } from "./logout-coordinator";
+import { LogoutCoordinator } from "./logout-coordinator";
 
 const appKitMocks = vi.hoisted(() => {
+  type AccountListener = (state: {
+    address?: string;
+    isConnected: boolean;
+  }) => void;
+  type NetworkListener = (state: { chainId?: number }) => void;
+
   let siweConfig: Record<string, (...args: never[]) => unknown> | null = null;
+  let accountListener: AccountListener | null = null;
+  let networkListener: NetworkListener | null = null;
   const requestProvider = (method: string, params?: unknown) =>
     (
       globalThis as typeof globalThis & {
@@ -24,8 +32,12 @@ const appKitMocks = vi.hoisted(() => {
     getChainId: vi.fn(() => 1),
     isOpen: vi.fn(() => true),
     open: vi.fn(() => requestProvider("eth_requestAccounts")),
-    subscribeAccount: vi.fn(),
-    subscribeNetwork: vi.fn(),
+    subscribeAccount: vi.fn((listener: AccountListener) => {
+      accountListener = listener;
+    }),
+    subscribeNetwork: vi.fn((listener: NetworkListener) => {
+      networkListener = listener;
+    }),
     switchNetwork: vi.fn(() =>
       requestProvider("wallet_switchEthereumChain", [{ chainId: "0x1" }]),
     ),
@@ -41,6 +53,19 @@ const appKitMocks = vi.hoisted(() => {
     ),
     formatMessage: vi.fn(() => "mainnet SIWE message"),
     getSiweConfig: () => siweConfig,
+    emitAccount: (state: Parameters<AccountListener>[0]) => {
+      if (accountListener === null) throw new Error("account listener missing");
+      accountListener(state);
+    },
+    emitNetwork: (state: Parameters<NetworkListener>[0]) => {
+      if (networkListener === null) throw new Error("network listener missing");
+      networkListener(state);
+    },
+    resetSubscriptions: () => {
+      accountListener = null;
+      networkListener = null;
+      siweConfig = null;
+    },
   };
 });
 
@@ -60,6 +85,7 @@ vi.mock("@reown/appkit-siwe", () => ({
 
 describe("Reown AppKit transaction boundary", () => {
   afterEach(() => {
+    appKitMocks.resetSubscriptions();
     vi.unstubAllGlobals();
     vi.clearAllMocks();
   });
@@ -89,11 +115,10 @@ describe("Reown AppKit transaction boundary", () => {
         address: "0x1111111111111111111111111111111111111111",
         chainId: 1,
       })),
+      logout: vi.fn(async () => undefined),
       verifyMessage: vi.fn(async () => true),
     } as unknown as AuthApi;
-    const logout = {
-      logout: vi.fn(async () => true),
-    } as unknown as LogoutCoordinator;
+    const logout = new LogoutCoordinator(auth);
 
     const wallet = await createReownWallet({
       auth,
@@ -135,7 +160,75 @@ describe("Reown AppKit transaction boundary", () => {
       false,
     );
   });
+
+  it.each([
+    {
+      name: "账号变化",
+      emit: () =>
+        appKitMocks.emitAccount({
+          address: "0x2222222222222222222222222222222222222222",
+          isConnected: true,
+        }),
+      expected: {
+        connected: true,
+        address: "0x2222222222222222222222222222222222222222",
+        chainId: 1,
+      },
+    },
+    {
+      name: "钱包断连",
+      emit: () =>
+        appKitMocks.emitAccount({ address: undefined, isConnected: false }),
+      expected: { connected: false, address: null, chainId: 1 },
+    },
+    {
+      name: "错误链切换",
+      emit: () => appKitMocks.emitNetwork({ chainId: 11_155_111 }),
+      expected: {
+        connected: true,
+        address: "0x1111111111111111111111111111111111111111",
+        chainId: 11_155_111,
+      },
+    },
+  ])("$name 会通过 AppKit 订阅发出新状态", async ({ emit, expected }) => {
+    stubBrowser();
+    const auth = createAuthMock();
+    const logout = new LogoutCoordinator(auth);
+    const wallet = await createReownWallet({
+      auth,
+      logout,
+      projectId: "test-project-id",
+    });
+    const onStateChange = vi.fn();
+    wallet.subscribe(onStateChange);
+
+    emit();
+
+    expect(onStateChange).toHaveBeenCalledOnce();
+    expect(onStateChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({ configured: true, ...expected }),
+    );
+  });
 });
+
+function stubBrowser(): void {
+  vi.stubGlobal("ethereum", { request: vi.fn(async () => null) });
+  vi.stubGlobal("window", {
+    location: {
+      host: "game.example.test",
+      origin: "https://game.example.test",
+    },
+  });
+}
+
+function createAuthMock(): AuthApi {
+  return {
+    getNonce: vi.fn(),
+    getSession: vi.fn(),
+    logout: vi.fn(async () => undefined),
+    verifyMessage: vi.fn(),
+  } as unknown as AuthApi;
+}
 
 const TRANSACTION_METHODS = new Set([
   "eth_sendTransaction",

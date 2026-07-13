@@ -4,6 +4,36 @@ use uuid::Uuid;
 
 use super::{MatchState, ParticipantMatchStats, ParticipantState, ParticipantTerminalCause};
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SettlementValueWeights {
+    dirt: u64,
+    gold: u64,
+    diamond: u64,
+}
+
+impl SettlementValueWeights {
+    fn resolve(config_version: &str) -> Option<Self> {
+        match config_version {
+            "balance-v1" => Some(SETTLEMENT_VALUE_V1),
+            "balance-v2" => Some(SETTLEMENT_VALUE_V2),
+            _ => None,
+        }
+    }
+}
+
+const SETTLEMENT_VALUE_V1: SettlementValueWeights = SettlementValueWeights {
+    dirt: 1,
+    gold: 10,
+    diamond: 100,
+};
+
+// 新权重只由显式 balance-v2 选择，历史 V1 结算继续绑定旧权重。
+const SETTLEMENT_VALUE_V2: SettlementValueWeights = SettlementValueWeights {
+    dirt: 2,
+    gold: 25,
+    diamond: 250,
+};
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct SettlementResources {
     pub dirt: u64,
@@ -32,13 +62,12 @@ impl SettlementResources {
     }
 
     pub fn total_value(self, config_version: &str) -> Option<i64> {
-        if config_version != "balance-v1" {
-            return None;
-        }
+        let weights = SettlementValueWeights::resolve(config_version)?;
         let value = self
             .dirt
-            .checked_add(self.gold.checked_mul(10)?)?
-            .checked_add(self.diamond.checked_mul(100)?)?;
+            .checked_mul(weights.dirt)?
+            .checked_add(self.gold.checked_mul(weights.gold)?)?
+            .checked_add(self.diamond.checked_mul(weights.diamond)?)?;
         i64::try_from(value).ok()
     }
 
@@ -53,6 +82,7 @@ pub struct ExtractionQualification {
     pub account_id: Uuid,
     pub qualified_at: OffsetDateTime,
     pub resources: SettlementResources,
+    pub stats: ParticipantMatchStats,
     pub inventory_digest: [u8; 32],
     pub config_version: String,
 }
@@ -63,6 +93,7 @@ impl ExtractionQualification {
         account_id: Uuid,
         qualified_at: OffsetDateTime,
         resources: SettlementResources,
+        stats: ParticipantMatchStats,
         config_version: String,
     ) -> Option<Self> {
         let qualification = Self {
@@ -71,6 +102,7 @@ impl ExtractionQualification {
             qualified_at,
             inventory_digest: resources.digest(),
             resources,
+            stats,
             config_version,
         };
         qualification.is_valid().then_some(qualification)

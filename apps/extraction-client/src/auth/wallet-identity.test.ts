@@ -77,4 +77,32 @@ describe("WalletIdentityGuard", () => {
     ).toBe("invalid");
     expect(invalidate).toHaveBeenCalledTimes(1);
   });
+
+  it("invalidates an established session immediately when the wallet disconnects", () => {
+    vi.useFakeTimers();
+    const invalidate = vi.fn();
+    const guard = new WalletIdentityGuard();
+
+    expect(
+      guard.validate(
+        {
+          configured: true,
+          connected: true,
+          address: session.address,
+          chainId: 1,
+        },
+        session,
+        invalidate,
+      ),
+    ).toBe("valid");
+    expect(
+      guard.validate(
+        { configured: true, connected: false, address: null, chainId: 1 },
+        session,
+        invalidate,
+      ),
+    ).toBe("invalid");
+    expect(invalidate).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
 });

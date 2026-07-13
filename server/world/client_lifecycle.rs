@@ -289,6 +289,8 @@ impl World {
             self.remove_client(client_id);
         }
         self.write_resource::<Transports>().clear();
+        self.read_resource::<super::background_tasks::BackgroundTaskTracker>()
+            .close_and_wait();
         self.lifecycle = WorldLifecycleState::Stopped;
 
         WorldStopSummary { client_ids }

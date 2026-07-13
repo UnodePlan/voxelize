@@ -158,6 +158,10 @@ pub(super) fn advance_body(
     let (horizontal, jump) = control.unwrap_or(([0.0, 0.0], false));
     body.velocity.0 = horizontal[0] * MAX_HORIZONTAL_SPEED;
     body.velocity.2 = horizontal[1] * MAX_HORIZONTAL_SPEED;
+    // 接地刚体会进入休眠；直接写速度后必须唤醒，否则物理迭代会在碰撞 sweep 前返回。
+    if horizontal != [0.0, 0.0] {
+        body.mark_active();
+    }
     if jump && body.at_rest_y() < 0 {
         body.apply_impulse(0.0, JUMP_IMPULSE, 0.0);
     }

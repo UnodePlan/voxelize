@@ -1,10 +1,11 @@
 use std::{collections::VecDeque, sync::Arc};
 
-use crossbeam_channel::{unbounded, Receiver, Sender, TryRecvError};
+use crossbeam_channel::{unbounded, Receiver, Sender};
 use hashbrown::{HashMap, HashSet};
-use rayon::prelude::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
-use rayon::{ThreadPool, ThreadPoolBuilder};
+use rayon::prelude::{IntoParallelIterator, ParallelIterator};
+use rayon::ThreadPool;
 
+use crate::world::background_tasks::{shared_worker_pool, BackgroundTaskTracker};
 use crate::{
     Chunk, ChunkStatus, Registry, Space, SpaceData, Terrain, Vec2, Vec3, VoxelAccess, VoxelUpdate,
     WorldConfig,
@@ -228,21 +229,24 @@ pub struct Pipeline {
     receiver: Arc<Receiver<(Chunk, Vec<VoxelUpdate>)>>,
 
     /// Pipeline's thread pool to process chunks.
-    pool: ThreadPool,
+    pool: Arc<ThreadPool>,
+    tasks: BackgroundTaskTracker,
 }
 
 impl Pipeline {
     /// Create a new chunk pipeline.
     pub fn new() -> Self {
+        Self::with_runtime(shared_worker_pool(), BackgroundTaskTracker::new())
+    }
+
+    pub(crate) fn with_runtime(pool: Arc<ThreadPool>, tasks: BackgroundTaskTracker) -> Self {
         let (sender, receiver) = unbounded();
 
         Self {
             sender: Arc::new(sender),
             receiver: Arc::new(receiver),
-            pool: ThreadPoolBuilder::new()
-                .thread_name(|index| format!("voxelize-chunking-{index}"))
-                .build()
-                .unwrap(),
+            pool,
+            tasks,
             chunks: HashSet::new(),
             leftovers: HashMap::new(),
             pending_regenerate: HashSet::new(),
@@ -332,37 +336,27 @@ impl Pipeline {
         let registry = registry.to_owned();
         let config = config.to_owned();
 
-        rayon::spawn(move || {
-            processes
-                .into_par_iter()
-                .enumerate()
-                .for_each(|(_, (chunk, space, stage))| {
-                    let sender = Arc::clone(&sender);
-                    let registry = registry.clone();
-                    let config = config.clone();
-
-                    rayon::spawn_fifo(move || {
-                        let mut changes = vec![];
-
-                        let mut chunk = stage.process(
-                            chunk,
-                            Resources {
-                                registry: &registry,
-                                config: &config,
-                            },
-                            space,
-                        );
-
-                        // Calculate the max height after processing each chunk.
-                        chunk.calculate_max_height(&registry);
-
-                        if !chunk.extra_changes.is_empty() {
-                            changes.append(&mut chunk.extra_changes.drain(..).collect());
-                        }
-
-                        let _ = sender.send((chunk, changes));
-                    });
-                });
+        let Some(task) = self.tasks.begin() else {
+            return;
+        };
+        self.pool.spawn(move || {
+            let _task = task;
+            processes.into_par_iter().for_each(|(chunk, space, stage)| {
+                let mut changes = vec![];
+                let mut chunk = stage.process(
+                    chunk,
+                    Resources {
+                        registry: &registry,
+                        config: &config,
+                    },
+                    space,
+                );
+                chunk.calculate_max_height(&registry);
+                if !chunk.extra_changes.is_empty() {
+                    changes.append(&mut chunk.extra_changes.drain(..).collect());
+                }
+                let _ = sender.send((chunk, changes));
+            });
         });
     }
 

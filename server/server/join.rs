@@ -43,9 +43,7 @@ impl Server {
                 Some(resolver) => {
                     let Some(client_id) = resolver.resolve_client_id(&request.world, principal)
                     else {
-                        return Box::pin(ready(Some(
-                            "Authenticated client ID is unavailable.".to_owned(),
-                        )));
+                        return Box::pin(ready(Some("Client admission was denied.".to_owned())));
                     };
                     client_id
                 }

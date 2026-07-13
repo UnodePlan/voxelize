@@ -8,6 +8,8 @@ import {
 import { createHttpClient, type HttpClientOptions } from "./http";
 import type { MatchResult, QueueSnapshot, WarehouseSnapshot } from "./models";
 
+const QUEUE_JOIN_TIMEOUT_MS = 65_000;
+
 export interface GameApi {
   getQueue(): Promise<QueueSnapshot>;
   joinQueue(): Promise<QueueSnapshot>;
@@ -22,6 +24,12 @@ export function createGameApi({
   ...options
 }: HttpClientOptions = {}): GameApi {
   const http = createHttpClient({ baseUrl, ...options });
+  // 第 10 席会同步等待最多 60 秒的世界预加载，不能沿用普通 API 的 5 秒预算。
+  const queueJoinHttp = createHttpClient({
+    baseUrl,
+    ...options,
+    timeoutMs: options.timeoutMs ?? QUEUE_JOIN_TIMEOUT_MS,
+  });
   return {
     getQueue: () =>
       http.requestJson(
@@ -30,7 +38,7 @@ export function createGameApi({
         decodeQueueSnapshot,
       ),
     joinQueue: () =>
-      http.requestJson(
+      queueJoinHttp.requestJson(
         "/api/matchmaking/queue",
         { method: "POST" },
         decodeQueueSnapshot,
