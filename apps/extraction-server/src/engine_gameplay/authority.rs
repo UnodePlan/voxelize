@@ -6,7 +6,7 @@ use std::{
 
 use specs::Entity;
 use uuid::Uuid;
-use voxelize::World;
+use voxelize::{Clients, World};
 
 use crate::matchmaking::MatchmakingService;
 
@@ -56,6 +56,22 @@ impl GameplayAuthority {
             return false;
         };
         service.allows_gameplay(&self.world_name, &world_generation, client_id, account_id)
+    }
+
+    pub(super) fn allows_entity(
+        &self,
+        clients: &Clients,
+        entity: Entity,
+        client_id: &str,
+        account_id: Uuid,
+    ) -> bool {
+        #[cfg(test)]
+        if self.test_now.is_some() {
+            return self.allows(client_id, account_id);
+        }
+        clients.get(client_id).is_some_and(|client| {
+            client.attached && client.entity == entity && self.allows(client_id, account_id)
+        })
     }
 
     /// 返回已认证账号与同一服务时钟的观测时间。

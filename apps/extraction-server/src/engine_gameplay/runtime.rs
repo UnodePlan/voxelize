@@ -6,24 +6,32 @@ use voxelize::World;
 
 use super::{
     authority::GameplayAuthority,
-    components::{FixedEquipmentComp, LootDropComp, MatchPlayerComp, ResourceInventoryComp},
-    intents::DropSlotIntentQueue,
+    components::{
+        FixedEquipmentComp, LootDropComp, MatchPlayerComp, MiningComp, ResourceInventoryComp,
+    },
+    intents::{DropSlotIntentQueue, MiningIntentQueue},
     methods::install_gameplay_methods,
+    mining_system::MiningResolutionSystem,
     system::GameplayRuntimeSystem,
 };
 use crate::{
-    contracts::{bundled_manifest, ExtractionManifest},
+    contracts::{bundled_manifest, ExtractionManifest, ResourceKey},
     gameplay::{
         config::GameplayConfig,
         drop_queue::{PendingDropQueue, SpawnedDropIds},
         equipment::FixedEquipment,
+        harvest::HarvestedVoxelSet,
         inventory::MatchInventory,
     },
+    generation::GenerationConfig,
+    match_world::PlayableBounds,
     ports::MatchWorldSpec,
 };
 
 pub(super) const GAMEPLAY_SYSTEM_NAME: &str = "extraction-gameplay-runtime";
+pub(super) const MINING_SYSTEM_NAME: &str = "extraction-mining-resolution";
 const DEFAULT_DISPATCHER_LEAVES: &[&str] = &[
+    MINING_SYSTEM_NAME,
     "chunk-saving",
     "entities-saving",
     "cleanup",
@@ -39,6 +47,49 @@ pub(super) struct GameplayRuntimeContext {
     pub match_id: Uuid,
     pub config: GameplayConfig,
     pub manifest: ExtractionManifest,
+    pub playable_bounds: PlayableBounds,
+    pub min_mineable_y: i32,
+    pub max_height: i32,
+    pub chunk_size: usize,
+    resource_voxels: [(u32, ResourceKey); 3],
+}
+
+impl GameplayRuntimeContext {
+    pub(super) fn new(
+        match_id: Uuid,
+        config: GameplayConfig,
+        manifest: ExtractionManifest,
+        playable_bounds: PlayableBounds,
+        min_mineable_y: i32,
+        max_height: i32,
+        chunk_size: usize,
+    ) -> Self {
+        let resource_voxels = ResourceKey::ALL.map(|resource| {
+            let voxel_id = manifest
+                .resources
+                .iter()
+                .find(|definition| definition.key == resource)
+                .expect("validated manifest contains every resource")
+                .voxel_id;
+            (voxel_id, resource)
+        });
+        Self {
+            match_id,
+            config,
+            manifest,
+            playable_bounds,
+            min_mineable_y,
+            max_height,
+            chunk_size,
+            resource_voxels,
+        }
+    }
+
+    pub(super) fn resource_for_voxel(&self, voxel_id: u32) -> Option<ResourceKey> {
+        self.resource_voxels
+            .iter()
+            .find_map(|(id, resource)| (*id == voxel_id).then_some(*resource))
+    }
 }
 
 pub(crate) fn install_gameplay_runtime(
@@ -64,22 +115,47 @@ pub(crate) fn install_gameplay_runtime(
     {
         return Err(GameplayInstallError::LoadoutMismatch);
     }
+    let generation = GenerationConfig::resolve(&spec.generation_version, &spec.config_version)
+        .ok_or(GameplayInstallError::UnsupportedVersion)?;
+    if !config.mining_reach.is_finite()
+        || config.mining_reach <= 0.0
+        || !config.mining_eye_offset.is_finite()
+        || config.mining_maintain_grace.is_zero()
+        || config.mining_sync_interval.as_millis() == 0
+        || ResourceKey::ALL
+            .into_iter()
+            .any(|resource| config.mining_duration(resource).as_millis() == 0)
+    {
+        return Err(GameplayInstallError::InvalidConfig);
+    }
+    let max_height =
+        i32::try_from(generation.max_height).map_err(|_| GameplayInstallError::InvalidConfig)?;
+    let chunk_size = world.config().chunk_size;
 
     world.ecs_mut().register::<MatchPlayerComp>();
     world.ecs_mut().register::<ResourceInventoryComp>();
     world.ecs_mut().register::<FixedEquipmentComp>();
+    world.ecs_mut().register::<MiningComp>();
     world.ecs_mut().register::<LootDropComp>();
-    world.ecs_mut().insert(GameplayRuntimeContext {
-        match_id: spec.match_id,
+    world.ecs_mut().insert(GameplayRuntimeContext::new(
+        spec.match_id,
         config,
         manifest,
-    });
+        spec.playable_bounds,
+        generation.unbreakable_floor_y + 1,
+        max_height,
+        chunk_size,
+    ));
     world.ecs_mut().insert(authority);
     world.ecs_mut().insert(PendingDropQueue::default());
     world.ecs_mut().insert(SpawnedDropIds::default());
+    world.ecs_mut().insert(HarvestedVoxelSet::default());
     world
         .ecs_mut()
         .insert(DropSlotIntentQueue::new(config.intent_queue_capacity));
+    world
+        .ecs_mut()
+        .insert(MiningIntentQueue::new(config.intent_queue_capacity));
 
     let players = spec
         .roster
@@ -114,9 +190,13 @@ pub(crate) fn install_gameplay_runtime(
         );
         world.add(entity, ResourceInventoryComp::new(inventory));
         world.add(entity, FixedEquipmentComp::standard());
+        world.add(entity, MiningComp::new());
     });
 
     install_gameplay_methods(world);
+    world
+        .install_before_chunk_updating_system(MINING_SYSTEM_NAME, || MiningResolutionSystem)
+        .map_err(|_| GameplayInstallError::DispatcherUnavailable)?;
     world.extend_dispatcher(|builder| {
         builder.with(
             GameplayRuntimeSystem,
@@ -132,4 +212,6 @@ pub(crate) enum GameplayInstallError {
     UnsupportedVersion,
     InvalidManifest,
     LoadoutMismatch,
+    InvalidConfig,
+    DispatcherUnavailable,
 }

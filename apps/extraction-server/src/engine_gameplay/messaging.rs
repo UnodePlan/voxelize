@@ -2,11 +2,15 @@ use serde::Serialize;
 use uuid::Uuid;
 use voxelize::{ClientFilter, Message, MessageQueues, MessageType, MethodProtocol};
 
-use super::components::{FixedEquipmentComp, ResourceInventoryComp};
-use crate::contracts::{ErrorCode, ExtractionManifest, ProtocolEnvelope};
+use super::{
+    components::{FixedEquipmentComp, MiningComp, ResourceInventoryComp},
+    runtime::GameplayRuntimeContext,
+};
+use crate::contracts::{ErrorCode, ExtractionManifest, MiningStateEnvelope, ProtocolEnvelope};
 
 const RESULT_METHOD: &str = "pvp:v1:result";
 const INVENTORY_STATE_METHOD: &str = "pvp:v1:inventory-state";
+const MINING_STATE_METHOD: &str = "pvp:v1:mining-state";
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -21,6 +25,28 @@ impl PlayerInventoryState {
             inventory: inventory.snapshot(),
             equipment: equipment.snapshot(),
         }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct PlayerGameplayState {
+    #[serde(flatten)]
+    assets: PlayerInventoryState,
+    mining: MiningStateEnvelope,
+}
+
+impl PlayerGameplayState {
+    pub(super) fn new(
+        context: &GameplayRuntimeContext,
+        inventory: &ResourceInventoryComp,
+        equipment: &FixedEquipmentComp,
+        mining: &MiningComp,
+    ) -> Option<Self> {
+        Some(Self {
+            assets: PlayerInventoryState::new(inventory, equipment),
+            mining: mining_state(context, mining)?,
+        })
     }
 }
 
@@ -55,6 +81,34 @@ pub(super) fn queue_inventory_state(
     state: &PlayerInventoryState,
 ) {
     queue_method(queues, client_id, INVENTORY_STATE_METHOD, state);
+}
+
+pub(super) fn queue_mining_state(
+    queues: &mut MessageQueues,
+    context: &GameplayRuntimeContext,
+    client_id: &str,
+    mining: &MiningComp,
+) {
+    if let Some(state) = mining_state(context, mining) {
+        queue_method(queues, client_id, MINING_STATE_METHOD, &state);
+    }
+}
+
+fn mining_state(
+    context: &GameplayRuntimeContext,
+    mining: &MiningComp,
+) -> Option<MiningStateEnvelope> {
+    let required = mining
+        .state()
+        .active_target()
+        .map(|target| context.config.mining_duration(target.resource));
+    MiningStateEnvelope::new(
+        &context.manifest,
+        context.match_id,
+        mining.state().revision(),
+        mining.state().snapshot(required).ok()?,
+    )
+    .ok()
 }
 
 fn queue_method<T: Serialize>(

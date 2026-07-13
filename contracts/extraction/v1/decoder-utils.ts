@@ -1,6 +1,8 @@
 import type { JsonRecord } from "./types";
 
 const MAX_U32 = 4_294_967_295;
+const MIN_I32 = -2_147_483_648;
+const MAX_I32 = 2_147_483_647;
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -36,6 +38,17 @@ export function readUnsignedInteger(value: unknown, path: string): number {
   return value as number;
 }
 
+export function readSignedInteger(value: unknown, path: string): number {
+  if (
+    !Number.isInteger(value) ||
+    (value as number) < MIN_I32 ||
+    (value as number) > MAX_I32
+  ) {
+    throw new Error(`${path}: expected signed 32-bit integer`);
+  }
+  return value as number;
+}
+
 export function readPositiveInteger(value: unknown, path: string): number {
   const integer = readUnsignedInteger(value, path);
   if (integer === 0) {
@@ -51,12 +64,16 @@ export function readBoolean(value: unknown, path: string): boolean {
   return value;
 }
 
-export function readRequestId(value: unknown): string {
-  const requestId = readNonEmptyString(value, "requestId");
-  if (!UUID_PATTERN.test(requestId)) {
-    throw new Error("requestId: expected UUID");
+export function readUuid(value: unknown, path: string): string {
+  const uuid = readNonEmptyString(value, path);
+  if (!UUID_PATTERN.test(uuid)) {
+    throw new Error(`${path}: expected UUID`);
   }
-  return requestId;
+  return uuid;
+}
+
+export function readRequestId(value: unknown): string {
+  return readUuid(value, "requestId");
 }
 
 export function readEnum<const T extends readonly string[]>(

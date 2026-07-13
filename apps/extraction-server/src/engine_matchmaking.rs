@@ -114,6 +114,7 @@ impl MatchWorldRuntime for EngineMatchWorldRuntime {
             .request_policy(
                 WorldRequestPolicy::strict()
                     .allow_method("pvp:v1:drop-slot")
+                    .allow_method("pvp:v1:mining")
                     .allow_method("pvp:v1:get-state"),
             )
             .client_disconnect_policy(ClientDisconnectPolicy::Detach)

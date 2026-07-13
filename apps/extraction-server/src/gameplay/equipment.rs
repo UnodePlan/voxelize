@@ -29,4 +29,8 @@ impl FixedEquipment {
             melee_weapon: self.melee_weapon,
         }
     }
+
+    pub(crate) const fn has_basic_pickaxe(self) -> bool {
+        matches!(self.pickaxe, EquipmentKey::BasicPickaxe)
+    }
 }

@@ -6,6 +6,7 @@ use crate::{
         equipment::{FixedEquipment, FixedEquipmentSnapshot},
         inventory::{InventorySnapshot, MatchInventory},
         loot::LootDrop,
+        mining::MiningState,
     },
     matchmaking::SeatId,
 };
@@ -76,10 +77,34 @@ impl FixedEquipmentComp {
     pub(super) const fn snapshot(&self) -> FixedEquipmentSnapshot {
         self.0.snapshot()
     }
+
+    pub(super) const fn has_basic_pickaxe(&self) -> bool {
+        self.0.has_basic_pickaxe()
+    }
 }
 
 impl Component for FixedEquipmentComp {
     type Storage = VecStorage<Self>;
+}
+
+pub(super) struct MiningComp(MiningState);
+
+impl MiningComp {
+    pub(super) fn new() -> Self {
+        Self(MiningState::default())
+    }
+
+    pub(super) const fn state(&self) -> &MiningState {
+        &self.0
+    }
+
+    pub(super) fn state_mut(&mut self) -> &mut MiningState {
+        &mut self.0
+    }
+}
+
+impl Component for MiningComp {
+    type Storage = DenseVecStorage<Self>;
 }
 
 pub(super) struct LootDropComp(LootDrop);

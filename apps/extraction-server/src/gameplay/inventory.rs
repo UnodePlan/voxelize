@@ -82,6 +82,10 @@ impl MatchInventory {
         self.revision
     }
 
+    pub(crate) fn is_frozen(&self) -> bool {
+        self.frozen
+    }
+
     #[cfg(test)]
     pub(crate) fn insert(
         &mut self,
@@ -237,6 +241,11 @@ impl MatchInventory {
             .flatten()
             .map(|stack| stack.quantity)
             .sum()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_revision_for_test(&mut self, revision: u32) {
+        self.revision = revision;
     }
 
     fn available_capacity(&self, resource: ResourceKey) -> u64 {

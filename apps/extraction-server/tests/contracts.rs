@@ -1,6 +1,7 @@
 use extraction_server::contracts::{
     bundled_envelope_fixture, bundled_gameplay_intent_fixture, bundled_manifest,
-    decode_drop_slot_intent, decode_protocol_envelope, EquipmentKey, ErrorCode, ExtractionManifest,
+    bundled_mining_state_fixture, decode_drop_slot_intent, decode_mining_intent,
+    decode_mining_state, decode_protocol_envelope, EquipmentKey, ErrorCode, ExtractionManifest,
     ProtocolEnvelope, ResourceKey,
 };
 use serde::{Deserialize, Serialize};
@@ -159,12 +160,32 @@ fn rust_drop_slot_decoder_matches_shared_gameplay_cases() {
     let manifest = bundled_manifest().unwrap();
     let fixture = bundled_gameplay_intent_fixture().unwrap();
     for fixture_case in fixture.cases {
-        let decoded = decode_protocol_envelope(fixture_case.value, &manifest)
-            .and_then(|envelope| decode_drop_slot_intent(&envelope));
+        let decoded =
+            decode_protocol_envelope(fixture_case.value, &manifest).is_ok_and(|envelope| {
+                match fixture_case.route.as_str() {
+                    "pvp:v1:drop-slot" => decode_drop_slot_intent(&envelope).is_ok(),
+                    "pvp:v1:mining" => decode_mining_intent(&envelope).is_ok(),
+                    _ => false,
+                }
+            });
+        assert_eq!(
+            decoded, fixture_case.accept,
+            "gameplay fixture case {} did not match",
+            fixture_case.name
+        );
+    }
+}
+
+#[test]
+fn rust_decoder_matches_shared_mining_state_cases() {
+    let manifest = bundled_manifest().unwrap();
+    let fixture = bundled_mining_state_fixture().unwrap();
+    for fixture_case in fixture.cases {
+        let decoded = decode_mining_state(fixture_case.value, &manifest);
         assert_eq!(
             decoded.is_ok(),
             fixture_case.accept,
-            "gameplay fixture case {} did not match: {:?}",
+            "mining state fixture case {} did not match: {:?}",
             fixture_case.name,
             decoded.err()
         );

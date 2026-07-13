@@ -3,7 +3,7 @@ use std::sync::{
     Arc, Mutex,
 };
 
-use crate::EventProtocol;
+use crate::{EventProtocol, UpdateProtocol};
 use futures_util::future::join_all;
 
 use super::*;
@@ -292,6 +292,39 @@ impl<'a> specs::System<'a> for CountingSystem {
     }
 }
 
+struct OrderedSystem(&'static str, Arc<Mutex<Vec<&'static str>>>);
+
+impl<'a> specs::System<'a> for OrderedSystem {
+    type SystemData = ();
+
+    fn run(&mut self, _: Self::SystemData) {
+        self.1.lock().unwrap().push(self.0);
+    }
+}
+
+struct QueueAir(Vec3<i32>);
+
+impl<'a> specs::System<'a> for QueueAir {
+    type SystemData = specs::WriteExpect<'a, Chunks>;
+
+    fn run(&mut self, mut chunks: Self::SystemData) {
+        chunks.update_voxel(&self.0, 0);
+    }
+}
+
+struct ObserveVoxel(Vec3<i32>, Arc<AtomicUsize>);
+
+impl<'a> specs::System<'a> for ObserveVoxel {
+    type SystemData = specs::ReadExpect<'a, Chunks>;
+
+    fn run(&mut self, chunks: Self::SystemData) {
+        self.1.store(
+            chunks.get_voxel(self.0 .0, self.0 .1, self.0 .2) as usize,
+            Ordering::SeqCst,
+        );
+    }
+}
+
 #[test]
 fn dispatcher_extension_preserves_the_current_factory() {
     let base_calls = Arc::new(AtomicUsize::new(0));
@@ -321,6 +354,118 @@ fn dispatcher_extension_preserves_the_current_factory() {
 
     assert_eq!(base_calls.load(Ordering::SeqCst), 2);
     assert_eq!(extension_calls.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn before_chunk_hook_rebuilds_cache_and_preserves_post_extensions() {
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let mut world = test_world("before-chunk-hook", &WorldConfig::default());
+    let after_calls = calls.clone();
+    world.extend_dispatcher(move |builder| {
+        builder.with(
+            OrderedSystem("after", after_calls.clone()),
+            "after-chunk-test",
+            &["chunk-updating"],
+        )
+    });
+    world.prepare();
+    world.tick();
+    calls.lock().unwrap().clear();
+
+    let before_calls = calls.clone();
+    world
+        .install_before_chunk_updating_system("before-chunk-test", move || {
+            OrderedSystem("before", before_calls.clone())
+        })
+        .unwrap();
+    world.tick();
+
+    assert_eq!(*calls.lock().unwrap(), vec!["before", "after"]);
+}
+
+#[test]
+fn before_chunk_hook_flushes_staged_voxel_in_the_same_tick() {
+    let config = WorldConfig::new()
+        .min_chunk([0, 0])
+        .max_chunk([0, 0])
+        .max_height(16)
+        .max_light_level(1)
+        .build();
+    let mut registry = Registry::new();
+    registry.register_block(&Block::new("Test Solid").id(1).build());
+    registry.generate();
+    let mut world = World::new("before-chunk-voxel", &config);
+    world.ecs_mut().insert(registry);
+
+    let target = Vec3(1, 1, 1);
+    let mut chunk = Chunk::new(
+        "ready-0-0",
+        0,
+        0,
+        &ChunkOptions {
+            size: config.chunk_size,
+            max_height: config.max_height,
+            sub_chunks: config.sub_chunks,
+        },
+    );
+    assert!(chunk.set_voxel(target.0, target.1, target.2, 1));
+    chunk.status = ChunkStatus::Ready;
+    world.chunks_mut().add(chunk);
+
+    let observed = Arc::new(AtomicUsize::new(usize::MAX));
+    let observed_by_system = observed.clone();
+    let observed_target = target.clone();
+    world.extend_dispatcher(move |builder| {
+        builder.with(
+            ObserveVoxel(observed_target.clone(), observed_by_system.clone()),
+            "observe-voxel-after-chunk-update",
+            &["chunk-updating"],
+        )
+    });
+    world.prepare();
+    world.tick();
+    assert_eq!(observed.load(Ordering::SeqCst), 1);
+
+    world
+        .install_before_chunk_updating_system("queue-air-before-chunk-update", move || {
+            QueueAir(target.clone())
+        })
+        .unwrap();
+    world.tick();
+
+    assert_eq!(observed.load(Ordering::SeqCst), 0);
+    assert!(world.chunks().updates_staging.is_empty());
+}
+
+#[test]
+fn before_chunk_hook_rejects_conflicts_and_custom_dispatchers() {
+    let mut world = test_world("before-chunk-conflicts", &WorldConfig::default());
+    assert_eq!(
+        world.install_before_chunk_updating_system("chunk-updating", || CountingSystem(Arc::new(
+            AtomicUsize::new(0)
+        ))),
+        Err(DispatcherHookError::NameConflict)
+    );
+    world
+        .install_before_chunk_updating_system("application-before-chunk", || {
+            CountingSystem(Arc::new(AtomicUsize::new(0)))
+        })
+        .unwrap();
+    assert_eq!(
+        world.install_before_chunk_updating_system("second-hook", || CountingSystem(Arc::new(
+            AtomicUsize::new(0)
+        ))),
+        Err(DispatcherHookError::HookAlreadyInstalled)
+    );
+
+    let mut custom = test_world("custom-before-chunk", &WorldConfig::default());
+    custom.set_dispatcher(TimedDispatcherBuilder::new);
+    assert_eq!(
+        custom.install_before_chunk_updating_system("application-before-chunk", || {
+            CountingSystem(Arc::new(AtomicUsize::new(0)))
+        }),
+        Err(DispatcherHookError::CustomDispatcherUnsupported)
+    );
 }
 
 #[test]
@@ -408,6 +553,50 @@ fn strict_policy_blocks_unlisted_method_and_movement_flags() {
         .0
         .gravity_multiplier;
     assert_eq!(gravity_after, gravity_before);
+}
+
+#[test]
+fn strict_policy_rejects_single_and_bulk_raw_voxel_updates_before_staging() {
+    let config = WorldConfig::new()
+        .request_policy(WorldRequestPolicy::strict())
+        .build();
+    let mut world = test_world("strict-raw-updates", &config);
+    world.prepare();
+    let (sender, _receiver) = ws_sender();
+    world
+        .add_client(
+            "player-1",
+            "Player",
+            &sender,
+            ClientPreferencesPatch::default(),
+            None,
+            "strict-update-attempt".to_owned(),
+        )
+        .unwrap();
+
+    world.on_request(
+        "player-1",
+        Message::new(&MessageType::Update)
+            .updates(&[UpdateProtocol {
+                vx: 1,
+                vy: 1,
+                vz: 1,
+                voxel: 7,
+                light: 0,
+            }])
+            .build(),
+    );
+    let mut bulk = Message::new(&MessageType::Update).build();
+    bulk.bulk_update = Some(crate::protocols::BulkUpdate {
+        vx: vec![2],
+        vy: vec![2],
+        vz: vec![2],
+        voxels: vec![8],
+        lights: vec![0],
+    });
+    world.on_request("player-1", bulk);
+
+    assert!(world.chunks().updates_staging.is_empty());
 }
 
 #[test]

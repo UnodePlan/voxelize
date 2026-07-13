@@ -3,10 +3,13 @@ import { describe, expect, it } from "vitest";
 import envelopeFixtureJson from "../../../contracts/extraction/v1/fixtures/envelopes.json";
 import gameplayIntentFixtureJson from "../../../contracts/extraction/v1/fixtures/gameplay-intents.json";
 import manifestJson from "../../../contracts/extraction/v1/manifest.json";
+import miningStateFixtureJson from "../../../contracts/extraction/v1/fixtures/mining-states.json";
 import {
   decodeEnvelopeFixture,
   decodeDropSlotIntent,
   decodeExtractionManifest,
+  decodeMiningIntent,
+  decodeMiningStateEnvelope,
   decodeProtocolEnvelope,
 } from "../../../contracts/extraction/v1/typescript";
 
@@ -15,6 +18,9 @@ describe("extraction contract fixtures", () => {
   const envelopeFixture = decodeEnvelopeFixture(envelopeFixtureJson as unknown);
   const gameplayIntentFixture = decodeEnvelopeFixture(
     gameplayIntentFixtureJson as unknown,
+  );
+  const miningStateFixture = decodeEnvelopeFixture(
+    miningStateFixtureJson as unknown,
   );
 
   it("keeps stable resources, stack limits, IDs and score weights", () => {
@@ -91,10 +97,25 @@ describe("extraction contract fixtures", () => {
   });
 
   it.each(gameplayIntentFixture.cases)("matches gameplay $name", (fixtureCase) => {
-    const decode = () =>
-      decodeDropSlotIntent(
-        decodeProtocolEnvelope(fixtureCase.value, manifest),
-      );
+    const decode = () => {
+      const envelope = decodeProtocolEnvelope(fixtureCase.value, manifest);
+      if (fixtureCase.route === "pvp:v1:drop-slot") {
+        return decodeDropSlotIntent(envelope);
+      }
+      if (fixtureCase.route === "pvp:v1:mining") {
+        return decodeMiningIntent(envelope);
+      }
+      throw new Error(`unknown gameplay fixture route ${fixtureCase.route}`);
+    };
+    if (fixtureCase.accept) {
+      expect(decode).not.toThrow();
+    } else {
+      expect(decode).toThrow();
+    }
+  });
+
+  it.each(miningStateFixture.cases)("matches mining state $name", (fixtureCase) => {
+    const decode = () => decodeMiningStateEnvelope(fixtureCase.value, manifest);
     if (fixtureCase.accept) {
       expect(decode).not.toThrow();
     } else {

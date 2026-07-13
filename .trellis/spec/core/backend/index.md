@@ -24,6 +24,7 @@ This directory contains guidelines for backend development. Fill in each file wi
 | [Match Lifecycle Persistence](./match-lifecycle-persistence.md) | Exact-ten matchmaking, frozen rosters, World generations, deadlines, and reconnect contracts | Active |
 | [Deterministic World Generation](./deterministic-world-generation.md) | Stable catalogs, versioned terrain, actual-Chunk fingerprints, and preload readiness | Active |
 | [Authoritative Match Inventory and Loot](./authoritative-match-assets.md) | Private inventory, pending ownership, deterministic drops, auto-pickup, and Direct state | Active |
+| [Authoritative Match Mining](./authoritative-mining.md) | Strict mining intents, server timing/raycast, atomic harvest, AIR ordering, and full progress snapshots | Active |
 
 ---
 

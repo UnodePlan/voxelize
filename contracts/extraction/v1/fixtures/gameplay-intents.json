@@ -76,6 +76,121 @@
         "sequence": 4294967296,
         "payload": { "slot": 1, "expectedInventoryRevision": 3 }
       }
+    },
+    {
+      "name": "valid-mining-start",
+      "route": "pvp:v1:mining",
+      "accept": true,
+      "value": {
+        "protocolVersion": 1,
+        "type": "intent",
+        "requestId": "22222222-2222-4222-8222-222222222222",
+        "sequence": 1,
+        "payload": { "action": "start", "voxel": [-150, 1, 149] }
+      }
+    },
+    {
+      "name": "valid-mining-maintain",
+      "route": "pvp:v1:mining",
+      "accept": true,
+      "value": {
+        "protocolVersion": 1,
+        "type": "intent",
+        "requestId": "22222222-2222-4222-8222-222222222222",
+        "sequence": 2,
+        "payload": { "action": "maintain" }
+      }
+    },
+    {
+      "name": "valid-mining-cancel",
+      "route": "pvp:v1:mining",
+      "accept": true,
+      "value": {
+        "protocolVersion": 1,
+        "type": "intent",
+        "requestId": "22222222-2222-4222-8222-222222222222",
+        "sequence": 3,
+        "payload": { "action": "cancel" }
+      }
+    },
+    {
+      "name": "mining-start-requires-voxel",
+      "route": "pvp:v1:mining",
+      "accept": false,
+      "value": {
+        "protocolVersion": 1,
+        "type": "intent",
+        "requestId": "22222222-2222-4222-8222-222222222222",
+        "sequence": 4,
+        "payload": { "action": "start" }
+      }
+    },
+    {
+      "name": "mining-maintain-cannot-switch-target",
+      "route": "pvp:v1:mining",
+      "accept": false,
+      "value": {
+        "protocolVersion": 1,
+        "type": "intent",
+        "requestId": "22222222-2222-4222-8222-222222222222",
+        "sequence": 5,
+        "payload": { "action": "maintain", "voxel": [1, 2, 3] }
+      }
+    },
+    {
+      "name": "mining-cannot-invent-completion",
+      "route": "pvp:v1:mining",
+      "accept": false,
+      "value": {
+        "protocolVersion": 1,
+        "type": "intent",
+        "requestId": "22222222-2222-4222-8222-222222222222",
+        "sequence": 6,
+        "payload": {
+          "action": "start",
+          "voxel": [1, 2, 3],
+          "resource": "diamond",
+          "durationMs": 0,
+          "quantity": 64,
+          "completed": true
+        }
+      }
+    },
+    {
+      "name": "mining-voxel-must-have-three-integers",
+      "route": "pvp:v1:mining",
+      "accept": false,
+      "value": {
+        "protocolVersion": 1,
+        "type": "intent",
+        "requestId": "22222222-2222-4222-8222-222222222222",
+        "sequence": 7,
+        "payload": { "action": "start", "voxel": [1, 2.5] }
+      }
+    },
+    {
+      "name": "mining-voxel-must-fit-i32",
+      "route": "pvp:v1:mining",
+      "accept": false,
+      "value": {
+        "protocolVersion": 1,
+        "type": "intent",
+        "requestId": "22222222-2222-4222-8222-222222222222",
+        "sequence": 8,
+        "payload": { "action": "start", "voxel": [2147483648, 2, 3] }
+      }
+    },
+    {
+      "name": "mining-action-must-be-known",
+      "route": "pvp:v1:mining",
+      "accept": false,
+      "value": {
+        "protocolVersion": 1,
+        "type": "intent",
+        "requestId": "22222222-2222-4222-8222-222222222222",
+        "sequence": 9,
+        "payload": { "action": "complete" }
+      }
     }
   ]
 }

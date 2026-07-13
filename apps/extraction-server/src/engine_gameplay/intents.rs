@@ -3,7 +3,7 @@ use std::collections::VecDeque;
 use specs::Entity;
 use uuid::Uuid;
 
-use crate::contracts::DropSlotPayload;
+use crate::contracts::{DropSlotPayload, MiningPayload};
 
 #[derive(Debug)]
 pub(super) struct QueuedDropSlotIntent {
@@ -14,12 +14,24 @@ pub(super) struct QueuedDropSlotIntent {
     pub payload: DropSlotPayload,
 }
 
-pub(super) struct DropSlotIntentQueue {
-    capacity: usize,
-    intents: VecDeque<QueuedDropSlotIntent>,
+#[derive(Debug)]
+pub(super) struct QueuedMiningIntent {
+    pub entity: Entity,
+    pub client_id: String,
+    pub request_id: Uuid,
+    pub sequence: u32,
+    pub payload: MiningPayload,
 }
 
-impl DropSlotIntentQueue {
+pub(super) type DropSlotIntentQueue = BoundedIntentQueue<QueuedDropSlotIntent>;
+pub(super) type MiningIntentQueue = BoundedIntentQueue<QueuedMiningIntent>;
+
+pub(super) struct BoundedIntentQueue<T> {
+    capacity: usize,
+    intents: VecDeque<T>,
+}
+
+impl<T> BoundedIntentQueue<T> {
     pub(super) fn new(capacity: usize) -> Self {
         Self {
             capacity,
@@ -27,10 +39,7 @@ impl DropSlotIntentQueue {
         }
     }
 
-    pub(super) fn push(
-        &mut self,
-        intent: QueuedDropSlotIntent,
-    ) -> Result<(), QueuedDropSlotIntent> {
+    pub(super) fn push(&mut self, intent: T) -> Result<(), T> {
         if self.intents.len() >= self.capacity {
             return Err(intent);
         }
@@ -38,7 +47,7 @@ impl DropSlotIntentQueue {
         Ok(())
     }
 
-    pub(super) fn drain(&mut self) -> impl Iterator<Item = QueuedDropSlotIntent> + '_ {
+    pub(super) fn drain(&mut self) -> impl Iterator<Item = T> + '_ {
         self.intents.drain(..)
     }
 }

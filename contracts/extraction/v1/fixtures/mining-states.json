@@ -1,0 +1,97 @@
+{
+  "fixtureVersion": 1,
+  "cases": [
+    {
+      "name": "valid-initial-idle",
+      "route": "pvp:v1:mining-state",
+      "accept": true,
+      "value": {
+        "protocolVersion": 1,
+        "type": "state",
+        "matchId": "33333333-3333-4333-8333-333333333333",
+        "stream": "mining",
+        "revision": 0,
+        "data": {
+          "status": "idle",
+          "acceptedSequence": null,
+          "reason": "initial"
+        }
+      }
+    },
+    {
+      "name": "valid-authoritative-progress",
+      "route": "pvp:v1:mining-state",
+      "accept": true,
+      "value": {
+        "protocolVersion": 1,
+        "type": "state",
+        "matchId": "33333333-3333-4333-8333-333333333333",
+        "stream": "mining",
+        "revision": 7,
+        "data": {
+          "status": "mining",
+          "acceptedSequence": 12,
+          "target": [4, 28, -9],
+          "resource": "gold",
+          "elapsedMs": 750,
+          "requiredMs": 1500
+        }
+      }
+    },
+    {
+      "name": "state-progress-cannot-exceed-duration",
+      "route": "pvp:v1:mining-state",
+      "accept": false,
+      "value": {
+        "protocolVersion": 1,
+        "type": "state",
+        "matchId": "33333333-3333-4333-8333-333333333333",
+        "stream": "mining",
+        "revision": 8,
+        "data": {
+          "status": "mining",
+          "acceptedSequence": 13,
+          "target": [4, 28, -9],
+          "resource": "gold",
+          "elapsedMs": 1501,
+          "requiredMs": 1500
+        }
+      }
+    },
+    {
+      "name": "state-stream-is-fixed",
+      "route": "pvp:v1:mining-state",
+      "accept": false,
+      "value": {
+        "protocolVersion": 1,
+        "type": "state",
+        "matchId": "33333333-3333-4333-8333-333333333333",
+        "stream": "inventory",
+        "revision": 9,
+        "data": {
+          "status": "idle",
+          "acceptedSequence": 13,
+          "reason": "completed"
+        }
+      }
+    },
+    {
+      "name": "state-rejects-client-fields",
+      "route": "pvp:v1:mining-state",
+      "accept": false,
+      "value": {
+        "protocolVersion": 1,
+        "type": "state",
+        "matchId": "33333333-3333-4333-8333-333333333333",
+        "stream": "mining",
+        "revision": 10,
+        "data": {
+          "status": "idle",
+          "acceptedSequence": 13,
+          "reason": "completed",
+          "quantity": 1
+        }
+      }
+    }
+  ]
+}

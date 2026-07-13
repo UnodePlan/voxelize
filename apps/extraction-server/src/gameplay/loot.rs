@@ -17,6 +17,10 @@ impl DropId {
         ))
     }
 
+    pub(crate) fn mined(match_id: Uuid, x: i32, y: i32, z: i32) -> Self {
+        Self(format!("drop:v1:{match_id}:mined:{x}:{y}:{z}"))
+    }
+
     pub(crate) fn as_str(&self) -> &str {
         &self.0
     }

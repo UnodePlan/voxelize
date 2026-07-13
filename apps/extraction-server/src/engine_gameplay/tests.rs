@@ -24,7 +24,7 @@ use crate::{
     ports::MatchWorldSpec,
 };
 
-fn match_spec() -> MatchWorldSpec {
+pub(super) fn match_spec() -> MatchWorldSpec {
     let roster = (0..10)
         .map(|index| QueuedPlayer {
             account_id: Uuid::from_u128(100 + index),

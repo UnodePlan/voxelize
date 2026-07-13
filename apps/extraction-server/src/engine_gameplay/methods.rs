@@ -2,11 +2,12 @@ use serde::Deserialize;
 use serde_json::Value;
 use voxelize::{MessageQueues, World};
 
+use super::mining_method::install_mining_method;
 use super::{
     authority::GameplayAuthority,
-    components::{FixedEquipmentComp, MatchPlayerComp, ResourceInventoryComp},
+    components::{FixedEquipmentComp, MatchPlayerComp, MiningComp, ResourceInventoryComp},
     intents::{DropSlotIntentQueue, QueuedDropSlotIntent},
-    messaging::{queue_error, queue_ok, PlayerInventoryState},
+    messaging::{queue_error, queue_ok, PlayerGameplayState},
     runtime::GameplayRuntimeContext,
 };
 use crate::contracts::{decode_drop_slot_intent, decode_protocol_envelope, ErrorCode};
@@ -18,6 +19,7 @@ struct EmptyPayload {}
 pub(super) fn install_gameplay_methods(world: &mut World) {
     world.set_method_handle("pvp:v1:drop-slot", handle_drop_slot);
     world.set_method_handle("pvp:v1:get-state", handle_get_state);
+    install_mining_method(world);
 }
 
 fn handle_drop_slot(world: &mut World, client_id: &str, payload: &str) {
@@ -145,12 +147,17 @@ fn handle_get_state(world: &mut World, client_id: &str, payload: &str) {
     };
     let inventories = world.read_component::<ResourceInventoryComp>();
     let equipment = world.read_component::<FixedEquipmentComp>();
+    let mining = world.read_component::<MiningComp>();
     let state = inventories
         .get(entity)
         .zip(equipment.get(entity))
-        .map(|(inventory, equipment)| PlayerInventoryState::new(inventory, equipment));
+        .zip(mining.get(entity))
+        .and_then(|((inventory, equipment), mining)| {
+            PlayerGameplayState::new(&context, inventory, equipment, mining)
+        });
     drop(inventories);
     drop(equipment);
+    drop(mining);
     match state {
         Some(state) => queue_ok(
             &mut world.write_resource::<MessageQueues>(),
@@ -170,7 +177,7 @@ fn handle_get_state(world: &mut World, client_id: &str, payload: &str) {
     }
 }
 
-fn decode_envelope(
+pub(super) fn decode_envelope(
     payload: &str,
     context: &GameplayRuntimeContext,
 ) -> Result<crate::contracts::ProtocolEnvelope, EnvelopeDecodeError> {
@@ -193,12 +200,12 @@ fn decode_envelope(
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct EnvelopeDecodeError {
+pub(super) struct EnvelopeDecodeError {
     request_id: Option<uuid::Uuid>,
     code: ErrorCode,
 }
 
-fn send_decode_error(
+pub(super) fn send_decode_error(
     world: &mut World,
     context: &GameplayRuntimeContext,
     client_id: &str,
@@ -209,7 +216,7 @@ fn send_decode_error(
     }
 }
 
-fn send_error(
+pub(super) fn send_error(
     world: &mut World,
     context: &GameplayRuntimeContext,
     client_id: &str,
@@ -233,11 +240,15 @@ mod tests {
     use crate::{contracts::bundled_manifest, gameplay::config::GAMEPLAY_V1};
 
     fn context() -> GameplayRuntimeContext {
-        GameplayRuntimeContext {
-            match_id: uuid::Uuid::nil(),
-            config: GAMEPLAY_V1,
-            manifest: bundled_manifest().unwrap(),
-        }
+        GameplayRuntimeContext::new(
+            uuid::Uuid::from_u128(1),
+            GAMEPLAY_V1,
+            bundled_manifest().unwrap(),
+            crate::match_world::PlayableBounds::EXTRACTION,
+            1,
+            64,
+            16,
+        )
     }
 
     #[test]

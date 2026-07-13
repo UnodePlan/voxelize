@@ -295,6 +295,12 @@ pub struct World {
     /// The modifier of the ECS dispatcher (builder factory).
     dispatcher: Arc<dyn Fn() -> DispatcherBuilder<'static, 'static> + Send + Sync>,
 
+    /// 可选的应用系统，固定在默认 ChunkUpdating 前完成。
+    before_chunk_updating: Arc<Mutex<Option<BeforeChunkUpdatingHook>>>,
+
+    /// 自定义 dispatcher 对默认命名 hook 不透明，不能混合安装。
+    uses_default_dispatcher: bool,
+
     /// Cached built dispatcher (built once, reused every tick).
     /// Uses UnsafeSendSync wrapper because Dispatcher isn't Send+Sync,
     /// but we only access it from the SyncWorld actor's single thread.
@@ -653,12 +659,66 @@ impl Handler<TransportLeaveRequest> for SyncWorld {
     }
 }
 
-fn dispatcher() -> TimedDispatcherBuilder<'static, 'static> {
-    TimedDispatcherBuilder::new()
+const DEFAULT_DISPATCHER_SYSTEM_NAMES: &[&str] = &[
+    "update-stats",
+    "peers-meta",
+    "current-chunk",
+    "chunk-updating",
+    "chunk-requests",
+    "chunk-generation",
+    "chunk-sending",
+    "chunk-saving",
+    "physics",
+    "entities-meta",
+    "entities-saving",
+    "entities-sending",
+    "peers-sending",
+    "broadcast",
+    "cleanup",
+    "events",
+    "entity-observe",
+    "path-finding",
+    "target-meta",
+    "path-meta",
+    "entity-tree",
+    "walk-towards",
+];
+
+#[derive(Clone)]
+struct BeforeChunkUpdatingHook {
+    name: &'static str,
+    install: Arc<
+        dyn Fn(TimedDispatcherBuilder<'static, 'static>) -> TimedDispatcherBuilder<'static, 'static>
+            + Send
+            + Sync,
+    >,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DispatcherHookError {
+    CustomDispatcherUnsupported,
+    HookAlreadyInstalled,
+    NameConflict,
+}
+
+fn dispatcher(
+    before_chunk_updating: Option<&BeforeChunkUpdatingHook>,
+) -> TimedDispatcherBuilder<'static, 'static> {
+    let mut builder = TimedDispatcherBuilder::new()
         .with(UpdateStatsSystem, "update-stats", &[])
         .with(PeersMetaSystem, "peers-meta", &[])
-        .with(CurrentChunkSystem, "current-chunk", &[])
-        .with(ChunkUpdatingSystem, "chunk-updating", &["current-chunk"])
+        .with(CurrentChunkSystem, "current-chunk", &[]);
+    let mut chunk_updating_dependencies = vec!["current-chunk"];
+    if let Some(hook) = before_chunk_updating {
+        builder = (hook.install)(builder);
+        chunk_updating_dependencies.push(hook.name);
+    }
+    builder
+        .with(
+            ChunkUpdatingSystem,
+            "chunk-updating",
+            &chunk_updating_dependencies,
+        )
         .with(ChunkRequestsSystem, "chunk-requests", &["current-chunk"])
         .with(
             ChunkGeneratingSystem,
@@ -808,6 +868,8 @@ impl World {
         ecs.insert(Profiler::new(Duration::from_secs_f64(0.001)));
         ecs.insert(EntityIDs::new());
 
+        let before_chunk_updating = Arc::new(Mutex::new(None));
+        let dispatcher_hook = before_chunk_updating.clone();
         let mut world = Self {
             id,
             name: name.to_owned(),
@@ -818,7 +880,12 @@ impl World {
 
             ecs,
 
-            dispatcher: Arc::new(|| dispatcher().into_inner()),
+            dispatcher: Arc::new(move || {
+                let hook = dispatcher_hook.lock().unwrap().clone();
+                dispatcher(hook.as_ref()).into_inner()
+            }),
+            before_chunk_updating,
+            uses_default_dispatcher: true,
             built_dispatcher: Arc::new(Mutex::new(None)),
             method_handles: HashMap::default(),
             event_handles: HashMap::default(),
@@ -1081,7 +1148,41 @@ impl World {
         dispatch: F,
     ) {
         self.dispatcher = Arc::new(move || dispatch().into_inner());
+        self.uses_default_dispatcher = false;
         *self.built_dispatcher.lock().unwrap() = None;
+    }
+
+    /// 在 CurrentChunk 与 ChunkUpdating 之间安装唯一的命名应用系统。
+    ///
+    /// 每次重建 dispatcher 缓存都会重新执行 factory。自定义 dispatcher 必须在自己的
+    /// factory 内保证等价顺序，不能使用这个默认链 hook。
+    pub fn install_before_chunk_updating_system<T, F>(
+        &mut self,
+        name: &'static str,
+        factory: F,
+    ) -> Result<(), DispatcherHookError>
+    where
+        T: for<'a> specs::System<'a> + Send + 'static,
+        for<'a> <T as specs::System<'a>>::SystemData: specs::SystemData<'a>,
+        F: Fn() -> T + Send + Sync + 'static,
+    {
+        if !self.uses_default_dispatcher {
+            return Err(DispatcherHookError::CustomDispatcherUnsupported);
+        }
+        if name.is_empty() || DEFAULT_DISPATCHER_SYSTEM_NAMES.contains(&name) {
+            return Err(DispatcherHookError::NameConflict);
+        }
+        let mut slot = self.before_chunk_updating.lock().unwrap();
+        if slot.is_some() {
+            return Err(DispatcherHookError::HookAlreadyInstalled);
+        }
+        *slot = Some(BeforeChunkUpdatingHook {
+            name,
+            install: Arc::new(move |builder| builder.with(factory(), name, &["current-chunk"])),
+        });
+        drop(slot);
+        *self.built_dispatcher.lock().unwrap() = None;
+        Ok(())
     }
 
     /// Appends systems to the current dispatcher factory without replacing it.

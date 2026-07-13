@@ -119,15 +119,21 @@
 
 ## 阶段 6：服务端权威挖掘
 
-- [ ] 客户端只发送 start/maintain/cancel 和 sequence，服务端校验状态、阶段、工具、边界、距离、视线和方块。
-- [ ] fake clock 驱动泥土/黄金/钻石 `0.5/1.5/3s`；所有取消条件从零重置。
-- [ ] 完成时先用 `HarvestedVoxelSet` claim，再写 AIR、固定产出 1、入包或 pending drop。
-- [ ] `MiningResolution -> ChunkUpdating` 顺序固定；strict World 始终禁用客户端经济方块 raw UPDATE。
-- [ ] 客户端进度只显示服务端 revision 状态。
+- [x] 客户端只发送 start/maintain/cancel 和 sequence，服务端校验状态、阶段、工具、边界、距离、视线和方块。
+- [x] fake clock 驱动泥土/黄金/钻石 `0.5/1.5/3s`；所有取消条件从零重置。
+- [x] 完成时先用 `HarvestedVoxelSet` claim，再写 AIR、固定产出 1、入包或 pending drop。
+- [x] `MiningResolution -> ChunkUpdating` 顺序固定；strict World 始终禁用客户端经济方块 raw UPDATE。
+- [x] 客户端进度只显示服务端 revision 状态。
 
 验收：同体素重复/乱序/并发完成最多产出 1；满包仍破坏一次并留下 1 个公共资源。
 
 回滚：不可为兼容重新开放 raw UPDATE。
+
+实现记录（2026-07-13）：新增严格的 `pvp:v1:mining` start/maintain/cancel 协议、独立 Direct `pvp:v1:mining-state` 完整快照和客户端单调 sequence 工厂；客户端不能提交资源、体素 ID、时长、进度、完成或数量。服务端以固定基础镐、300×300/Y 边界、Ready Chunk、4.5 格距离及首个非 Air 体素射线为权威验证，并在每次意图和 tick 持续复核。`balance-v1` 冻结 `500/1500/3000ms`、350ms maintain grace 和 50ms 同步粒度；换目标、松键超时、失去权限/工具/距离/视线、方块变化或竞争失败均从零重置。
+
+完成事务先在 `MiningState` 克隆上准备不可失败的完成态，再由 World 级 `HarvestedVoxelSet` 原子 claim；固定数量 1 进入背包，满包或库存 revision 耗尽则进入确定性公共 pending drop，成功后 staging AIR 并安装完成态。默认 dispatcher 增加只能安装一次且固定依赖 `CurrentChunk` 的命名 hook，保证 `MiningResolution -> ChunkUpdating` 同 tick 消费 AIR；自定义 dispatcher、系统名冲突和重复安装显式失败，strict World 的单条/批量 raw UPDATE 继续在 staging 前拒绝。服务器同 tick 可合并多个 revision，客户端把每条消息视为完整快照，接受任意更高 revision 且本地计时不能推进权威进度。
+
+验证记录：纯领域 25 项覆盖三资源精确毫秒边界、grace 前/等于/超过、sequence/换目标/cancel、亚毫秒配置失败关闭、完成态预提交、claim/回滚、满包/revision 耗尽和资产守恒；Engine gameplay 8 项覆盖真实 Ready Chunk 精确完成、两人同体素稳定竞争、满 12 格 pending、遮挡/未 Ready/零与 NaN 方向，以及同一 dispatcher 内 staging AIR 后由 `ChunkUpdating` 落地。Rust/TypeScript 共享契约、客户端 37 项、根引擎 61 项、应用 Engine 全目标、客户端生产 build、应用 `--no-deps -D warnings` Clippy 和 `git diff --check` 均通过；根引擎仍只有既有 84 条 warning 基线。所有新增生产文件低于 300 行，测试文件适用规模例外。
 
 ## 阶段 7：近战、生命、死亡与结果
 

@@ -1,5 +1,16 @@
 export const RESOURCE_KEYS = ["dirt", "gold", "diamond"] as const;
 export const EQUIPMENT_KEYS = ["basic_pickaxe", "basic_melee_weapon"] as const;
+export const MINING_ACTIONS = ["start", "maintain", "cancel"] as const;
+export const MINING_IDLE_REASONS = [
+  "initial",
+  "cancelled",
+  "outOfRange",
+  "occluded",
+  "invalidBlock",
+  "disconnected",
+  "timedOut",
+  "completed",
+] as const;
 export const ERROR_CODES = [
   "PROTOCOL_UNSUPPORTED_VERSION",
   "REQUEST_MALFORMED",
@@ -24,6 +35,8 @@ export const ERROR_CODES = [
 export type JsonRecord = Record<string, unknown>;
 export type ResourceKey = (typeof RESOURCE_KEYS)[number];
 export type EquipmentKey = (typeof EQUIPMENT_KEYS)[number];
+export type MiningAction = (typeof MINING_ACTIONS)[number];
+export type MiningIdleReason = (typeof MINING_IDLE_REASONS)[number];
 export type ErrorCode = (typeof ERROR_CODES)[number];
 
 export interface ResourceDefinition {
@@ -81,6 +94,41 @@ export interface DecodedDropSlotIntent {
   requestId: string;
   sequence: number;
   payload: DropSlotPayload;
+}
+
+export type MiningPayload =
+  | { action: "start"; voxel: [number, number, number] }
+  | { action: "maintain" }
+  | { action: "cancel" };
+
+export interface DecodedMiningIntent {
+  requestId: string;
+  sequence: number;
+  payload: MiningPayload;
+}
+
+export type MiningStateData =
+  | {
+      status: "idle";
+      acceptedSequence: number | null;
+      reason: MiningIdleReason;
+    }
+  | {
+      status: "mining";
+      acceptedSequence: number;
+      target: [number, number, number];
+      resource: ResourceKey;
+      elapsedMs: number;
+      requiredMs: number;
+    };
+
+export interface MiningStateEnvelope {
+  protocolVersion: number;
+  type: "state";
+  matchId: string;
+  stream: "mining";
+  revision: number;
+  data: MiningStateData;
 }
 
 export interface EnvelopeFixtureCase {
