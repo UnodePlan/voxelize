@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex,
@@ -15,6 +15,10 @@ use super::coordinator_lifecycle::stop_world_once;
 use super::*;
 use crate::{
     match_world::{FixedMatchLoadout, PlayableBounds, ENGINE_MAX_CHUNK, ENGINE_MIN_CHUNK},
+    observability::{
+        ApplyOutcome, MatchEvent, MatchEventSink, ObservedMatchPhase, RejectionReason,
+        SettlementOutcome, TerminalKind,
+    },
     ports::{
         Clock, IdGenerator, MatchRepository, MatchRepositoryError, MatchWorldRuntime,
         MatchWorldRuntimeError, MatchWorldSpec, PreparedMatchWorld, RepositoryFuture,
@@ -218,6 +222,28 @@ async fn exact_ten_freeze_and_eleventh_rejection_are_serialized() {
         stored.record.hard_deadline.unwrap() - stored.record.started_at.unwrap(),
         Duration::minutes(12)
     );
+    let resources = harness.service.resource_snapshot().await.unwrap();
+    assert_eq!(resources.queued_accounts, 0);
+    assert_eq!(resources.connected_accounts, 10);
+    assert_eq!(resources.connection_routes, 10);
+    assert_eq!(resources.live_matches, 1);
+    assert_eq!(resources.pending_settlements, 0);
+    assert_eq!(resources.pending_despawns, 0);
+    assert_eq!(resources.hard_deadline_tasks, 1);
+    assert_eq!(harness.runtime.active_world_count(), 1);
+    let events = harness.events.snapshot();
+    assert!(events.contains(&MatchEvent::RequestRejected {
+        match_id: Some(spec.match_id),
+        reason: RejectionReason::Full,
+    }));
+    assert!(events.contains(&MatchEvent::PhaseChanged {
+        match_id: spec.match_id,
+        phase: ObservedMatchPhase::Preparing,
+    }));
+    assert!(events.contains(&MatchEvent::PhaseChanged {
+        match_id: spec.match_id,
+        phase: ObservedMatchPhase::Active,
+    }));
 }
 
 #[tokio::test]
@@ -245,6 +271,109 @@ async fn eleven_concurrent_requests_admit_exactly_ten_accounts() {
     assert_eq!(admitted, 10);
     assert_eq!(full, 1);
     assert_eq!(harness.runtime.only_spec().roster.iter().len(), 10);
+}
+
+#[tokio::test]
+async fn repeated_matches_return_all_live_coordinator_resources_to_baseline() {
+    const ROUNDS: usize = 5;
+    let harness = Harness::new().await;
+    let accounts = accounts(MATCH_SIZE);
+    harness.connect_all(&accounts).await;
+
+    for round in 0..ROUNDS {
+        for account_id in &accounts {
+            harness.service.enqueue(*account_id).await.unwrap();
+        }
+        let spec = harness.runtime.latest_spec();
+        harness.join_all(&accounts, &spec.world_name).await;
+
+        let live = harness.service.resource_snapshot().await.unwrap();
+        assert_eq!(live.queued_accounts, 0);
+        assert_eq!(live.connected_accounts, MATCH_SIZE);
+        assert_eq!(live.connection_routes, MATCH_SIZE);
+        assert_eq!(live.live_matches, 1);
+        assert_eq!(live.pending_settlements, 0);
+        assert_eq!(live.pending_despawns, 0);
+        assert_eq!(live.hard_deadline_tasks, 1);
+        assert_eq!(harness.runtime.active_world_count(), 1);
+
+        harness.clock.advance(StdDuration::from_secs(8 * 60));
+        harness.service.tick().await.unwrap();
+        let qualified_at = harness
+            .repository
+            .match_by_id(spec.match_id)
+            .record
+            .extraction_open_at
+            .unwrap();
+        assert!(harness.service.observe_extraction(MatchExtractionNotice {
+            world_name: spec.world_name.clone(),
+            world_generation: TEST_WORLD_GENERATION.to_owned(),
+            qualification: extraction_qualification(
+                &spec,
+                accounts[0],
+                qualified_at,
+                SettlementResources::new(1, 1, 1),
+            ),
+        }));
+        harness.service.tick().await.unwrap();
+
+        harness.clock.advance(StdDuration::from_secs(4 * 60));
+        harness.service.tick().await.unwrap();
+        harness
+            .wait_for_specific_match_state(spec.match_id, MatchState::Finished)
+            .await;
+        harness.service.tick().await.unwrap();
+
+        let baseline = harness.service.resource_snapshot().await.unwrap();
+        assert_eq!(baseline.queued_accounts, 0, "第 {round} 局队列未清空");
+        assert_eq!(baseline.connected_accounts, MATCH_SIZE);
+        assert_eq!(baseline.connection_routes, MATCH_SIZE);
+        assert_eq!(baseline.live_matches, 0, "第 {round} 局仍持有 live match");
+        assert_eq!(baseline.pending_settlements, 0);
+        assert_eq!(baseline.pending_despawns, 0);
+        assert_eq!(baseline.hard_deadline_tasks, 0);
+        assert!(!harness.service.tick_pending.load(Ordering::Acquire));
+        assert_eq!(harness.runtime.active_world_count(), 0);
+        assert_eq!(harness.repository.match_count(), round + 1);
+    }
+
+    assert_eq!(harness.runtime.spec_count(), ROUNDS);
+    assert_eq!(harness.runtime.stop_count(), ROUNDS);
+    assert_eq!(harness.repository.settlement_count(), ROUNDS);
+    assert_eq!(
+        harness
+            .events
+            .snapshot()
+            .iter()
+            .filter(|event| matches!(
+                event,
+                MatchEvent::Settlement {
+                    outcome: SettlementOutcome::CommitApplied,
+                    ..
+                }
+            ))
+            .count(),
+        ROUNDS
+    );
+
+    for (index, account_id) in accounts.into_iter().enumerate() {
+        harness
+            .service
+            .apply_connection_event(MatchConnectionEvent::Disconnected {
+                connection_id: connection_id(index),
+                account_id,
+                observed_at: harness.clock.monotonic_now(),
+                world_name: None,
+                world_generation: None,
+                client_id: None,
+                attach_attempt_id: None,
+            })
+            .await
+            .unwrap();
+    }
+    let disconnected = harness.service.resource_snapshot().await.unwrap();
+    assert_eq!(disconnected.connected_accounts, 0);
+    assert_eq!(disconnected.connection_routes, 0);
 }
 
 #[tokio::test]
@@ -690,6 +819,15 @@ async fn extraction_qualification_commits_once_and_evicts_after_commit() {
         vec!["mark", "commit", "find"]
     );
     assert_eq!(harness.runtime.eviction_count(accounts[0]), 1);
+    let events = harness.events.snapshot();
+    assert!(events.contains(&MatchEvent::Settlement {
+        match_id: spec.match_id,
+        outcome: SettlementOutcome::Qualified,
+    }));
+    assert!(events.contains(&MatchEvent::Settlement {
+        match_id: spec.match_id,
+        outcome: SettlementOutcome::CommitApplied,
+    }));
 }
 
 #[tokio::test]
@@ -1089,6 +1227,14 @@ async fn death_notice_persists_stats_and_evicts_online_participant() {
     assert_eq!(victim.reconnect_deadline, None);
     assert_eq!(harness.runtime.eviction_count(accounts[0]), 1);
     assert_eq!(harness.runtime.despawn_count(accounts[0]), 0);
+    assert!(harness
+        .events
+        .snapshot()
+        .contains(&MatchEvent::ParticipantDeath {
+            match_id: spec.match_id,
+            kind: TerminalKind::Melee,
+            outcome: ApplyOutcome::Applied,
+        }));
     assert!(matches!(
         harness.repository.mark_dead(death.clone()).await.unwrap(),
         TransitionOutcome::AlreadyApplied(_)
@@ -1703,6 +1849,7 @@ struct Harness {
     repository: Arc<MemoryMatchRepository>,
     runtime: Arc<MemoryWorldRuntime>,
     clock: Arc<ManualClock>,
+    events: Arc<RecordingMatchEvents>,
 }
 
 impl Harness {
@@ -1710,7 +1857,8 @@ impl Harness {
         let repository = Arc::new(MemoryMatchRepository::default());
         let runtime = Arc::new(MemoryWorldRuntime::default());
         let clock = Arc::new(ManualClock::default());
-        let service = MatchmakingService::start(
+        let events = Arc::new(RecordingMatchEvents::default());
+        let service = MatchmakingService::start_with_event_sink(
             repository.clone(),
             clock.clone(),
             Arc::new(SequenceIds::default()),
@@ -1720,6 +1868,7 @@ impl Harness {
                 gameplay: "gameplay-v1".to_owned(),
                 config: "balance-v1".to_owned(),
             },
+            events.clone(),
         );
         service.bind_runtime(runtime.clone()).await.unwrap();
         let weak_service = Arc::downgrade(&service);
@@ -1755,6 +1904,7 @@ impl Harness {
             repository,
             runtime,
             clock,
+            events,
         }
     }
 
@@ -1771,7 +1921,7 @@ impl Harness {
     }
 
     async fn join_all(&self, accounts: &[Uuid], world_name: &str) {
-        let spec = self.runtime.only_spec();
+        let spec = self.runtime.spec_for_world(world_name);
         for (index, account_id) in accounts.iter().enumerate() {
             assert!(self.service.allows_attach(
                 world_name,
@@ -1813,9 +1963,14 @@ impl Harness {
     }
 
     async fn wait_for_match_state(&self, expected: MatchState) {
+        let match_id = self.repository.only_match().record.match_id;
+        self.wait_for_specific_match_state(match_id, expected).await;
+    }
+
+    async fn wait_for_specific_match_state(&self, match_id: Uuid, expected: MatchState) {
         tokio::time::timeout(StdDuration::from_secs(1), async {
             loop {
-                if self.repository.only_match().record.state == expected {
+                if self.repository.match_by_id(match_id).record.state == expected {
                     break;
                 }
                 tokio::task::yield_now().await;
@@ -1823,6 +1978,21 @@ impl Harness {
         })
         .await
         .unwrap_or_else(|_| panic!("等待比赛进入 {expected:?} 超时"));
+    }
+}
+
+#[derive(Default)]
+struct RecordingMatchEvents(Mutex<Vec<MatchEvent>>);
+
+impl RecordingMatchEvents {
+    fn snapshot(&self) -> Vec<MatchEvent> {
+        self.0.lock().unwrap().clone()
+    }
+}
+
+impl MatchEventSink for RecordingMatchEvents {
+    fn record(&self, event: MatchEvent) {
+        self.0.lock().unwrap().push(event);
     }
 }
 
@@ -1959,6 +2129,7 @@ type HardDeadlineObserver =
 #[derive(Default)]
 struct MemoryWorldRuntime {
     specs: Mutex<Vec<MatchWorldSpec>>,
+    active_worlds: Mutex<HashSet<String>>,
     stops: Mutex<Vec<String>>,
     despawns: Mutex<HashMap<Uuid, usize>>,
     evictions: Mutex<HashMap<Uuid, usize>>,
@@ -1984,12 +2155,26 @@ impl MemoryWorldRuntime {
         self.specs.lock().unwrap().last().unwrap().clone()
     }
 
+    fn spec_for_world(&self, world_name: &str) -> MatchWorldSpec {
+        self.specs
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|spec| spec.world_name == world_name)
+            .unwrap()
+            .clone()
+    }
+
     fn stop_count(&self) -> usize {
         self.stops.lock().unwrap().len()
     }
 
     fn spec_count(&self) -> usize {
         self.specs.lock().unwrap().len()
+    }
+
+    fn active_world_count(&self) -> usize {
+        self.active_worlds.lock().unwrap().len()
     }
 
     fn despawn_count(&self, account_id: Uuid) -> usize {
@@ -2058,6 +2243,11 @@ impl MatchWorldRuntime for MemoryWorldRuntime {
         &self,
         spec: MatchWorldSpec,
     ) -> Result<PreparedMatchWorld, MatchWorldRuntimeError> {
+        assert!(self
+            .active_worlds
+            .lock()
+            .unwrap()
+            .insert(spec.world_name.clone()));
         self.specs.lock().unwrap().push(spec);
         Ok(PreparedMatchWorld {
             world_generation: TEST_WORLD_GENERATION.to_owned(),
@@ -2075,6 +2265,7 @@ impl MatchWorldRuntime for MemoryWorldRuntime {
         if self.hang_stop.load(Ordering::SeqCst) {
             std::future::pending::<()>().await;
         }
+        self.active_worlds.lock().unwrap().remove(world_name);
         self.stops.lock().unwrap().push(world_name.to_owned());
         self.hard_deadline_events.lock().unwrap().push("stop");
         Ok(true)

@@ -10,7 +10,10 @@ use time::OffsetDateTime;
 use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
+#[cfg(test)]
+use super::coordinator_diagnostics::CoordinatorResourceSnapshot;
 use super::{command::Command, coordinator::Coordinator, gate::AttachGate, MatchVersions};
+use crate::observability::{MatchEvent, MatchEventSink, RejectionReason, StderrMatchEventSink};
 use crate::ports::{Clock, IdGenerator, MatchWorldRuntime, MatchmakingRepository, SeedGenerator};
 
 const COMMAND_CAPACITY: usize = 256;
@@ -115,6 +118,7 @@ pub struct MatchmakingService {
     pub(super) gate: Arc<AttachGate>,
     pub(super) clock: Arc<dyn Clock>,
     pub(super) tick_pending: Arc<AtomicBool>,
+    pub(super) events: Arc<dyn MatchEventSink>,
     overflow_recovery_started: AtomicBool,
 }
 
@@ -125,6 +129,24 @@ impl MatchmakingService {
         ids: Arc<dyn IdGenerator>,
         seeds: Arc<dyn SeedGenerator>,
         versions: MatchVersions,
+    ) -> Arc<Self> {
+        Self::start_with_event_sink(
+            repository,
+            clock,
+            ids,
+            seeds,
+            versions,
+            Arc::new(StderrMatchEventSink),
+        )
+    }
+
+    pub(crate) fn start_with_event_sink(
+        repository: Arc<dyn MatchmakingRepository>,
+        clock: Arc<dyn Clock>,
+        ids: Arc<dyn IdGenerator>,
+        seeds: Arc<dyn SeedGenerator>,
+        versions: MatchVersions,
+        events: Arc<dyn MatchEventSink>,
     ) -> Arc<Self> {
         let (sender, receiver) = mpsc::channel(COMMAND_CAPACITY);
         let gate = Arc::new(AttachGate::default());
@@ -137,15 +159,29 @@ impl MatchmakingService {
             versions,
             gate.clone(),
             sender.clone(),
-        );
+        )
+        .with_event_sink(events.clone());
         tokio::spawn(coordinator.run(receiver));
         Arc::new(Self {
             sender,
             gate,
             clock,
             tick_pending,
+            events,
             overflow_recovery_started: AtomicBool::new(false),
         })
+    }
+
+    #[cfg(test)]
+    pub(super) async fn resource_snapshot(
+        &self,
+    ) -> Result<CoordinatorResourceSnapshot, MatchmakingError> {
+        let (reply, response) = oneshot::channel();
+        self.sender
+            .send(Command::InspectResources { reply })
+            .await
+            .map_err(|_| MatchmakingError::Unavailable)?;
+        response.await.map_err(|_| MatchmakingError::Unavailable)
     }
 
     pub async fn bind_runtime(
@@ -225,6 +261,10 @@ impl MatchmakingService {
         command: impl FnOnce(oneshot::Sender<Result<T, MatchmakingError>>) -> Command,
     ) -> Result<T, MatchmakingError> {
         if self.gate.is_failed_closed() {
+            self.events.record(MatchEvent::RequestRejected {
+                match_id: None,
+                reason: RejectionReason::Unavailable,
+            });
             return Err(MatchmakingError::Unavailable);
         }
         self.query(command).await

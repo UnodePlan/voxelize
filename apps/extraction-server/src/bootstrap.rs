@@ -4,6 +4,7 @@ use actix_web::web;
 
 #[cfg(feature = "engine")]
 use crate::engine_catalog::EngineCatalog;
+use crate::observability::{MatchEvent, MatchEventSink, RecoveryOutcome, StderrMatchEventSink};
 use crate::{
     auth::{AuthService, SecureAuthRandom, SiweSignatureVerifier},
     contracts,
@@ -48,14 +49,24 @@ pub(crate) async fn build(config: &ServerConfig) -> io::Result<Application> {
     let auth_repository: Arc<dyn AuthRepository> = repository.clone();
     let match_repository: Arc<dyn MatchmakingRepository> = repository;
     let clock: Arc<dyn Clock> = Arc::new(SystemClock::default());
-    match_repository
+    match match_repository
         .abort_unrecoverable_matches(STARTUP_ABORT_REASON.to_owned(), clock.utc_now().into())
         .await
-        .map_err(|error| {
-            io::Error::other(format!(
+    {
+        Ok(affected_matches) => StderrMatchEventSink.record(MatchEvent::StartupRecovery {
+            outcome: RecoveryOutcome::Completed,
+            affected_matches,
+        }),
+        Err(error) => {
+            StderrMatchEventSink.record(MatchEvent::StartupRecovery {
+                outcome: RecoveryOutcome::Failed,
+                affected_matches: 0,
+            });
+            return Err(io::Error::other(format!(
                 "failed to abort unrecoverable matches during startup: {error:?}"
-            ))
-        })?;
+            )));
+        }
+    }
     let verifier = Arc::new(SiweSignatureVerifier::new(config.auth().clone()));
     let auth = AuthService::new(
         auth_repository,

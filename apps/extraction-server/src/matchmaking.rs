@@ -8,6 +8,8 @@ mod coordinator;
 mod coordinator_connections;
 #[cfg(any(feature = "engine", test))]
 mod coordinator_deaths;
+#[cfg(test)]
+mod coordinator_diagnostics;
 mod coordinator_events;
 mod coordinator_extraction;
 mod coordinator_lifecycle;

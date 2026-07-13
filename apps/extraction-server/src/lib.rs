@@ -21,6 +21,7 @@ mod generation;
 mod http;
 pub mod match_world;
 pub mod matchmaking;
+mod observability;
 pub mod ops;
 pub mod persistence;
 pub mod ports;

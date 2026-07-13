@@ -3,6 +3,8 @@ use std::sync::{atomic::AtomicBool, Arc};
 use tokio::sync::oneshot;
 use uuid::Uuid;
 
+#[cfg(test)]
+use super::coordinator_diagnostics::CoordinatorResourceSnapshot;
 use super::{MatchConnectionEvent, MatchResultRecord, MatchmakingError, QueueSnapshot};
 #[cfg(any(feature = "engine", test))]
 use super::{MatchDeathNotice, MatchExtractionNotice, MatchTimeoutNotice};
@@ -33,6 +35,10 @@ pub(super) enum Command {
     FindLatestMatchResult {
         account_id: Uuid,
         reply: oneshot::Sender<Result<Option<MatchResultRecord>, MatchmakingError>>,
+    },
+    #[cfg(test)]
+    InspectResources {
+        reply: oneshot::Sender<CoordinatorResourceSnapshot>,
     },
     Connection {
         event: MatchConnectionEvent,

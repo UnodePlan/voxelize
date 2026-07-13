@@ -15,6 +15,7 @@ use super::{
     service::{MatchmakingError, QueueSnapshot, QueueStatus},
     CreatePreparingMatch, MatchState, MatchVersions, ParticipantState,
 };
+use crate::observability::{MatchEvent, MatchEventSink, StderrMatchEventSink};
 use crate::ports::{
     Clock, IdGenerator, MatchWorldRuntime, MatchWorldRuntimeError, MatchmakingRepository,
     SeedGenerator, SettlingTrigger,
@@ -26,6 +27,7 @@ pub(super) struct Coordinator {
     pub(super) ids: Arc<dyn IdGenerator>,
     pub(super) seeds: Arc<dyn SeedGenerator>,
     pub(super) versions: MatchVersions,
+    pub(super) events: Arc<dyn MatchEventSink>,
     pub(super) gate: Arc<AttachGate>,
     pub(super) sender: mpsc::Sender<Command>,
     pub(super) runtime: Option<Arc<dyn MatchWorldRuntime>>,
@@ -53,6 +55,7 @@ impl Coordinator {
             ids,
             seeds,
             versions,
+            events: Arc::new(StderrMatchEventSink),
             gate,
             sender,
             runtime: None,
@@ -63,6 +66,11 @@ impl Coordinator {
             pending_settlements: BTreeMap::new(),
             next_order: 0,
         }
+    }
+
+    pub(super) fn with_event_sink(mut self, events: Arc<dyn MatchEventSink>) -> Self {
+        self.events = events;
+        self
     }
 
     pub(super) fn utc_now(&self) -> OffsetDateTime {
@@ -93,6 +101,14 @@ impl Coordinator {
             .replace(self.current.as_ref().map(LiveMatch::gate_snapshot));
     }
 
+    pub(super) fn record_event(&self, event: MatchEvent) {
+        self.events.record(event);
+    }
+
+    pub(super) fn current_match_id(&self) -> Option<Uuid> {
+        self.current.as_ref().map(|current| current.match_id)
+    }
+
     pub(super) fn snapshot_for(&self, account_id: Uuid) -> Option<QueueSnapshot> {
         if let Some(index) = self
             .queue
@@ -109,15 +125,11 @@ impl Coordinator {
                 removed: None,
             });
         }
-        if let Some(current) = self
-            .current
-            .as_ref()
-            .filter(|item| {
-                item.participants
-                    .get(&account_id)
-                    .is_some_and(|participant| !participant.state.is_terminal())
-            })
-        {
+        if let Some(current) = self.current.as_ref().filter(|item| {
+            item.participants
+                .get(&account_id)
+                .is_some_and(|participant| !participant.state.is_terminal())
+        }) {
             return Some(current.snapshot());
         }
         None

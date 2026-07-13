@@ -4,7 +4,8 @@ use super::{
 };
 #[cfg(any(feature = "engine", test))]
 use super::{MatchExtractionNotice, MatchState};
-use crate::ports::{SettlementRepositoryError, TransitionOutcome};
+use crate::observability::{MatchEvent, SettlementOutcome};
+use crate::ports::SettlementRepositoryError;
 
 #[cfg(any(feature = "engine", test))]
 const POST_GRACE_RECONCILIATION_READS: u8 = 3;
@@ -87,6 +88,7 @@ impl Coordinator {
                 post_grace_reads_remaining: POST_GRACE_RECONCILIATION_READS,
             },
         );
+        self.observe_settlement(qualification.match_id, SettlementOutcome::Qualified);
         self.progress_settlement(key).await
     }
 
@@ -126,6 +128,7 @@ impl Coordinator {
             match self.repository.find_settlement(key.0, key.1).await {
                 Ok(Some(record)) => {
                     verify_record(&pending.command, &record)?;
+                    self.observe_settlement(key.0, SettlementOutcome::RecoveredCommitted);
                     return self.complete_settlement(key).await;
                 }
                 Ok(None) => {
@@ -143,19 +146,28 @@ impl Coordinator {
             .commit_settlement(pending.command.clone())
             .await
         {
-            Ok(TransitionOutcome::Applied(record) | TransitionOutcome::AlreadyApplied(record)) => {
+            Ok(outcome) => {
+                let observed = if outcome.was_applied() {
+                    SettlementOutcome::CommitApplied
+                } else {
+                    SettlementOutcome::CommitAlreadyApplied
+                };
+                let record = outcome.into_value();
                 verify_record(&pending.command, &record)?;
+                self.observe_settlement(key.0, observed);
                 self.complete_settlement(key).await
             }
             Err(SettlementRepositoryError::Unavailable) => Ok(()),
             Err(SettlementRepositoryError::OutcomeUnknown) => {
                 pending.read_before_write = true;
                 self.pending_settlements.insert(key, pending);
+                self.observe_settlement(key.0, SettlementOutcome::OutcomeUnknown);
                 Ok(())
             }
             Err(SettlementRepositoryError::WindowClosed) => {
                 pending.read_before_write = true;
                 self.pending_settlements.insert(key, pending);
+                self.observe_settlement(key.0, SettlementOutcome::OutcomeUnknown);
                 Ok(())
             }
             Err(error) => Err(settlement_error(error)),
@@ -195,11 +207,13 @@ impl Coordinator {
         match self.repository.find_settlement(key.0, key.1).await {
             Ok(Some(record)) => {
                 verify_record(&pending.command, &record)?;
+                self.observe_settlement(key.0, SettlementOutcome::RecoveredCommitted);
                 self.complete_settlement(key).await
             }
             Ok(None) => {
                 self.pending_settlements.remove(&key);
                 self.update_local_terminal(key, ParticipantState::Aborted);
+                self.observe_settlement(key.0, SettlementOutcome::ReconciledAbsent);
                 Ok(())
             }
             Err(SettlementRepositoryError::Unavailable) => {
@@ -208,6 +222,7 @@ impl Coordinator {
                 if pending.post_grace_reads_remaining == 0 {
                     self.pending_settlements.remove(&key);
                     self.update_local_terminal(key, ParticipantState::Aborted);
+                    self.observe_settlement(key.0, SettlementOutcome::ReconciliationExhausted);
                 } else {
                     self.pending_settlements.insert(key, pending);
                 }
@@ -229,6 +244,10 @@ impl Coordinator {
             participant.reconnect_deadline = None;
         }
         self.sync_gate();
+    }
+
+    fn observe_settlement(&self, match_id: uuid::Uuid, outcome: SettlementOutcome) {
+        self.record_event(MatchEvent::Settlement { match_id, outcome });
     }
 }
 

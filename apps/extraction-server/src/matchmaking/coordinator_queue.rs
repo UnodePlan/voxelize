@@ -7,6 +7,7 @@ use super::{
     CreatePreparingMatch, FrozenRoster, MatchState, MatchmakingError, ParticipantState,
     QueueSnapshot, QueuedPlayer, MATCH_SIZE,
 };
+use crate::observability::{MatchEvent, ObservedMatchPhase};
 use crate::ports::MatchWorldRuntimeError;
 
 impl Coordinator {
@@ -217,6 +218,10 @@ impl Coordinator {
             current.world_generation = Some(prepared.world_generation);
         }
         self.sync_gate();
+        self.record_event(MatchEvent::PhaseChanged {
+            match_id,
+            phase: ObservedMatchPhase::Preparing,
+        });
         self.snapshot_for(requesting_account)
             .ok_or(MatchmakingError::Unavailable)
     }

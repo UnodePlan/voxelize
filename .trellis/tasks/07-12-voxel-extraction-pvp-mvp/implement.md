@@ -180,7 +180,7 @@ PostgreSQL 结算使用数据库事务时间、5 秒锁超时、15 秒语句超�
 
 ## 阶段 9：产品客户端与 Reown/UI
 
-- [ ] 实现实际登录/大厅/比赛/结果/仓库首屏流程，不制作营销落地页。
+- [x] 实现实际登录/大厅/比赛/结果/仓库首屏流程，不制作营销落地页。
 - [x] 集成 AppKit Ethers adapter、Mainnet 和 SIWE；连接钱包但未认证不能查仓库或排队。
 - [x] HUD 显示稳定 10 心/半心、12 格背包、固定装备、阶段倒计时、挖掘和撤离进度。
 - [x] 死亡结果显示击杀者/存活/资源得失；撤离仅在 commit 后显示永久入账；重新登录可恢复待核对或异常比赛结果。
@@ -196,6 +196,8 @@ PostgreSQL 结算使用数据库事务时间、5 秒锁超时、15 秒语句超�
 当前明确阻断：生产客户端仍未消费 Voxelize 压缩 INIT/UPDATE/LOAD，也没有把键鼠、指针锁、移动、瞄准、挖掘、攻击和丢弃接到真实 300x300 服务端 World。现有 Three 场景只用于 UI 与视觉验证，不能称为实际可玩的对局；第一项必须在阶段 11 的真实世界接入和权威移动闭环完成后才能勾选。
 
 验证记录：客户端 Vitest 22 个文件、154/154 通过；TypeScript、全 extraction ESLint、生产 build 与测试后门扫描通过。Rust `cargo fmt --all -- --check` 与应用 `engine` Clippy `--no-deps -D warnings` 通过；根 Voxelize 仍只有既有 84 条 warning。浏览器逐视口检查无页面横向溢出或不可达操作。真实 PostgreSQL 未配置且未执行 migration。
+
+阶段 11 补充实现（2026-07-13）：比赛 `INIT` 现在创建真实 Voxelize World，协议 Worker 解码并路由 Chunk、Peer、Entity 与生命周期消息；客户端以 20Hz 上限发送移动意图并只转发 World 的 `LOAD/UNLOAD`。指针锁输入接入挖掘、近战、整槽丢弃，服务端权威 PEER 纠正本地预测。离场、策略关闭、重连过期、显式登出、钱包/链变化和替换 INIT 都会幂等销毁旧 World、Worker、监听器、定时器、控制器及实例资源，异步初始化在 dispose 后不能复活。生产构建只链接真实 Core，测试 facade 仅由 Vitest alias 注入并由产物扫描阻断。
 
 验收：Vitest 覆盖钱包/换链注销、revision、心形 HUD、待核对/异常结果；模拟 EIP-1193 provider 断言闭环中从不调用交易方法；生产 build 不含测试后门。
 
@@ -219,13 +221,23 @@ PostgreSQL repository 每次读取使用 `REPEATABLE READ READ ONLY` 快照，�
 
 ## 阶段 11：E2E、观测与发布门禁
 
-- [ ] 在公平 PVP 验收前实现服务端体素碰撞 sweep、重力、落地和跳跃权威；合法速率内的小步穿墙/飞行也必须拒绝。
+- [x] 在公平 PVP 验收前实现服务端体素碰撞 sweep、重力、落地和跳跃权威；合法速率内的小步穿墙/飞行也必须拒绝。
 - [ ] 轻量协议客户端覆盖容量与竞态；每次变更由 2 个 Playwright 浏览器 + 8 个轻量协议客户端组成合法 10 人闭环，10 浏览器完整场景用于 nightly/发布前。
 - [ ] 完整闭环：10 人 -> 挖掘 -> 10 次近战 -> 唯一掉落 -> 自动拾取 -> 8 分钟开放 -> 8 秒撤离 -> 一次入仓。
 - [ ] 覆盖第 11 人、迟到加入、断线重连/被杀/超时、满包、重复消息、DB 故障和 Aborted。
 - [ ] 连续多局检查 worlds、connections、pending ticks、掉落实体与内存不线性增长。
-- [ ] 结构化记录阶段、拒绝、死亡、settlement 和恢复结果，严禁记录签名/token/secret。
+- [x] 结构化记录阶段、拒绝、死亡、settlement 和恢复结果，严禁记录签名/token/secret。
 - [ ] Playwright 检查桌面/移动 HUD 不重叠、canvas 非空、场景移动且资产可见。
+
+实现记录（2026-07-13）：服务端移动只接受有限单位轴、跳跃边沿和视线方向，客户端 position 兼容字段被忽略；服务端以 30/s、burst 6、250ms 失效窗口驱动固定 `0.8 x 1.8 x 0.8` 刚体、6 格/秒、8 跳跃冲量、重力和 Voxelize swept-AABB。完整刚体必须位于 300 边界与高度范围，物理 delta 超过 50ms、3x3 邻区未 Ready、权限失效、死亡或待结算均失败关闭。命名调度 hook 显式保证移动先于玩家 metadata、当前区块、挖掘、默认 Physics/Rapier 同步、战斗与撤离判定；Rapier 与刚体统一使用中心坐标，公开 `PositionComp` 保持 1.62 眼高。
+
+PVP World 显式启用权威 6 Chunk `LOAD` 半径和 96 格玩家/实体可见半径；客户端 center/direction 不参与准入，INIT 与持续投影不再泄露远端 metadata。受限模式每 Tick 向本人定向回传权威 PEER，即使越界回滚后 metadata 未变化也能纠正持续本地预测；稳定广播合并保留消息组首次入队位置，确保进入范围的编码顺序仍为 `JOIN -> PEER`。该边界不是矿石混淆，合法半径内完整体素与历史缓存仍是明确残余风险。新增强类型 JSON 观测事件，只容纳 match ID、固定枚举、时间和计数；容量编排器覆盖 2 browser + 8 protocol 的接口形状与第 11 人拒绝，Rust 内存协调器覆盖真实 10/11 原子规则及连续 5 局 runtime/timer/route 回基线。
+
+验证记录：根引擎 79 个库测试及全部集成测试、应用 `engine` 146 个库测试与 46 个非数据库集成测试、客户端 25 文件 165/165、Core 7 文件 14/14、E2E Actor 2 文件 5/5 全部通过；客户端/Core TypeScript、extraction ESLint、Rust fmt 与应用 Clippy 零新增错误。安装固定 `wasm-pack 0.13.1` 后生成真实 WASM/Core 产物，并以不清空既有 dist 的临时目录完成生产构建，产物不含测试 bridge/facade 标记。桌面 1440x900 与移动 390x844 的生产首屏无重叠、无浏览器错误，canvas 裁剪像素非空且包含数千采样颜色；未配置数据库、未连接 PostgreSQL、未执行 migration。
+
+未完成边界：当前容量 Actor 使用 scripted driver，尚未执行真实 2 Playwright + 8 WebSocket 网络闭环；未跑 10 人完整挖掘/击杀/撤离/入仓、DB 故障、10 浏览器 nightly、RSS/WebGL 多局内存或真实比赛内移动画面，因此对应清单保持未勾选。
+
+文件规模说明：本阶段新增/拆分生产模块均低于 300 行。`apps/extraction-client/src/game/network.ts` 为 304 行，已将 egress、reconnect、decoder 和 router 拆为专责模块，剩余主体是单一 socket 生命周期编排，略超软上限但低于 500 行硬上限；继续为 4 行机械拆分会降低可读性。既有 `server/world/config.rs` 已把构建校验拆入 `config/build.rs`，主体降至约 450 行；既有 `server/world/mod.rs` 当前 2420 行且同目录已有 `SIZE_NOTES.md`，新 LOAD、INIT 与 visibility 逻辑均已拆到小模块，仅通用默认 dispatcher hook 留在聚合文件。测试文件适用规模例外。
 
 验收：受控环境核心闭环全绿，故障不复制永久资产，连续多局无泄漏。
 

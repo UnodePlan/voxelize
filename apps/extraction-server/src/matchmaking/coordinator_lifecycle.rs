@@ -4,6 +4,7 @@ use super::{
     coordinator::{repository_error, runtime_error, Coordinator},
     MatchState, MatchmakingError, ParticipantState,
 };
+use crate::observability::{MatchEvent, ObservedMatchPhase};
 use crate::ports::{MatchWorldRuntime, SettlingTrigger};
 
 pub(super) const WORLD_STOP_TIMEOUT: Duration = Duration::from_secs(2);
@@ -36,6 +37,10 @@ impl Coordinator {
             current.state = stored.record.state;
         }
         self.sync_gate();
+        self.record_event(MatchEvent::PhaseChanged {
+            match_id,
+            phase: ObservedMatchPhase::ExtractionOpen,
+        });
         Ok(())
     }
 
@@ -103,6 +108,10 @@ impl Coordinator {
             }
         }
         self.sync_gate();
+        self.record_event(MatchEvent::PhaseChanged {
+            match_id,
+            phase: ObservedMatchPhase::Settling,
+        });
         Ok(())
     }
 
@@ -120,6 +129,10 @@ impl Coordinator {
             current.state = stored.record.state;
         }
         self.sync_gate();
+        self.record_event(MatchEvent::PhaseChanged {
+            match_id,
+            phase: ObservedMatchPhase::Finished,
+        });
         self.complete_finish().await
     }
 
@@ -164,6 +177,8 @@ impl Coordinator {
         if current.state == MatchState::Finished {
             return self.complete_finish().await;
         }
+        let match_id = current.match_id;
+        let phase_changed = current.state != MatchState::Aborted;
         current.state = MatchState::Aborted;
         current.abort_reason = Some(reason.to_owned());
         if let Some(task) = current.hard_deadline_task.take() {
@@ -177,6 +192,12 @@ impl Coordinator {
             participant.reconnect_deadline = None;
         }
         self.sync_gate();
+        if phase_changed {
+            self.record_event(MatchEvent::PhaseChanged {
+                match_id,
+                phase: ObservedMatchPhase::Aborted,
+            });
+        }
         self.complete_abort().await
     }
 

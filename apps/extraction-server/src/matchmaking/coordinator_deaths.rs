@@ -3,6 +3,7 @@ use super::{
     MatchDeathNotice, MatchState, MatchTimeoutNotice, MatchmakingError, ParticipantDeath,
     ParticipantRecord, ParticipantState, ParticipantTerminalCause, ParticipantTimeout,
 };
+use crate::observability::{ApplyOutcome, MatchEvent, TerminalKind};
 
 impl Coordinator {
     pub(super) async fn apply_death(
@@ -74,15 +75,21 @@ impl Coordinator {
                 participant.despawn_pending = true;
             }
         }
-        let record = self
+        let transition = self
             .repository
             .mark_dead(death.clone())
             .await
-            .map_err(repository_error)?
-            .into_value();
+            .map_err(repository_error)?;
+        let outcome = apply_outcome(&transition);
+        let record = transition.into_value();
         if !record_matches_death(&record, &death) {
             return Err(MatchmakingError::RosterLocked);
         }
+        self.record_event(MatchEvent::ParticipantDeath {
+            match_id: death.match_id,
+            kind: TerminalKind::Melee,
+            outcome,
+        });
         Ok(())
     }
 }
@@ -160,16 +167,35 @@ impl Coordinator {
                 participant.despawn_pending = true;
             }
         }
-        let record = self
+        let transition = self
             .repository
             .mark_timed_out(timeout.clone())
             .await
-            .map_err(repository_error)?
-            .into_value();
+            .map_err(repository_error)?;
+        let outcome = apply_outcome(&transition);
+        let record = transition.into_value();
         if !record_matches_timeout(&record, &timeout) {
             return Err(MatchmakingError::RosterLocked);
         }
+        let kind = match timeout.cause {
+            ParticipantTerminalCause::ReconnectTimeout => TerminalKind::ReconnectTimeout,
+            ParticipantTerminalCause::HardDeadline => TerminalKind::HardDeadline,
+            ParticipantTerminalCause::Melee => return Err(MatchmakingError::RosterLocked),
+        };
+        self.record_event(MatchEvent::ParticipantDeath {
+            match_id: timeout.match_id,
+            kind,
+            outcome,
+        });
         Ok(())
+    }
+}
+
+fn apply_outcome<T>(transition: &crate::ports::TransitionOutcome<T>) -> ApplyOutcome {
+    if transition.was_applied() {
+        ApplyOutcome::Applied
+    } else {
+        ApplyOutcome::AlreadyApplied
     }
 }
 

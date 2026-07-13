@@ -3,6 +3,7 @@ use super::{
     coordinator_lifecycle::{stop_world_once, WORLD_STOP_TIMEOUT},
     MatchState, MatchmakingError, ParticipantState,
 };
+use crate::observability::{MatchEvent, ObservedMatchPhase};
 use crate::ports::SettlingTrigger;
 use std::time::Duration;
 
@@ -172,6 +173,10 @@ impl Coordinator {
             }
         }
         self.sync_gate();
+        self.record_event(MatchEvent::PhaseChanged {
+            match_id,
+            phase: ObservedMatchPhase::Active,
+        });
         if hard_deadline_reached {
             self.dispatch_hard_deadline_now()?;
             return Ok(());
