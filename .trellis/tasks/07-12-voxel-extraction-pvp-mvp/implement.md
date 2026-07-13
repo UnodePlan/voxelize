@@ -203,9 +203,15 @@ PostgreSQL 结算使用数据库事务时间、5 秒锁超时、15 秒语句超�
 
 ## 阶段 10：内部只读运维
 
-- [ ] 提供账号、比赛、participant、settlement、warehouse 和 ledger 的固定只读查询。
-- [ ] 使用独立只读角色、内网/CLI 边界、分页、限流、超时和脱敏访问日志。
-- [ ] 拒绝匿名、普通玩家、写请求、任意 SQL、余额修改和 settlement 重放。
+- [x] 提供账号、比赛、participant、settlement、warehouse 和 ledger 的固定只读查询。
+- [x] 使用独立只读角色、内网/CLI 边界、分页、限流、超时和脱敏访问日志。
+- [x] 拒绝匿名、普通玩家、写请求、任意 SQL、余额修改和 settlement 重放。
+
+实现记录（2026-07-13）：新增默认关闭的独立 `ops` 二进制，只允许绑定 loopback，不接入公开游戏 HTTP listener；固定六类 GET 资源，不提供任意 SQL、修改余额或重放 settlement 的入口。运维 token 至少 32 字节且只保存 SHA-256，Bearer 校验使用常量时间比较；请求采用独立限流、最大 5 秒超时、最大 100 条分页、`no-store` 响应和脱敏 JSON 审计，审计不记录 subject ID、钱包、token、查询参数或 SQL。
+
+PostgreSQL repository 每次读取使用 `REPEATABLE READ READ ONLY` 快照，连接同时设置只读、statement/lock timeout 与固定 search path。启动角色探针要求 `current_user = session_user`，目标七张表全部可 SELECT，并枚举当前登录角色可达的全部直接/间接成员角色，拒绝任何表级或列级写权限、PostgreSQL 预定义 `pg_*` 角色，以及 superuser、createdb、createrole、replication、bypassrls；`default_transaction_read_only` 只作为纵深防护，不能替代数据库最小权限。部署者必须通过独立 `EXTRACTION_OPS_DATABASE_URL` 提供只读账号，本阶段没有创建角色、连接数据库或执行 migration。
+
+验证记录：运维 HTTP 集成测试 5/5，覆盖六类脱敏查询、匿名/玩家 Cookie/错误 token、分页、限流、超时、任意写请求和逐条审计；角色权限判定与 SQL 契约单元测试 2/2。应用全目标 Clippy `--no-deps -D warnings`、新增 Rust 文件定向 rustfmt 与 `git diff --check` 通过。全应用 `cargo fmt -- --check` 仍被本阶段未修改的 `matchmaking/coordinator.rs` 既有排版差异阻塞，未顺带修改。当前没有 `TEST_DATABASE_URL/DATABASE_URL` 授权，因此不声称真实 PostgreSQL 角色探针已执行；上线前必须在受控环境验证探针接受只读角色并拒绝表级、列级和继承写权限。所有新增生产文件低于 300 行，451 行 HTTP 测试适用测试文件规模例外。
 
 验收：授权查询成功，所有写入尝试失败且访问有不泄密的审计记录。
 

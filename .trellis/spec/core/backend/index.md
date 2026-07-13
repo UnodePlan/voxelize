@@ -27,6 +27,7 @@ This directory contains guidelines for backend development. Fill in each file wi
 | [Authoritative Match Mining](./authoritative-mining.md) | Strict mining intents, server timing/raycast, atomic harvest, AIR ordering, and full progress snapshots | Active |
 | [Authoritative Match Combat](./authoritative-combat.md) | Half-heart health, server-selected melee targets, terminal inventory drops, timeout arbitration, and death persistence | Active |
 | [Authoritative Extraction and Settlement](./authoritative-extraction-settlement.md) | Extraction qualification, hard-deadline sealing, atomic settlement, reconciliation, results, and warehouse projections | Active |
+| [Internal Read-Only Operations](./internal-read-only-operations.md) | Isolated loopback listener, fixed projections, credential boundary, role probe, and redacted audit contracts | Active |
 
 ---
 
