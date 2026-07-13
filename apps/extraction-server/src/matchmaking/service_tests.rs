@@ -24,6 +24,14 @@ use crate::{
 
 const TEST_WORLD_GENERATION: &str = "test-world-generation";
 
+#[test]
+fn empty_persisted_resource_counts_decode_as_zeroes() {
+    assert_eq!(
+        serde_json::from_str::<ParticipantResourceCounts>("{}").unwrap(),
+        ParticipantResourceCounts::default()
+    );
+}
+
 #[tokio::test]
 async fn queue_fails_closed_until_world_runtime_is_bound() {
     let account_id = accounts(1)[0];
@@ -464,8 +472,9 @@ async fn activation_returning_after_hard_deadline_never_opens_gameplay() {
     );
     assert_eq!(
         harness.service.enqueue(accounts[0]).await.unwrap().status,
-        QueueStatus::Settling
+        QueueStatus::Queued
     );
+    assert_eq!(harness.runtime.spec_count(), 1);
     assert!(!harness.service.allows_attach(
         &spec.world_name,
         TEST_WORLD_GENERATION,
@@ -630,7 +639,423 @@ async fn rebind_admitted_before_deadline_commits_after_deadline() {
 }
 
 #[tokio::test]
-async fn timeout_failure_does_not_strand_other_expired_participants() {
+async fn death_notice_persists_stats_and_evicts_online_participant() {
+    let harness = Harness::new().await;
+    let accounts = accounts(MATCH_SIZE);
+    harness.connect_all(&accounts).await;
+    for account_id in &accounts {
+        harness.service.enqueue(*account_id).await.unwrap();
+    }
+    let spec = harness.runtime.only_spec();
+    harness.join_all(&accounts, &spec.world_name).await;
+    let death = participant_death(&spec, accounts[0], accounts[1]);
+
+    assert!(harness.service.observe_death(MatchDeathNotice {
+        world_name: spec.world_name.clone(),
+        world_generation: TEST_WORLD_GENERATION.to_owned(),
+        death: death.clone(),
+    }));
+    harness.service.tick().await.unwrap();
+
+    let stored = harness.repository.only_match();
+    let victim = stored
+        .participants
+        .iter()
+        .find(|participant| participant.account_id == accounts[0])
+        .unwrap();
+    assert_eq!(victim.state, ParticipantState::Dead);
+    assert_eq!(victim.killed_by_account_id, Some(accounts[1]));
+    assert_eq!(victim.stats, death.stats);
+    assert_eq!(victim.reconnect_deadline, None);
+    assert_eq!(harness.runtime.eviction_count(accounts[0]), 1);
+    assert_eq!(harness.runtime.despawn_count(accounts[0]), 0);
+    assert!(matches!(
+        harness.repository.mark_dead(death.clone()).await.unwrap(),
+        TransitionOutcome::AlreadyApplied(_)
+    ));
+
+    let conflicting = ParticipantDeath {
+        killer_account_id: accounts[2],
+        ..death
+    };
+    assert_eq!(
+        harness.repository.mark_dead(conflicting).await,
+        Err(MatchRepositoryError::Conflict)
+    );
+}
+
+#[tokio::test]
+async fn disconnected_death_retries_failed_runtime_eviction() {
+    let harness = Harness::new().await;
+    let accounts = accounts(MATCH_SIZE);
+    harness.connect_all(&accounts).await;
+    for account_id in &accounts {
+        harness.service.enqueue(*account_id).await.unwrap();
+    }
+    let spec = harness.runtime.only_spec();
+    harness.join_all(&accounts, &spec.world_name).await;
+    harness
+        .service
+        .apply_connection_event(MatchConnectionEvent::Disconnected {
+            connection_id: connection_id(0),
+            account_id: accounts[0],
+            observed_at: harness.clock.monotonic_now(),
+            world_name: Some(spec.world_name.clone()),
+            world_generation: Some(TEST_WORLD_GENERATION.to_owned()),
+            client_id: Some(public_player_id(&spec, accounts[0])),
+            attach_attempt_id: Some("join-attempt-0".to_owned()),
+        })
+        .await
+        .unwrap();
+    assert!(harness.service.allows_attach(
+        &spec.world_name,
+        TEST_WORLD_GENERATION,
+        &public_player_id(&spec, accounts[0]),
+        "rebind-before-death",
+        accounts[0],
+        MatchAttachKind::Rebind,
+    ));
+    harness.runtime.fail_next_evict();
+
+    assert!(harness.service.observe_death(MatchDeathNotice {
+        world_name: spec.world_name.clone(),
+        world_generation: TEST_WORLD_GENERATION.to_owned(),
+        death: participant_death(&spec, accounts[0], accounts[1]),
+    }));
+    harness.service.tick().await.unwrap();
+
+    let stored = harness.repository.only_match();
+    assert_eq!(stored.participants[0].state, ParticipantState::Dead);
+    assert_eq!(harness.runtime.eviction_count(accounts[0]), 1);
+    assert_eq!(harness.runtime.despawn_count(accounts[0]), 0);
+    assert!(!harness.service.allows_attach(
+        &spec.world_name,
+        TEST_WORLD_GENERATION,
+        &public_player_id(&spec, accounts[0]),
+        "rebind-after-death",
+        accounts[0],
+        MatchAttachKind::Rebind,
+    ));
+}
+
+#[tokio::test]
+async fn hanging_death_eviction_times_out_and_retries_without_blocking_coordinator() {
+    let harness = Harness::new().await;
+    let accounts = accounts(MATCH_SIZE);
+    harness.connect_all(&accounts).await;
+    for account_id in &accounts {
+        harness.service.enqueue(*account_id).await.unwrap();
+    }
+    let spec = harness.runtime.only_spec();
+    harness.join_all(&accounts, &spec.world_name).await;
+    harness.runtime.hang_next_evict();
+
+    assert!(harness.service.observe_death(MatchDeathNotice {
+        world_name: spec.world_name.clone(),
+        world_generation: TEST_WORLD_GENERATION.to_owned(),
+        death: participant_death(&spec, accounts[0], accounts[1]),
+    }));
+    harness.service.tick().await.unwrap();
+
+    assert_eq!(
+        harness.repository.only_match().participants[0].state,
+        ParticipantState::Dead
+    );
+    assert_eq!(harness.runtime.eviction_count(accounts[0]), 1);
+}
+
+#[tokio::test]
+async fn death_persistence_failure_stays_failed_closed_without_preparing_an_unjoinable_world() {
+    let harness = Harness::new().await;
+    let accounts = accounts(MATCH_SIZE);
+    harness.connect_all(&accounts).await;
+    for account_id in &accounts {
+        harness.service.enqueue(*account_id).await.unwrap();
+    }
+    let spec = harness.runtime.only_spec();
+    harness.join_all(&accounts, &spec.world_name).await;
+    harness.repository.fail_next_mark_dead();
+
+    assert!(harness.service.observe_death(MatchDeathNotice {
+        world_name: spec.world_name.clone(),
+        world_generation: TEST_WORLD_GENERATION.to_owned(),
+        death: participant_death(&spec, accounts[0], accounts[1]),
+    }));
+    assert_eq!(
+        harness.service.tick().await,
+        Err(MatchmakingError::Unavailable)
+    );
+
+    assert_eq!(harness.runtime.spec_count(), 1);
+    assert_eq!(
+        harness.repository.only_match().record.state,
+        MatchState::Aborted
+    );
+    assert_eq!(
+        harness.service.enqueue(accounts[0]).await,
+        Err(MatchmakingError::Unavailable)
+    );
+}
+
+#[tokio::test]
+async fn failed_closed_abort_retries_cleanup_before_refusing_new_prepare() {
+    let harness = Harness::new().await;
+    let accounts = accounts(MATCH_SIZE);
+    harness.connect_all(&accounts).await;
+    for account_id in &accounts {
+        harness.service.enqueue(*account_id).await.unwrap();
+    }
+    let spec = harness.runtime.only_spec();
+    harness.join_all(&accounts, &spec.world_name).await;
+    harness.repository.fail_next_mark_dead();
+    harness.runtime.fail_next_stop();
+
+    assert!(harness.service.observe_death(MatchDeathNotice {
+        world_name: spec.world_name.clone(),
+        world_generation: TEST_WORLD_GENERATION.to_owned(),
+        death: participant_death(&spec, accounts[0], accounts[1]),
+    }));
+    harness.service.tick().await.unwrap();
+
+    assert_eq!(harness.runtime.stop_count(), 1);
+    assert_eq!(
+        harness.repository.only_match().record.state,
+        MatchState::Aborted
+    );
+    assert_eq!(harness.runtime.spec_count(), 1);
+    assert_eq!(
+        harness.service.tick().await,
+        Err(MatchmakingError::Unavailable)
+    );
+    assert_eq!(harness.runtime.spec_count(), 1);
+}
+
+#[tokio::test]
+async fn stale_world_death_notice_cannot_mutate_current_match() {
+    let harness = Harness::new().await;
+    let accounts = accounts(MATCH_SIZE);
+    harness.connect_all(&accounts).await;
+    for account_id in &accounts {
+        harness.service.enqueue(*account_id).await.unwrap();
+    }
+    let spec = harness.runtime.only_spec();
+    harness.join_all(&accounts, &spec.world_name).await;
+
+    assert!(harness.service.observe_death(MatchDeathNotice {
+        world_name: spec.world_name.clone(),
+        world_generation: "stale-generation".to_owned(),
+        death: participant_death(&spec, accounts[0], accounts[1]),
+    }));
+    harness.service.tick().await.unwrap();
+
+    assert_eq!(
+        harness.repository.only_match().participants[0].state,
+        ParticipantState::Active
+    );
+    assert_eq!(harness.runtime.eviction_count(accounts[0]), 0);
+}
+
+#[tokio::test]
+async fn dead_participant_can_queue_and_cancel_without_restoring_old_seat() {
+    let harness = Harness::new().await;
+    let accounts = accounts(MATCH_SIZE + 1);
+    harness.connect_all(&accounts).await;
+    for account_id in accounts.iter().take(MATCH_SIZE) {
+        harness.service.enqueue(*account_id).await.unwrap();
+    }
+    let spec = harness.runtime.only_spec();
+    harness
+        .join_all(&accounts[..MATCH_SIZE], &spec.world_name)
+        .await;
+
+    assert!(harness.service.observe_death(MatchDeathNotice {
+        world_name: spec.world_name.clone(),
+        world_generation: TEST_WORLD_GENERATION.to_owned(),
+        death: participant_death(&spec, accounts[0], accounts[1]),
+    }));
+    let queued = harness.service.enqueue(accounts[0]).await.unwrap();
+    assert_eq!(queued.status, QueueStatus::Queued);
+    assert_eq!(queued.position, Some(1));
+    assert_eq!(queued.match_id, None);
+    assert_eq!(harness.runtime.spec_count(), 1);
+
+    let repeated = harness.service.enqueue(accounts[0]).await.unwrap();
+    assert_eq!(repeated.status, QueueStatus::Queued);
+    assert_eq!(repeated.position, Some(1));
+    assert_eq!(
+        harness.service.enqueue(accounts[1]).await.unwrap().status,
+        QueueStatus::Active
+    );
+    assert_eq!(
+        harness.service.enqueue(accounts[MATCH_SIZE]).await,
+        Err(MatchmakingError::Full)
+    );
+
+    let cancelled = harness.service.cancel(accounts[0]).await.unwrap();
+    assert_eq!(cancelled.status, QueueStatus::Idle);
+    assert_eq!(cancelled.removed, Some(true));
+    let requeued = harness.service.enqueue(accounts[0]).await.unwrap();
+    assert_eq!(requeued.status, QueueStatus::Queued);
+    assert_eq!(requeued.position, Some(1));
+    assert_eq!(
+        harness.repository.only_match().record.state,
+        MatchState::Active
+    );
+}
+
+#[tokio::test]
+async fn timed_out_participant_persists_stats_evicts_and_can_queue_again() {
+    let harness = Harness::new().await;
+    let accounts = accounts(MATCH_SIZE);
+    harness.connect_all(&accounts).await;
+    for account_id in &accounts {
+        harness.service.enqueue(*account_id).await.unwrap();
+    }
+    let spec = harness.runtime.only_spec();
+    harness.join_all(&accounts, &spec.world_name).await;
+    harness
+        .service
+        .apply_connection_event(MatchConnectionEvent::Connected {
+            connection_id: "account-0-lobby".to_owned(),
+            account_id: accounts[0],
+        })
+        .await
+        .unwrap();
+    harness
+        .service
+        .apply_connection_event(MatchConnectionEvent::Disconnected {
+            connection_id: connection_id(0),
+            account_id: accounts[0],
+            observed_at: harness.clock.monotonic_now(),
+            world_name: Some(spec.world_name.clone()),
+            world_generation: Some(TEST_WORLD_GENERATION.to_owned()),
+            client_id: Some(public_player_id(&spec, accounts[0])),
+            attach_attempt_id: Some("join-attempt-0".to_owned()),
+        })
+        .await
+        .unwrap();
+    harness.clock.advance(StdDuration::from_secs(60));
+
+    let timeout = participant_timeout(&spec, accounts[0]);
+    assert!(harness
+        .service
+        .observe_timeout_elimination(MatchTimeoutNotice {
+            world_name: spec.world_name.clone(),
+            world_generation: TEST_WORLD_GENERATION.to_owned(),
+            timeout: timeout.clone(),
+        }));
+    let queued = harness.service.enqueue(accounts[0]).await.unwrap();
+
+    assert_eq!(queued.status, QueueStatus::Queued);
+    assert_eq!(queued.position, Some(1));
+    assert_eq!(queued.match_id, None);
+    assert_eq!(harness.runtime.spec_count(), 1);
+    let stored = harness.repository.only_match();
+    assert_eq!(stored.participants[0].state, ParticipantState::TimedOut);
+    assert_eq!(stored.participants[0].stats, timeout.stats);
+    assert_eq!(stored.participants[0].killed_by_account_id, None);
+    assert_eq!(harness.runtime.eviction_count(accounts[0]), 1);
+    assert!(!harness.service.allows_attach(
+        &spec.world_name,
+        TEST_WORLD_GENERATION,
+        &public_player_id(&spec, accounts[0]),
+        "rebind-after-timeout",
+        accounts[0],
+        MatchAttachKind::Rebind,
+    ));
+    assert!(matches!(
+        harness
+            .repository
+            .mark_timed_out(timeout.clone(), harness.clock.utc_now().into())
+            .await
+            .unwrap(),
+        TransitionOutcome::AlreadyApplied(_)
+    ));
+    assert_eq!(
+        harness
+            .repository
+            .mark_timed_out(
+                ParticipantTimeout {
+                    stats: ParticipantMatchStats::default(),
+                    ..timeout
+                },
+                harness.clock.utc_now().into(),
+            )
+            .await,
+        Err(MatchRepositoryError::Conflict)
+    );
+}
+
+#[tokio::test]
+async fn stale_world_timeout_notice_cannot_mutate_current_match() {
+    let harness = Harness::new().await;
+    let accounts = accounts(MATCH_SIZE);
+    harness.connect_all(&accounts).await;
+    for account_id in &accounts {
+        harness.service.enqueue(*account_id).await.unwrap();
+    }
+    let spec = harness.runtime.only_spec();
+    harness.join_all(&accounts, &spec.world_name).await;
+
+    assert!(harness
+        .service
+        .observe_timeout_elimination(MatchTimeoutNotice {
+            world_name: spec.world_name.clone(),
+            world_generation: "stale-generation".to_owned(),
+            timeout: participant_timeout(&spec, accounts[0]),
+        }));
+    harness.service.tick().await.unwrap();
+
+    assert_eq!(
+        harness.repository.only_match().participants[0].state,
+        ParticipantState::Active
+    );
+    assert_eq!(harness.runtime.eviction_count(accounts[0]), 0);
+}
+
+#[tokio::test]
+async fn full_terminal_queue_waits_until_old_world_finishes_before_preparing() {
+    let harness = Harness::new().await;
+    let accounts = accounts(MATCH_SIZE);
+    harness.connect_all(&accounts).await;
+    for account_id in &accounts {
+        harness.service.enqueue(*account_id).await.unwrap();
+    }
+    let spec = harness.runtime.only_spec();
+    let old_match_id = spec.match_id;
+    harness.join_all(&accounts, &spec.world_name).await;
+
+    for (index, victim_account_id) in accounts.iter().copied().enumerate() {
+        let killer_account_id = accounts[(index + 1) % MATCH_SIZE];
+        assert!(harness.service.observe_death(MatchDeathNotice {
+            world_name: spec.world_name.clone(),
+            world_generation: TEST_WORLD_GENERATION.to_owned(),
+            death: participant_death(&spec, victim_account_id, killer_account_id),
+        }));
+        let queued = harness.service.enqueue(victim_account_id).await.unwrap();
+        assert_eq!(queued.status, QueueStatus::Queued);
+        assert_eq!(queued.position, Some(index + 1));
+    }
+
+    assert_eq!(harness.runtime.spec_count(), 1);
+    assert_eq!(
+        harness.service.enqueue(accounts[0]).await.unwrap().status,
+        QueueStatus::Queued
+    );
+    harness.service.tick().await.unwrap();
+    assert_eq!(harness.runtime.spec_count(), 1);
+    assert_eq!(harness.runtime.stop_count(), 1);
+
+    harness.service.tick().await.unwrap();
+    let preparing = harness.service.enqueue(accounts[0]).await.unwrap();
+    assert_eq!(preparing.status, QueueStatus::Preparing);
+    assert_ne!(preparing.match_id, Some(old_match_id));
+    assert_eq!(harness.runtime.spec_count(), 2);
+    assert_eq!(harness.repository.match_count(), 2);
+}
+
+#[tokio::test]
+async fn reconnect_timeout_requests_world_asset_elimination_before_persistence() {
     let harness = Harness::new().await;
     let accounts = accounts(10);
     harness.connect_all(&accounts).await;
@@ -656,27 +1081,21 @@ async fn timeout_failure_does_not_strand_other_expired_participants() {
     }
 
     harness.clock.advance(StdDuration::from_secs(60));
-    harness.repository.fail_next_time_out();
-    assert_eq!(
-        harness.service.tick().await,
-        Err(MatchmakingError::Unavailable)
-    );
     harness.service.tick().await.unwrap();
 
     let stored = harness.repository.only_match();
-    for account_id in accounts.iter().take(2) {
-        let participant = stored
-            .participants
-            .iter()
-            .find(|participant| participant.account_id == *account_id)
-            .unwrap();
-        assert_eq!(participant.state, ParticipantState::TimedOut);
-        assert_eq!(harness.runtime.despawn_count(*account_id), 1);
-    }
+    assert_eq!(stored.record.state, MatchState::Active);
+    assert_eq!(stored.participants[0].state, ParticipantState::Disconnected);
+    assert_eq!(stored.participants[1].state, ParticipantState::Disconnected);
+    assert_eq!(harness.runtime.timeout_elimination_count(accounts[0]), 1);
+    assert_eq!(harness.runtime.timeout_elimination_count(accounts[1]), 1);
+    assert_eq!(harness.runtime.stop_count(), 0);
+    assert_eq!(harness.runtime.eviction_count(accounts[0]), 0);
+    assert_eq!(harness.runtime.eviction_count(accounts[1]), 0);
 }
 
 #[tokio::test]
-async fn reconnect_boundary_and_absolute_match_deadlines_are_exact() {
+async fn reconnect_boundary_enqueues_timeout_elimination_at_exact_deadline() {
     let harness = Harness::new().await;
     let accounts = accounts(10);
     harness.connect_all(&accounts).await;
@@ -751,34 +1170,13 @@ async fn reconnect_boundary_and_absolute_match_deadlines_are_exact() {
         .await
         .unwrap();
     harness.service.tick().await.unwrap();
-    harness.service.tick().await.unwrap();
-    assert_eq!(harness.runtime.despawn_count(accounts[0]), 1);
-
-    harness.clock.set(StdDuration::from_secs(8 * 60));
-    harness.service.tick().await.unwrap();
-    assert_eq!(
-        harness.service.enqueue(accounts[1]).await.unwrap().status,
-        QueueStatus::ExtractionOpen
-    );
-    harness.clock.set(StdDuration::from_secs(12 * 60));
-    harness.service.tick().await.unwrap();
-    assert_eq!(harness.runtime.stop_count(), 1);
+    assert_eq!(harness.runtime.stop_count(), 0);
     assert_eq!(
         harness.repository.only_match().record.state,
-        MatchState::Finished
+        MatchState::Active
     );
-
-    harness
-        .service
-        .apply_connection_event(MatchConnectionEvent::Connected {
-            connection_id: "connection-0-next-match".to_owned(),
-            account_id: accounts[0],
-        })
-        .await
-        .unwrap();
-    let next = harness.service.enqueue(accounts[0]).await.unwrap();
-    assert_eq!(next.status, QueueStatus::Queued);
-    assert_eq!(next.position, Some(1));
+    assert_eq!(harness.runtime.timeout_elimination_count(accounts[0]), 1);
+    assert_eq!(harness.runtime.eviction_count(accounts[0]), 0);
 }
 
 #[tokio::test]
@@ -913,6 +1311,47 @@ fn public_player_id(spec: &MatchWorldSpec, account_id: Uuid) -> String {
         .to_string()
 }
 
+fn participant_death(
+    spec: &MatchWorldSpec,
+    victim_account_id: Uuid,
+    killer_account_id: Uuid,
+) -> ParticipantDeath {
+    ParticipantDeath {
+        match_id: spec.match_id,
+        victim_account_id,
+        killer_account_id,
+        stats: participant_stats(),
+    }
+}
+
+fn participant_timeout(spec: &MatchWorldSpec, account_id: Uuid) -> ParticipantTimeout {
+    ParticipantTimeout {
+        match_id: spec.match_id,
+        account_id,
+        stats: participant_stats(),
+    }
+}
+
+fn participant_stats() -> ParticipantMatchStats {
+    ParticipantMatchStats {
+        mined: ParticipantResourceCounts {
+            dirt: 12,
+            gold: 3,
+            diamond: 1,
+        },
+        picked_up: ParticipantResourceCounts {
+            dirt: 2,
+            gold: 5,
+            diamond: 1,
+        },
+        lost: ParticipantResourceCounts {
+            dirt: 14,
+            gold: 8,
+            diamond: 2,
+        },
+    }
+}
+
 #[derive(Default)]
 struct ManualClock {
     millis: AtomicU64,
@@ -964,6 +1403,11 @@ struct MemoryWorldRuntime {
     specs: Mutex<Vec<MatchWorldSpec>>,
     stops: Mutex<Vec<String>>,
     despawns: Mutex<HashMap<Uuid, usize>>,
+    evictions: Mutex<HashMap<Uuid, usize>>,
+    timeout_eliminations: Mutex<HashMap<Uuid, usize>>,
+    fail_next_evict: AtomicBool,
+    hang_next_evict: AtomicBool,
+    fail_next_stop: AtomicBool,
     hang_stop: AtomicBool,
 }
 
@@ -990,6 +1434,36 @@ impl MemoryWorldRuntime {
             .copied()
             .unwrap_or_default()
     }
+
+    fn eviction_count(&self, account_id: Uuid) -> usize {
+        self.evictions
+            .lock()
+            .unwrap()
+            .get(&account_id)
+            .copied()
+            .unwrap_or_default()
+    }
+
+    fn fail_next_evict(&self) {
+        self.fail_next_evict.store(true, Ordering::SeqCst);
+    }
+
+    fn hang_next_evict(&self) {
+        self.hang_next_evict.store(true, Ordering::SeqCst);
+    }
+
+    fn fail_next_stop(&self) {
+        self.fail_next_stop.store(true, Ordering::SeqCst);
+    }
+
+    fn timeout_elimination_count(&self, account_id: Uuid) -> usize {
+        self.timeout_eliminations
+            .lock()
+            .unwrap()
+            .get(&account_id)
+            .copied()
+            .unwrap_or_default()
+    }
 }
 
 #[async_trait]
@@ -1009,6 +1483,9 @@ impl MatchWorldRuntime for MemoryWorldRuntime {
         _match_id: Uuid,
         world_name: &str,
     ) -> Result<bool, MatchWorldRuntimeError> {
+        if self.fail_next_stop.swap(false, Ordering::SeqCst) {
+            return Err(MatchWorldRuntimeError::Unavailable);
+        }
         if self.hang_stop.load(Ordering::SeqCst) {
             std::future::pending::<()>().await;
         }
@@ -1024,6 +1501,40 @@ impl MatchWorldRuntime for MemoryWorldRuntime {
         *self.despawns.lock().unwrap().entry(account_id).or_default() += 1;
         Ok(true)
     }
+
+    async fn evict_participant(
+        &self,
+        _world_name: &str,
+        account_id: Uuid,
+    ) -> Result<bool, MatchWorldRuntimeError> {
+        if self.hang_next_evict.swap(false, Ordering::SeqCst) {
+            std::future::pending::<()>().await;
+        }
+        if self.fail_next_evict.swap(false, Ordering::SeqCst) {
+            return Err(MatchWorldRuntimeError::Unavailable);
+        }
+        *self
+            .evictions
+            .lock()
+            .unwrap()
+            .entry(account_id)
+            .or_default() += 1;
+        Ok(true)
+    }
+
+    async fn request_timeout_elimination(
+        &self,
+        _world_name: &str,
+        account_id: Uuid,
+    ) -> Result<bool, MatchWorldRuntimeError> {
+        *self
+            .timeout_eliminations
+            .lock()
+            .unwrap()
+            .entry(account_id)
+            .or_default() += 1;
+        Ok(true)
+    }
 }
 
 #[derive(Default)]
@@ -1032,7 +1543,7 @@ struct MemoryMatchRepository {
     activate_hook: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
     fail_create_after_store: AtomicBool,
     fail_begin_settling: AtomicBool,
-    fail_time_out: AtomicBool,
+    fail_mark_dead: AtomicBool,
 }
 
 impl MemoryMatchRepository {
@@ -1054,8 +1565,8 @@ impl MemoryMatchRepository {
         self.fail_begin_settling.store(true, Ordering::SeqCst);
     }
 
-    fn fail_next_time_out(&self) {
-        self.fail_time_out.store(true, Ordering::SeqCst);
+    fn fail_next_mark_dead(&self) {
+        self.fail_mark_dead.store(true, Ordering::SeqCst);
     }
 
     fn match_count(&self) -> usize {
@@ -1103,6 +1614,7 @@ impl MatchRepository for MemoryMatchRepository {
                 enqueued_at: seat.enqueued_at,
                 reconnect_deadline: None,
                 killed_by_account_id: None,
+                stats: ParticipantMatchStats::default(),
                 extracted_at: None,
                 settlement_qualified_at: None,
             })
@@ -1266,27 +1778,96 @@ impl MatchRepository for MemoryMatchRepository {
         })
     }
 
-    async fn time_out(
+    async fn mark_dead(
         &self,
-        match_id: Uuid,
-        account_id: Uuid,
-        at: OffsetDateTime,
+        death: ParticipantDeath,
     ) -> Result<TransitionOutcome<ParticipantRecord>, MatchRepositoryError> {
-        if self.fail_time_out.swap(false, Ordering::SeqCst) {
+        if self.fail_mark_dead.swap(false, Ordering::SeqCst) {
             return Err(MatchRepositoryError::Unavailable);
         }
-        self.update(match_id, |stored| {
-            let participant = participant_mut(stored, account_id)?;
-            if participant.state == ParticipantState::Disconnected
-                && participant
-                    .reconnect_deadline
-                    .is_some_and(|deadline| at >= deadline)
+        if !death.is_valid() {
+            return Err(MatchRepositoryError::Conflict);
+        }
+        let mut matches = self.matches.lock().unwrap();
+        let stored = matches
+            .get_mut(&death.match_id)
+            .ok_or(MatchRepositoryError::Conflict)?;
+        let match_is_live = matches!(
+            stored.record.state,
+            MatchState::Active | MatchState::ExtractionOpen
+        );
+        if !stored
+            .participants
+            .iter()
+            .any(|participant| participant.account_id == death.killer_account_id)
+        {
+            return Err(MatchRepositoryError::Conflict);
+        }
+        let participant = participant_mut(stored, death.victim_account_id)?;
+        if participant.state == ParticipantState::Dead {
+            return if participant.killed_by_account_id == Some(death.killer_account_id)
+                && participant.stats == death.stats
+                && participant.reconnect_deadline.is_none()
             {
-                participant.state = ParticipantState::TimedOut;
-                participant.reconnect_deadline = None;
-            }
-            Ok(participant.clone())
-        })
+                Ok(TransitionOutcome::AlreadyApplied(participant.clone()))
+            } else {
+                Err(MatchRepositoryError::Conflict)
+            };
+        }
+        if !match_is_live {
+            return Err(MatchRepositoryError::Conflict);
+        }
+        participant
+            .state
+            .transition_to(ParticipantState::Dead)
+            .map_err(|_| MatchRepositoryError::Conflict)?;
+        participant.state = ParticipantState::Dead;
+        participant.reconnect_deadline = None;
+        participant.killed_by_account_id = Some(death.killer_account_id);
+        participant.stats = death.stats;
+        Ok(TransitionOutcome::Applied(participant.clone()))
+    }
+
+    async fn mark_timed_out(
+        &self,
+        timeout: ParticipantTimeout,
+        at: OffsetDateTime,
+    ) -> Result<TransitionOutcome<ParticipantRecord>, MatchRepositoryError> {
+        if !timeout.is_valid() {
+            return Err(MatchRepositoryError::Conflict);
+        }
+        let mut matches = self.matches.lock().unwrap();
+        let stored = matches
+            .get_mut(&timeout.match_id)
+            .ok_or(MatchRepositoryError::Conflict)?;
+        let match_is_live = matches!(
+            stored.record.state,
+            MatchState::Active | MatchState::ExtractionOpen
+        );
+        let participant = participant_mut(stored, timeout.account_id)?;
+        if participant.state == ParticipantState::TimedOut {
+            return if participant.killed_by_account_id.is_none()
+                && participant.stats == timeout.stats
+                && participant.reconnect_deadline.is_none()
+            {
+                Ok(TransitionOutcome::AlreadyApplied(participant.clone()))
+            } else {
+                Err(MatchRepositoryError::Conflict)
+            };
+        }
+        if !match_is_live
+            || participant.state != ParticipantState::Disconnected
+            || participant
+                .reconnect_deadline
+                .is_none_or(|deadline| at < deadline)
+        {
+            return Err(MatchRepositoryError::Conflict);
+        }
+        participant.state = ParticipantState::TimedOut;
+        participant.reconnect_deadline = None;
+        participant.killed_by_account_id = None;
+        participant.stats = timeout.stats;
+        Ok(TransitionOutcome::Applied(participant.clone()))
     }
 
     async fn open_extraction(

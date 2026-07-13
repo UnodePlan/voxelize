@@ -4,6 +4,8 @@ use tokio::sync::oneshot;
 use uuid::Uuid;
 
 use super::{MatchConnectionEvent, MatchmakingError, QueueSnapshot};
+#[cfg(any(feature = "engine", test))]
+use super::{MatchDeathNotice, MatchTimeoutNotice};
 use crate::ports::MatchWorldRuntime;
 
 pub(super) enum Command {
@@ -22,6 +24,14 @@ pub(super) enum Command {
     Connection {
         event: MatchConnectionEvent,
         reply: Option<oneshot::Sender<Result<(), MatchmakingError>>>,
+    },
+    #[cfg(any(feature = "engine", test))]
+    Death {
+        notice: MatchDeathNotice,
+    },
+    #[cfg(any(feature = "engine", test))]
+    TimeoutElimination {
+        notice: MatchTimeoutNotice,
     },
     Tick {
         reply: Option<oneshot::Sender<Result<(), MatchmakingError>>>,

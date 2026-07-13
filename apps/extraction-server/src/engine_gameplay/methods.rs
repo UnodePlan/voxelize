@@ -1,25 +1,23 @@
-use serde::Deserialize;
 use serde_json::Value;
 use voxelize::{MessageQueues, World};
 
 use super::mining_method::install_mining_method;
 use super::{
+    attack_method::install_attack_method,
     authority::GameplayAuthority,
-    components::{FixedEquipmentComp, MatchPlayerComp, MiningComp, ResourceInventoryComp},
+    components::{EliminationComp, MatchPlayerComp},
     intents::{DropSlotIntentQueue, QueuedDropSlotIntent},
-    messaging::{queue_error, queue_ok, PlayerGameplayState},
+    messaging::queue_error,
     runtime::GameplayRuntimeContext,
+    state_method::install_state_method,
 };
 use crate::contracts::{decode_drop_slot_intent, decode_protocol_envelope, ErrorCode};
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct EmptyPayload {}
-
 pub(super) fn install_gameplay_methods(world: &mut World) {
     world.set_method_handle("pvp:v1:drop-slot", handle_drop_slot);
-    world.set_method_handle("pvp:v1:get-state", handle_get_state);
+    install_state_method(world);
     install_mining_method(world);
+    install_attack_method(world);
 }
 
 fn handle_drop_slot(world: &mut World, client_id: &str, payload: &str) {
@@ -68,6 +66,10 @@ fn handle_drop_slot(world: &mut World, client_id: &str, payload: &str) {
         .read_component::<MatchPlayerComp>()
         .get(entity)
         .is_none()
+        || world
+            .read_component::<EliminationComp>()
+            .get(entity)
+            .is_none_or(|state| state.record().is_some())
     {
         send_error(
             world,
@@ -100,80 +102,6 @@ fn handle_drop_slot(world: &mut World, client_id: &str, payload: &str) {
             ErrorCode::ServiceUnavailable,
             true,
         );
-    }
-}
-
-fn handle_get_state(world: &mut World, client_id: &str, payload: &str) {
-    let context = {
-        let context = world.read_resource::<GameplayRuntimeContext>();
-        (*context).clone()
-    };
-    let envelope = match decode_envelope(payload, &context) {
-        Ok(envelope) => envelope,
-        Err(error) => {
-            send_decode_error(world, &context, client_id, error);
-            return;
-        }
-    };
-    let request_id = envelope.request_id();
-    if envelope.decode_intent::<EmptyPayload>().is_err() {
-        send_error(
-            world,
-            &context,
-            client_id,
-            request_id,
-            ErrorCode::RequestMalformed,
-            false,
-        );
-        return;
-    }
-    let authority = {
-        let authority = world.read_resource::<GameplayAuthority>();
-        (*authority).clone()
-    };
-    if authority.authorize_client(world, client_id).is_none() {
-        send_error(
-            world,
-            &context,
-            client_id,
-            request_id,
-            ErrorCode::GameInvalidState,
-            false,
-        );
-        return;
-    }
-    let Some(entity) = world.clients().get(client_id).map(|client| client.entity) else {
-        return;
-    };
-    let inventories = world.read_component::<ResourceInventoryComp>();
-    let equipment = world.read_component::<FixedEquipmentComp>();
-    let mining = world.read_component::<MiningComp>();
-    let state = inventories
-        .get(entity)
-        .zip(equipment.get(entity))
-        .zip(mining.get(entity))
-        .and_then(|((inventory, equipment), mining)| {
-            PlayerGameplayState::new(&context, inventory, equipment, mining)
-        });
-    drop(inventories);
-    drop(equipment);
-    drop(mining);
-    match state {
-        Some(state) => queue_ok(
-            &mut world.write_resource::<MessageQueues>(),
-            &context.manifest,
-            client_id,
-            request_id,
-            state,
-        ),
-        None => send_error(
-            world,
-            &context,
-            client_id,
-            request_id,
-            ErrorCode::GameInvalidState,
-            false,
-        ),
     }
 }
 

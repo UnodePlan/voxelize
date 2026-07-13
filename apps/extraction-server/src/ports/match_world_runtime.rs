@@ -74,4 +74,16 @@ pub trait MatchWorldRuntime: Send + Sync {
         world_name: &str,
         account_id: Uuid,
     ) -> Result<bool, MatchWorldRuntimeError>;
+
+    async fn evict_participant(
+        &self,
+        world_name: &str,
+        account_id: Uuid,
+    ) -> Result<bool, MatchWorldRuntimeError>;
+
+    async fn request_timeout_elimination(
+        &self,
+        world_name: &str,
+        account_id: Uuid,
+    ) -> Result<bool, MatchWorldRuntimeError>;
 }

@@ -1,11 +1,13 @@
 use std::str::FromStr;
 
+use sqlx::types::Json;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::{
     matchmaking::{
-        MatchRecord, MatchState, MatchVersions, ParticipantRecord, ParticipantState, SeatId,
+        MatchRecord, MatchState, MatchVersions, ParticipantMatchStats, ParticipantRecord,
+        ParticipantResourceCounts, ParticipantState, SeatId,
     },
     ports::MatchRepositoryError,
 };
@@ -16,7 +18,7 @@ pub(super) const MATCH_COLUMNS: &str = "id, state, world_name, seed, generation_
 
 pub(super) const PARTICIPANT_COLUMNS: &str = "match_id, account_id, public_player_id, \
     seat_id, state, enqueued_at, reconnect_deadline, killed_by_account_id, extracted_at, \
-    settlement_qualified_at";
+    settlement_qualified_at, mined_counts, pickup_counts, lost_counts";
 
 #[derive(Clone, Debug, sqlx::FromRow)]
 pub(super) struct MatchRow {
@@ -77,6 +79,9 @@ pub(super) struct ParticipantRow {
     pub killed_by_account_id: Option<Uuid>,
     pub extracted_at: Option<OffsetDateTime>,
     pub settlement_qualified_at: Option<OffsetDateTime>,
+    pub mined_counts: Json<ParticipantResourceCounts>,
+    pub pickup_counts: Json<ParticipantResourceCounts>,
+    pub lost_counts: Json<ParticipantResourceCounts>,
 }
 
 impl ParticipantRow {
@@ -97,6 +102,11 @@ impl ParticipantRow {
             enqueued_at: self.enqueued_at,
             reconnect_deadline: self.reconnect_deadline,
             killed_by_account_id: self.killed_by_account_id,
+            stats: ParticipantMatchStats {
+                mined: self.mined_counts.0,
+                picked_up: self.pickup_counts.0,
+                lost: self.lost_counts.0,
+            },
             extracted_at: self.extracted_at,
             settlement_qualified_at: self.settlement_qualified_at,
         })

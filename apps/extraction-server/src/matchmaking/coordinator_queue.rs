@@ -17,20 +17,24 @@ impl Coordinator {
         if self.runtime.is_none() {
             return Err(MatchmakingError::Unavailable);
         }
-        if self.current.is_some() {
-            return self.snapshot_for(account_id).ok_or(MatchmakingError::Full);
-        }
         if self
             .queue
             .iter()
             .any(|entry| entry.account_id == account_id)
         {
-            return if self.queue.len() == MATCH_SIZE && self.runtime.is_some() {
+            return if self.current.is_none() && self.queue.len() == MATCH_SIZE {
                 self.prepare_first_roster(account_id).await
             } else {
                 self.snapshot_for(account_id)
                     .ok_or(MatchmakingError::Unavailable)
             };
+        }
+        if let Some(current) = self.current.as_ref() {
+            match current.participants.get(&account_id) {
+                Some(participant) if participant.state.is_terminal() => {}
+                Some(_) => return Ok(current.snapshot()),
+                None => return Err(MatchmakingError::Full),
+            }
         }
         if !self.is_connected(account_id) {
             return Err(MatchmakingError::ConnectionRequired);
@@ -58,7 +62,7 @@ impl Coordinator {
             enqueued_at: self.utc_now(),
             order,
         });
-        if self.queue.len() == MATCH_SIZE {
+        if self.current.is_none() && self.queue.len() == MATCH_SIZE {
             self.prepare_first_roster(account_id).await
         } else {
             self.snapshot_for(account_id)
@@ -70,11 +74,11 @@ impl Coordinator {
         &mut self,
         account_id: Uuid,
     ) -> Result<QueueSnapshot, MatchmakingError> {
-        if self
-            .current
-            .as_ref()
-            .is_some_and(|item| item.participants.contains_key(&account_id))
-        {
+        if self.current.as_ref().is_some_and(|item| {
+            item.participants
+                .get(&account_id)
+                .is_some_and(|participant| !participant.state.is_terminal())
+        }) {
             return Err(MatchmakingError::RosterLocked);
         }
         let Some(index) = self
@@ -114,7 +118,7 @@ impl Coordinator {
         Ok(())
     }
 
-    async fn prepare_first_roster(
+    pub(super) async fn prepare_first_roster(
         &mut self,
         requesting_account: Uuid,
     ) -> Result<QueueSnapshot, MatchmakingError> {

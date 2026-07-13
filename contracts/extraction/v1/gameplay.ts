@@ -18,11 +18,7 @@ import type {
   MiningStateEnvelope,
   ProtocolEnvelope,
 } from "./types";
-import {
-  MINING_ACTIONS,
-  MINING_IDLE_REASONS,
-  RESOURCE_KEYS,
-} from "./types";
+import { MINING_ACTIONS, MINING_IDLE_REASONS, RESOURCE_KEYS } from "./types";
 
 const RESOURCE_BACKPACK_SLOTS = 12;
 
@@ -92,8 +88,10 @@ export function decodeMiningStateEnvelope(
     "miningState",
   );
   if (
-    readUnsignedInteger(source.protocolVersion, "miningState.protocolVersion") !==
-    manifest.protocolVersion
+    readUnsignedInteger(
+      source.protocolVersion,
+      "miningState.protocolVersion",
+    ) !== manifest.protocolVersion
   ) {
     throw new Error("miningState.protocolVersion: unsupported version");
   }

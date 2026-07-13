@@ -4,7 +4,8 @@ use std::env;
 
 use extraction_server::{
     matchmaking::{
-        CreatePreparingMatch, FrozenRoster, MatchState, MatchVersions, ParticipantState,
+        CreatePreparingMatch, FrozenRoster, MatchState, MatchVersions, ParticipantDeath,
+        ParticipantMatchStats, ParticipantResourceCounts, ParticipantState, ParticipantTimeout,
         QueuedPlayer, MATCH_SIZE,
     },
     persistence::{acquire_matchmaking_process_lock, migrate_database, PgRepository},
@@ -213,12 +214,26 @@ async fn lifecycle_deadlines_reconnect_and_hard_timeout_are_cas_guarded() {
         Err(MatchRepositoryError::Conflict)
     );
     assert!(repository
-        .time_out(match_id, accounts[0], deadline)
+        .mark_timed_out(
+            ParticipantTimeout {
+                match_id,
+                account_id: accounts[0],
+                stats: ParticipantMatchStats::default(),
+            },
+            deadline,
+        )
         .await
         .unwrap()
         .was_applied());
     assert!(!repository
-        .time_out(match_id, accounts[0], deadline + Duration::seconds(1))
+        .mark_timed_out(
+            ParticipantTimeout {
+                match_id,
+                account_id: accounts[0],
+                stats: ParticipantMatchStats::default(),
+            },
+            deadline + Duration::seconds(1),
+        )
         .await
         .unwrap()
         .was_applied());
@@ -267,6 +282,209 @@ async fn lifecycle_deadlines_reconnect_and_hard_timeout_are_cas_guarded() {
         .await
         .unwrap()
         .is_none());
+}
+
+#[actix_web::test]
+async fn participant_death_is_an_exact_idempotent_cas() {
+    let _guard = MATCHMAKING_TEST_LOCK.lock().await;
+    let repository = test_repository().await;
+    let accounts = insert_accounts(&repository, MATCH_SIZE).await;
+    let created_at = OffsetDateTime::now_utc();
+    let command = preparing_command(&accounts, created_at);
+    let match_id = command.match_id;
+    repository.create_preparing(command).await.unwrap();
+    repository
+        .activate(match_id, created_at + Duration::seconds(1))
+        .await
+        .unwrap();
+    let stats = ParticipantMatchStats {
+        mined: ParticipantResourceCounts {
+            dirt: 12,
+            gold: 3,
+            diamond: 1,
+        },
+        picked_up: ParticipantResourceCounts {
+            dirt: 2,
+            gold: 5,
+            diamond: 1,
+        },
+        lost: ParticipantResourceCounts {
+            dirt: 14,
+            gold: 8,
+            diamond: 2,
+        },
+    };
+    let active_death = ParticipantDeath {
+        match_id,
+        victim_account_id: accounts[0],
+        killer_account_id: accounts[1],
+        stats,
+    };
+
+    let applied = repository.mark_dead(active_death.clone()).await.unwrap();
+    assert!(applied.was_applied());
+    assert_eq!(applied.value().state, ParticipantState::Dead);
+    assert_eq!(applied.value().killed_by_account_id, Some(accounts[1]));
+    assert_eq!(applied.value().stats, stats);
+    let persisted = repository.find_match(match_id).await.unwrap().unwrap();
+    let persisted_victim = persisted
+        .participants
+        .iter()
+        .find(|participant| participant.account_id == accounts[0])
+        .unwrap();
+    assert_eq!(persisted_victim.state, ParticipantState::Dead);
+    assert_eq!(persisted_victim.killed_by_account_id, Some(accounts[1]));
+    assert_eq!(persisted_victim.stats, stats);
+    assert!(persisted_victim.reconnect_deadline.is_none());
+    assert!(matches!(
+        repository.mark_dead(active_death.clone()).await.unwrap(),
+        TransitionOutcome::AlreadyApplied(_)
+    ));
+    assert_eq!(
+        repository
+            .mark_dead(ParticipantDeath {
+                killer_account_id: accounts[2],
+                ..active_death.clone()
+            })
+            .await,
+        Err(MatchRepositoryError::Conflict)
+    );
+    assert_eq!(
+        repository
+            .mark_timed_out(
+                ParticipantTimeout {
+                    match_id,
+                    account_id: accounts[0],
+                    stats,
+                },
+                created_at + Duration::minutes(2),
+            )
+            .await,
+        Err(MatchRepositoryError::Conflict)
+    );
+
+    repository
+        .mark_disconnected(match_id, accounts[3], created_at + Duration::seconds(2))
+        .await
+        .unwrap();
+    let disconnected_death = ParticipantDeath {
+        match_id,
+        victim_account_id: accounts[3],
+        killer_account_id: accounts[4],
+        stats,
+    };
+    assert!(repository
+        .mark_dead(disconnected_death)
+        .await
+        .unwrap()
+        .was_applied());
+}
+
+#[actix_web::test]
+async fn participant_timeout_persists_stats_and_excludes_death_terminal() {
+    let _guard = MATCHMAKING_TEST_LOCK.lock().await;
+    let repository = test_repository().await;
+    let accounts = insert_accounts(&repository, MATCH_SIZE).await;
+    let created_at = OffsetDateTime::now_utc();
+    let command = preparing_command(&accounts, created_at);
+    let match_id = command.match_id;
+    repository.create_preparing(command).await.unwrap();
+    repository
+        .activate(match_id, created_at + Duration::seconds(1))
+        .await
+        .unwrap();
+    let deadline = repository
+        .mark_disconnected(match_id, accounts[0], created_at + Duration::seconds(2))
+        .await
+        .unwrap()
+        .into_value()
+        .reconnect_deadline
+        .unwrap();
+    let stats = ParticipantMatchStats {
+        mined: ParticipantResourceCounts {
+            dirt: 21,
+            gold: 8,
+            diamond: 3,
+        },
+        picked_up: ParticipantResourceCounts {
+            dirt: 5,
+            gold: 13,
+            diamond: 2,
+        },
+        lost: ParticipantResourceCounts {
+            dirt: 26,
+            gold: 21,
+            diamond: 5,
+        },
+    };
+    let timeout = ParticipantTimeout {
+        match_id,
+        account_id: accounts[0],
+        stats,
+    };
+
+    assert_eq!(
+        repository
+            .mark_timed_out(timeout.clone(), deadline - Duration::nanoseconds(1))
+            .await,
+        Err(MatchRepositoryError::Conflict)
+    );
+    let applied = repository
+        .mark_timed_out(timeout.clone(), deadline)
+        .await
+        .unwrap();
+    assert!(applied.was_applied());
+    assert_eq!(applied.value().state, ParticipantState::TimedOut);
+    assert_eq!(applied.value().stats, stats);
+    assert!(applied.value().killed_by_account_id.is_none());
+    assert!(applied.value().reconnect_deadline.is_none());
+
+    let persisted = repository.find_match(match_id).await.unwrap().unwrap();
+    let persisted_timeout = persisted
+        .participants
+        .iter()
+        .find(|participant| participant.account_id == accounts[0])
+        .unwrap();
+    assert_eq!(persisted_timeout.state, ParticipantState::TimedOut);
+    assert_eq!(persisted_timeout.stats, stats);
+    assert!(persisted_timeout.killed_by_account_id.is_none());
+    assert!(persisted_timeout.reconnect_deadline.is_none());
+    assert!(matches!(
+        repository
+            .mark_timed_out(timeout.clone(), deadline + Duration::seconds(1))
+            .await
+            .unwrap(),
+        TransitionOutcome::AlreadyApplied(_)
+    ));
+
+    let mut conflicting_timeout = timeout;
+    conflicting_timeout.stats.lost.diamond += 1;
+    assert_eq!(
+        repository
+            .mark_timed_out(conflicting_timeout, deadline + Duration::seconds(1))
+            .await,
+        Err(MatchRepositoryError::Conflict)
+    );
+    assert_eq!(
+        repository
+            .mark_dead(ParticipantDeath {
+                match_id,
+                victim_account_id: accounts[0],
+                killer_account_id: accounts[1],
+                stats,
+            })
+            .await,
+        Err(MatchRepositoryError::Conflict)
+    );
+    let unchanged = repository.find_match(match_id).await.unwrap().unwrap();
+    let unchanged_timeout = unchanged
+        .participants
+        .iter()
+        .find(|participant| participant.account_id == accounts[0])
+        .unwrap();
+    assert_eq!(unchanged_timeout.state, ParticipantState::TimedOut);
+    assert_eq!(unchanged_timeout.stats, stats);
+    assert!(unchanged_timeout.killed_by_account_id.is_none());
 }
 
 #[actix_web::test]

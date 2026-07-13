@@ -5,7 +5,10 @@ use voxelize::{Chunks, Clients, DirectionComp, PositionComp, Vec3};
 
 use super::{
     authority::GameplayAuthority,
-    components::{FixedEquipmentComp, MatchPlayerComp, MiningComp, ResourceInventoryComp},
+    components::{
+        EliminationComp, FixedEquipmentComp, MatchPlayerComp, MiningComp, ResourceInventoryComp,
+        RoundStatsComp,
+    },
     mining_dirty::MiningDirtyPlayers,
     mining_validation::{validate_mining_target, MiningValidationAccess},
     runtime::GameplayRuntimeContext,
@@ -36,15 +39,25 @@ pub(super) struct MiningCompletionAccess<'a, 'world> {
     pub equipment: &'a ReadStorage<'world, FixedEquipmentComp>,
     pub positions: &'a ReadStorage<'world, PositionComp>,
     pub directions: &'a ReadStorage<'world, DirectionComp>,
+    pub eliminations: &'a ReadStorage<'world, EliminationComp>,
     pub mining: &'a mut WriteStorage<'world, MiningComp>,
     pub inventories: &'a mut WriteStorage<'world, ResourceInventoryComp>,
+    pub stats: &'a mut WriteStorage<'world, RoundStatsComp>,
     pub dirty: &'a mut MiningDirtyPlayers,
 }
 
 pub(super) fn advance_mining(mut access: MiningCompletionAccess<'_, '_>) {
-    let mut candidates = (access.entities, access.players, &*access.mining)
+    let mut candidates = (
+        access.entities,
+        access.players,
+        &*access.mining,
+        access.eliminations,
+    )
         .join()
-        .filter_map(|(entity, player, mining)| {
+        .filter_map(|(entity, player, mining, elimination)| {
+            if elimination.record().is_some() {
+                return None;
+            }
             let target = mining.state().active_target()?;
             let required = access.context.config.mining_duration(target.resource);
             Some((
@@ -169,6 +182,15 @@ fn complete_harvest(
         mark_reset_component(access.dirty, component, client_id, entity);
         return;
     };
+    let Some(mut completed_stats) = access.stats.get(entity).map(|stats| stats.stats().clone())
+    else {
+        mark_reset_component(access.dirty, component, client_id, entity);
+        return;
+    };
+    if completed_stats.record_mined(target.resource, 1).is_err() {
+        mark_reset_component(access.dirty, component, client_id, entity);
+        return;
+    }
     let award = award_harvest_atomically(
         HarvestRequest {
             match_id: access.context.match_id,
@@ -190,6 +212,7 @@ fn complete_harvest(
     access
         .chunks
         .update_voxel(&Vec3(target.voxel.x, target.voxel.y, target.voxel.z), 0);
+    *access.stats.get_mut(entity).unwrap().stats_mut() = completed_stats;
     *component.state_mut() = completed_state;
     access.dirty.mark(
         client_id,

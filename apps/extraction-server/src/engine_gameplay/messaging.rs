@@ -3,14 +3,22 @@ use uuid::Uuid;
 use voxelize::{ClientFilter, Message, MessageQueues, MessageType, MethodProtocol};
 
 use super::{
-    components::{FixedEquipmentComp, MiningComp, ResourceInventoryComp},
+    components::{
+        CombatComp, EliminationComp, FixedEquipmentComp, HealthComp, MiningComp,
+        ResourceInventoryComp,
+    },
     runtime::GameplayRuntimeContext,
 };
-use crate::contracts::{ErrorCode, ExtractionManifest, MiningStateEnvelope, ProtocolEnvelope};
+use crate::contracts::{
+    AttackCursorState, DeathResultEnvelope, ErrorCode, ExtractionManifest, HealthStateData,
+    HealthStateEnvelope, MiningStateEnvelope, ProtocolEnvelope,
+};
 
 const RESULT_METHOD: &str = "pvp:v1:result";
 const INVENTORY_STATE_METHOD: &str = "pvp:v1:inventory-state";
 const MINING_STATE_METHOD: &str = "pvp:v1:mining-state";
+const HEALTH_STATE_METHOD: &str = "pvp:v1:health-state";
+const DEATH_RESULT_METHOD: &str = "pvp:v1:death-result";
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -31,9 +39,13 @@ impl PlayerInventoryState {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct PlayerGameplayState {
+    match_id: Uuid,
     #[serde(flatten)]
     assets: PlayerInventoryState,
     mining: MiningStateEnvelope,
+    health: HealthStateEnvelope,
+    attack: AttackCursorState,
+    death_result: Option<DeathResultEnvelope>,
 }
 
 impl PlayerGameplayState {
@@ -42,10 +54,20 @@ impl PlayerGameplayState {
         inventory: &ResourceInventoryComp,
         equipment: &FixedEquipmentComp,
         mining: &MiningComp,
+        health: &HealthComp,
+        combat: &CombatComp,
+        elimination: &EliminationComp,
     ) -> Option<Self> {
         Some(Self {
+            match_id: context.match_id,
             assets: PlayerInventoryState::new(inventory, equipment),
             mining: mining_state(context, mining)?,
+            health: health_state(context, health)?,
+            attack: AttackCursorState {
+                revision: combat.state().revision(),
+                accepted_sequence: combat.state().last_sequence(),
+            },
+            death_result: elimination.record().map(|record| record.result.clone()),
         })
     }
 }
@@ -94,6 +116,25 @@ pub(super) fn queue_mining_state(
     }
 }
 
+pub(super) fn queue_health_state(
+    queues: &mut MessageQueues,
+    context: &GameplayRuntimeContext,
+    client_id: &str,
+    health: &HealthComp,
+) {
+    if let Some(state) = health_state(context, health) {
+        queue_method(queues, client_id, HEALTH_STATE_METHOD, &state);
+    }
+}
+
+pub(super) fn queue_death_result(
+    queues: &mut MessageQueues,
+    client_id: &str,
+    result: &DeathResultEnvelope,
+) {
+    queue_method(queues, client_id, DEATH_RESULT_METHOD, result);
+}
+
 fn mining_state(
     context: &GameplayRuntimeContext,
     mining: &MiningComp,
@@ -109,6 +150,25 @@ fn mining_state(
         mining.state().snapshot(required).ok()?,
     )
     .ok()
+}
+
+fn health_state(
+    context: &GameplayRuntimeContext,
+    health: &HealthComp,
+) -> Option<HealthStateEnvelope> {
+    let state = health.state();
+    let data = if state.is_alive() {
+        HealthStateData::Alive {
+            current_half_hearts: state.half_hearts(),
+            max_half_hearts: state.max_half_hearts(),
+        }
+    } else {
+        HealthStateData::Dead {
+            current_half_hearts: state.half_hearts(),
+            max_half_hearts: state.max_half_hearts(),
+        }
+    };
+    HealthStateEnvelope::new(&context.manifest, context.match_id, state.revision(), data).ok()
 }
 
 fn queue_method<T: Serialize>(

@@ -469,6 +469,62 @@ fn before_chunk_hook_rejects_conflicts_and_custom_dispatchers() {
 }
 
 #[test]
+fn before_broadcast_hook_runs_before_post_broadcast_extensions() {
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let mut world = test_world("before-broadcast-hook", &WorldConfig::default());
+    let before_calls = calls.clone();
+    world
+        .install_before_broadcast_system("application-before-broadcast", move || {
+            OrderedSystem("before", before_calls.clone())
+        })
+        .unwrap();
+    let after_calls = calls.clone();
+    world.extend_dispatcher(move |builder| {
+        builder.with(
+            OrderedSystem("after", after_calls.clone()),
+            "after-broadcast-test",
+            &["broadcast"],
+        )
+    });
+
+    world.prepare();
+    world.tick();
+
+    assert_eq!(*calls.lock().unwrap(), vec!["before", "after"]);
+}
+
+#[test]
+fn before_broadcast_hook_rejects_conflicts_and_custom_dispatchers() {
+    let mut world = test_world("before-broadcast-conflicts", &WorldConfig::default());
+    assert_eq!(
+        world.install_before_broadcast_system("broadcast", || CountingSystem(Arc::new(
+            AtomicUsize::new(0)
+        ))),
+        Err(DispatcherHookError::NameConflict)
+    );
+    world
+        .install_before_broadcast_system("application-before-broadcast", || {
+            CountingSystem(Arc::new(AtomicUsize::new(0)))
+        })
+        .unwrap();
+    assert_eq!(
+        world.install_before_broadcast_system("second-broadcast-hook", || CountingSystem(
+            Arc::new(AtomicUsize::new(0))
+        )),
+        Err(DispatcherHookError::HookAlreadyInstalled)
+    );
+
+    let mut custom = test_world("custom-before-broadcast", &WorldConfig::default());
+    custom.set_dispatcher(TimedDispatcherBuilder::new);
+    assert_eq!(
+        custom.install_before_broadcast_system("application-before-broadcast", || {
+            CountingSystem(Arc::new(AtomicUsize::new(0)))
+        }),
+        Err(DispatcherHookError::CustomDispatcherUnsupported)
+    );
+}
+
+#[test]
 fn client_modifier_extension_runs_after_the_existing_modifier() {
     let calls = Arc::new(Mutex::new(Vec::new()));
     let mut world = test_world("client-modifier-extension", &WorldConfig::default());

@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 
+use serde::{Deserialize, Serialize};
 use time::{Duration, OffsetDateTime};
 use uuid::Uuid;
 
@@ -165,6 +166,81 @@ impl ActivationDeadlines {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields, rename_all = "camelCase")]
+pub struct ParticipantResourceCounts {
+    pub dirt: u64,
+    pub gold: u64,
+    pub diamond: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ParticipantMatchStats {
+    pub mined: ParticipantResourceCounts,
+    pub picked_up: ParticipantResourceCounts,
+    pub lost: ParticipantResourceCounts,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ParticipantDeath {
+    pub match_id: Uuid,
+    pub victim_account_id: Uuid,
+    pub killer_account_id: Uuid,
+    pub stats: ParticipantMatchStats,
+}
+
+impl ParticipantDeath {
+    pub fn is_valid(&self) -> bool {
+        !self.match_id.is_nil()
+            && !self.victim_account_id.is_nil()
+            && !self.killer_account_id.is_nil()
+            && self.victim_account_id != self.killer_account_id
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MatchDeathNotice {
+    pub world_name: String,
+    pub world_generation: String,
+    pub death: ParticipantDeath,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ParticipantTimeout {
+    pub match_id: Uuid,
+    pub account_id: Uuid,
+    pub stats: ParticipantMatchStats,
+}
+
+impl ParticipantTimeout {
+    pub fn is_valid(&self) -> bool {
+        !self.match_id.is_nil() && !self.account_id.is_nil()
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MatchTimeoutNotice {
+    pub world_name: String,
+    pub world_generation: String,
+    pub timeout: ParticipantTimeout,
+}
+
+impl MatchTimeoutNotice {
+    pub fn is_valid(&self) -> bool {
+        !self.world_name.trim().is_empty()
+            && !self.world_generation.trim().is_empty()
+            && self.timeout.is_valid()
+    }
+}
+
+impl MatchDeathNotice {
+    pub fn is_valid(&self) -> bool {
+        !self.world_name.trim().is_empty()
+            && !self.world_generation.trim().is_empty()
+            && self.death.is_valid()
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MatchRecord {
     pub match_id: Uuid,
@@ -191,6 +267,7 @@ pub struct ParticipantRecord {
     pub enqueued_at: OffsetDateTime,
     pub reconnect_deadline: Option<OffsetDateTime>,
     pub killed_by_account_id: Option<Uuid>,
+    pub stats: ParticipantMatchStats,
     pub extracted_at: Option<OffsetDateTime>,
     pub settlement_qualified_at: Option<OffsetDateTime>,
 }

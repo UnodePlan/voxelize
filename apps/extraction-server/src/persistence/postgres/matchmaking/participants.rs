@@ -1,9 +1,11 @@
-use sqlx::PgPool;
+use sqlx::{types::Json, PgPool};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::{
-    matchmaking::{MatchState, ParticipantRecord, ParticipantState, RECONNECT_WINDOW},
+    matchmaking::{
+        MatchState, ParticipantDeath, ParticipantRecord, ParticipantState, RECONNECT_WINDOW,
+    },
     ports::{MatchRepositoryError, TransitionOutcome},
 };
 
@@ -109,57 +111,72 @@ pub(in crate::persistence::postgres) async fn reconnect(
     Ok(TransitionOutcome::Applied(record))
 }
 
-pub(in crate::persistence::postgres) async fn time_out(
+pub(in crate::persistence::postgres) async fn mark_dead(
     pool: &PgPool,
-    match_id: Uuid,
-    account_id: Uuid,
-    at: OffsetDateTime,
+    death: ParticipantDeath,
 ) -> Result<TransitionOutcome<ParticipantRecord>, MatchRepositoryError> {
+    if !death.is_valid() {
+        return Err(MatchRepositoryError::Conflict);
+    }
     let mut transaction = pool.begin().await.map_err(unavailable)?;
-    let match_state = lock_match(&mut transaction, match_id)
+    let match_state = lock_match(&mut transaction, death.match_id)
         .await?
         .parsed_state()?;
-    let mut participant = lock_participant(&mut transaction, match_id, account_id).await?;
+    let mut participant =
+        lock_participant(&mut transaction, death.match_id, death.victim_account_id).await?;
     let participant_state = participant.parsed_state()?;
-    if participant_state == ParticipantState::TimedOut {
+    if participant_state == ParticipantState::Dead {
         let record = participant.into_record()?;
+        if !death_matches_record(&death, &record) {
+            return Err(MatchRepositoryError::Conflict);
+        }
         transaction.commit().await.map_err(unavailable)?;
         return Ok(TransitionOutcome::AlreadyApplied(record));
     }
     require_live_match(match_state)?;
     participant_state
-        .transition_to(ParticipantState::TimedOut)
+        .transition_to(ParticipantState::Dead)
         .map_err(|_| MatchRepositoryError::Conflict)?;
-    if participant
-        .reconnect_deadline
-        .is_none_or(|deadline| at < deadline)
-    {
-        return Err(MatchRepositoryError::Conflict);
-    }
 
     let result = sqlx::query(
-        "UPDATE match_participants SET state = 'timed_out', reconnect_deadline = NULL \
-         WHERE match_id = $1 AND account_id = $2 AND state = 'disconnected' \
-           AND reconnect_deadline <= $3",
+        "UPDATE match_participants SET state = 'dead', reconnect_deadline = NULL, \
+         killed_by_account_id = $3, mined_counts = $4, pickup_counts = $5, lost_counts = $6 \
+         WHERE match_id = $1 AND account_id = $2 AND state IN ('active', 'disconnected')",
     )
-    .bind(match_id)
-    .bind(account_id)
-    .bind(at)
+    .bind(death.match_id)
+    .bind(death.victim_account_id)
+    .bind(death.killer_account_id)
+    .bind(Json(death.stats.mined))
+    .bind(Json(death.stats.picked_up))
+    .bind(Json(death.stats.lost))
     .execute(&mut *transaction)
     .await
     .map_err(classify_write_error)?;
     if result.rows_affected() != 1 {
         return Err(MatchRepositoryError::Conflict);
     }
-    participant.state = ParticipantState::TimedOut.as_str().to_owned();
+    participant.state = ParticipantState::Dead.as_str().to_owned();
     participant.reconnect_deadline = None;
+    participant.killed_by_account_id = Some(death.killer_account_id);
+    participant.mined_counts = Json(death.stats.mined);
+    participant.pickup_counts = Json(death.stats.picked_up);
+    participant.lost_counts = Json(death.stats.lost);
     let record = participant.into_record()?;
     transaction.commit().await.map_err(unavailable)?;
     Ok(TransitionOutcome::Applied(record))
 }
 
-fn require_live_match(state: MatchState) -> Result<(), MatchRepositoryError> {
+pub(super) fn require_live_match(state: MatchState) -> Result<(), MatchRepositoryError> {
     matches!(state, MatchState::Active | MatchState::ExtractionOpen)
         .then_some(())
         .ok_or(MatchRepositoryError::Conflict)
+}
+
+fn death_matches_record(death: &ParticipantDeath, record: &ParticipantRecord) -> bool {
+    record.match_id == death.match_id
+        && record.account_id == death.victim_account_id
+        && record.state == ParticipantState::Dead
+        && record.killed_by_account_id == Some(death.killer_account_id)
+        && record.stats == death.stats
+        && record.reconnect_deadline.is_none()
 }

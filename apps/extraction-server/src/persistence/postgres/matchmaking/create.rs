@@ -103,6 +103,7 @@ pub(in crate::persistence::postgres) async fn create_preparing(
             enqueued_at: participant.enqueued_at,
             reconnect_deadline: None,
             killed_by_account_id: None,
+            stats: Default::default(),
             extracted_at: None,
             settlement_qualified_at: None,
         });

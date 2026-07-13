@@ -3,7 +3,7 @@ use std::collections::VecDeque;
 use specs::Entity;
 use uuid::Uuid;
 
-use crate::contracts::{DropSlotPayload, MiningPayload};
+use crate::contracts::{AttackPayload, DropSlotPayload, MiningPayload};
 
 #[derive(Debug)]
 pub(super) struct QueuedDropSlotIntent {
@@ -23,8 +23,18 @@ pub(super) struct QueuedMiningIntent {
     pub payload: MiningPayload,
 }
 
+#[derive(Debug)]
+pub(super) struct QueuedAttackIntent {
+    pub entity: Entity,
+    pub client_id: String,
+    pub request_id: Uuid,
+    pub sequence: u32,
+    pub payload: AttackPayload,
+}
+
 pub(super) type DropSlotIntentQueue = BoundedIntentQueue<QueuedDropSlotIntent>;
 pub(super) type MiningIntentQueue = BoundedIntentQueue<QueuedMiningIntent>;
+pub(super) type AttackIntentQueue = BoundedIntentQueue<QueuedAttackIntent>;
 
 pub(super) struct BoundedIntentQueue<T> {
     capacity: usize,

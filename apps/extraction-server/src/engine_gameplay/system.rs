@@ -9,7 +9,11 @@ use voxelize::{
 use super::{
     authority::GameplayAuthority,
     auto_pickup::{auto_pickup, AutoPickupAccess},
-    components::{FixedEquipmentComp, LootDropComp, MatchPlayerComp, ResourceInventoryComp},
+    components::{
+        EliminationComp, FixedEquipmentComp, HealthComp, LootDropComp, MatchPlayerComp,
+        ResourceInventoryComp, RoundStatsComp,
+    },
+    death_outbox::flush_death_notices,
     drop_spawn::{spawn_pending_drops, DropSpawnAccess},
     intents::DropSlotIntentQueue,
     manual_drop::{process_manual_drops, ManualDropAccess},
@@ -32,7 +36,10 @@ impl<'a> System<'a> for GameplayRuntimeSystem {
         WriteExpect<'a, EntityIDs>,
         ReadStorage<'a, MatchPlayerComp>,
         ReadStorage<'a, FixedEquipmentComp>,
+        ReadStorage<'a, HealthComp>,
+        WriteStorage<'a, RoundStatsComp>,
         ReadStorage<'a, DirectionComp>,
+        WriteStorage<'a, EliminationComp>,
         WriteStorage<'a, ResourceInventoryComp>,
         WriteStorage<'a, PositionComp>,
         WriteStorage<'a, LootDropComp>,
@@ -56,7 +63,10 @@ impl<'a> System<'a> for GameplayRuntimeSystem {
             mut entity_ids,
             players,
             equipment,
+            health,
+            mut stats,
             directions,
+            mut eliminations,
             mut inventories,
             mut positions,
             mut loots,
@@ -72,6 +82,15 @@ impl<'a> System<'a> for GameplayRuntimeSystem {
         };
         let mut dirty_players = BTreeMap::new();
 
+        flush_death_notices(
+            &entities,
+            &authority,
+            context.match_id,
+            &players,
+            &stats,
+            &mut eliminations,
+        );
+
         process_manual_drops(ManualDropAccess {
             entities: &entities,
             context: &context,
@@ -82,6 +101,8 @@ impl<'a> System<'a> for GameplayRuntimeSystem {
             spawned: &spawned,
             queues: &mut queues,
             players: &players,
+            health: &health,
+            eliminations: &eliminations,
             inventories: &mut inventories,
             positions: &positions,
             directions: &directions,
@@ -110,7 +131,10 @@ impl<'a> System<'a> for GameplayRuntimeSystem {
             radius: context.config.pickup_radius,
             entity_ids: &mut entity_ids,
             players: &players,
+            health: &health,
+            eliminations: &eliminations,
             inventories: &mut inventories,
+            stats: &mut stats,
             positions: &positions,
             loots: &mut loots,
             metadatas: &mut metadatas,

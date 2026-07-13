@@ -296,7 +296,10 @@ pub struct World {
     dispatcher: Arc<dyn Fn() -> DispatcherBuilder<'static, 'static> + Send + Sync>,
 
     /// 可选的应用系统，固定在默认 ChunkUpdating 前完成。
-    before_chunk_updating: Arc<Mutex<Option<BeforeChunkUpdatingHook>>>,
+    before_chunk_updating: Arc<Mutex<Option<NamedDispatcherHook>>>,
+
+    /// 可选的应用系统，固定在默认 Broadcast 前完成。
+    before_broadcast: Arc<Mutex<Option<NamedDispatcherHook>>>,
 
     /// 自定义 dispatcher 对默认命名 hook 不透明，不能混合安装。
     uses_default_dispatcher: bool,
@@ -685,7 +688,7 @@ const DEFAULT_DISPATCHER_SYSTEM_NAMES: &[&str] = &[
 ];
 
 #[derive(Clone)]
-struct BeforeChunkUpdatingHook {
+struct NamedDispatcherHook {
     name: &'static str,
     install: Arc<
         dyn Fn(TimedDispatcherBuilder<'static, 'static>) -> TimedDispatcherBuilder<'static, 'static>
@@ -702,7 +705,8 @@ pub enum DispatcherHookError {
 }
 
 fn dispatcher(
-    before_chunk_updating: Option<&BeforeChunkUpdatingHook>,
+    before_chunk_updating: Option<&NamedDispatcherHook>,
+    before_broadcast: Option<&NamedDispatcherHook>,
 ) -> TimedDispatcherBuilder<'static, 'static> {
     let mut builder = TimedDispatcherBuilder::new()
         .with(UpdateStatsSystem, "update-stats", &[])
@@ -713,7 +717,7 @@ fn dispatcher(
         builder = (hook.install)(builder);
         chunk_updating_dependencies.push(hook.name);
     }
-    builder
+    let mut builder = builder
         .with(
             ChunkUpdatingSystem,
             "chunk-updating",
@@ -739,11 +743,17 @@ fn dispatcher(
             "entities-sending",
             &["entities-meta"],
         )
-        .with(PeersSendingSystem, "peers-sending", &["peers-meta"])
+        .with(PeersSendingSystem, "peers-sending", &["peers-meta"]);
+    let mut broadcast_dependencies = vec!["chunk-sending", "entities-sending", "peers-sending"];
+    if let Some(hook) = before_broadcast {
+        builder = (hook.install)(builder);
+        broadcast_dependencies.push(hook.name);
+    }
+    builder
         .with(
             BroadcastSystem,
             "broadcast",
-            &["chunk-sending", "entities-sending", "peers-sending"],
+            &broadcast_dependencies,
         )
         .with(
             CleanupSystem,
@@ -869,7 +879,9 @@ impl World {
         ecs.insert(EntityIDs::new());
 
         let before_chunk_updating = Arc::new(Mutex::new(None));
-        let dispatcher_hook = before_chunk_updating.clone();
+        let before_broadcast = Arc::new(Mutex::new(None));
+        let dispatcher_chunk_hook = before_chunk_updating.clone();
+        let dispatcher_broadcast_hook = before_broadcast.clone();
         let mut world = Self {
             id,
             name: name.to_owned(),
@@ -881,10 +893,12 @@ impl World {
             ecs,
 
             dispatcher: Arc::new(move || {
-                let hook = dispatcher_hook.lock().unwrap().clone();
-                dispatcher(hook.as_ref()).into_inner()
+                let chunk_hook = dispatcher_chunk_hook.lock().unwrap().clone();
+                let broadcast_hook = dispatcher_broadcast_hook.lock().unwrap().clone();
+                dispatcher(chunk_hook.as_ref(), broadcast_hook.as_ref()).into_inner()
             }),
             before_chunk_updating,
+            before_broadcast,
             uses_default_dispatcher: true,
             built_dispatcher: Arc::new(Mutex::new(None)),
             method_handles: HashMap::default(),
@@ -1176,9 +1190,45 @@ impl World {
         if slot.is_some() {
             return Err(DispatcherHookError::HookAlreadyInstalled);
         }
-        *slot = Some(BeforeChunkUpdatingHook {
+        *slot = Some(NamedDispatcherHook {
             name,
             install: Arc::new(move |builder| builder.with(factory(), name, &["current-chunk"])),
+        });
+        drop(slot);
+        *self.built_dispatcher.lock().unwrap() = None;
+        Ok(())
+    }
+
+    /// 在默认广播排空消息前安装唯一的命名应用系统。
+    pub fn install_before_broadcast_system<T, F>(
+        &mut self,
+        name: &'static str,
+        factory: F,
+    ) -> Result<(), DispatcherHookError>
+    where
+        T: for<'a> specs::System<'a> + Send + 'static,
+        for<'a> <T as specs::System<'a>>::SystemData: specs::SystemData<'a>,
+        F: Fn() -> T + Send + Sync + 'static,
+    {
+        if !self.uses_default_dispatcher {
+            return Err(DispatcherHookError::CustomDispatcherUnsupported);
+        }
+        if name.is_empty() || DEFAULT_DISPATCHER_SYSTEM_NAMES.contains(&name) {
+            return Err(DispatcherHookError::NameConflict);
+        }
+        let mut slot = self.before_broadcast.lock().unwrap();
+        if slot.is_some() {
+            return Err(DispatcherHookError::HookAlreadyInstalled);
+        }
+        *slot = Some(NamedDispatcherHook {
+            name,
+            install: Arc::new(move |builder| {
+                builder.with(
+                    factory(),
+                    name,
+                    &["chunk-sending", "entities-sending", "peers-sending"],
+                )
+            }),
         });
         drop(slot);
         *self.built_dispatcher.lock().unwrap() = None;

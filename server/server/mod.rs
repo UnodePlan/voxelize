@@ -41,7 +41,7 @@ use authenticated_client_id::SharedAuthenticatedClientIdResolver;
 pub use connection_lifecycle::{ConnectionLifecycleEvent, ConnectionLifecycleObserver};
 use connections::{DetachedConnection, LeavingSession, PendingJoin, PendingRebind};
 pub use connections::{WsReceiver, WsSendError, WsSender};
-pub use detached_lifecycle::DespawnDetachedPrincipal;
+pub use detached_lifecycle::{DespawnDetachedPrincipal, EvictMatchPrincipal};
 pub use models::*;
 pub(crate) use websocket::{ws_route, HandshakeConfig};
 pub use world_lifecycle::{

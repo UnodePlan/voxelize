@@ -72,36 +72,91 @@ pub struct DespawnDetachedPrincipal {
     pub world_generation: String,
 }
 
+/// 淘汰后按账号移出指定 World；在线连接保留在大厅，掉线实体直接销毁。
+#[derive(actix::Message)]
+#[rtype(result = "bool")]
+pub struct EvictMatchPrincipal {
+    pub account_id: String,
+    pub world_name: String,
+    pub world_generation: String,
+}
+
+impl Handler<EvictMatchPrincipal> for Server {
+    type Result = ResponseActFuture<Self, bool>;
+
+    fn handle(&mut self, message: EvictMatchPrincipal, _: &mut Context<Self>) -> Self::Result {
+        let generation_matches = self
+            .world_generations
+            .get(&message.world_name)
+            .is_some_and(|generation| generation == &message.world_generation);
+        if !generation_matches {
+            return Box::pin(ready(false));
+        }
+
+        let active_connection = self.connection_principals.iter().find_map(
+            |(connection_id, principal)| {
+                (principal.account_id == message.account_id
+                    && self
+                        .connections
+                        .get(connection_id)
+                        .is_some_and(|(_, world_name, _)| world_name == &message.world_name))
+                .then(|| connection_id.clone())
+            },
+        );
+        if let Some(connection_id) = active_connection {
+            return Box::pin(
+                self.leave_world(connection_id)
+                    .map(|_, _, _| true),
+            );
+        }
+
+        let detached = DespawnDetachedPrincipal {
+            account_id: message.account_id,
+            world_name: message.world_name,
+            world_generation: message.world_generation,
+        };
+        despawn_detached(self, detached)
+    }
+}
+
 impl Handler<DespawnDetachedPrincipal> for Server {
     type Result = ResponseActFuture<Self, bool>;
 
     fn handle(&mut self, message: DespawnDetachedPrincipal, _: &mut Context<Self>) -> Self::Result {
+        despawn_detached(self, message)
+    }
+}
+
+fn despawn_detached(
+    server: &mut Server,
+    message: DespawnDetachedPrincipal,
+) -> ResponseActFuture<Server, bool> {
         let matches_target = |detached: &DetachedConnection| {
             detached.world_name == message.world_name
                 && detached.world_generation == message.world_generation
         };
         let mut client_ids = Vec::new();
 
-        if self
+        if server
             .detached_connections
             .get(&message.account_id)
             .is_some_and(matches_target)
         {
-            let detached = self
+            let detached = server
                 .detached_connections
                 .remove(&message.account_id)
                 .unwrap();
             client_ids.push(detached.client_id);
         }
-        if self
+        if server
             .pending_detaches
             .get(&message.account_id)
             .is_some_and(matches_target)
         {
-            let detached = self.pending_detaches.remove(&message.account_id).unwrap();
+            let detached = server.pending_detaches.remove(&message.account_id).unwrap();
             client_ids.push(detached.client_id);
         }
-        if let Some(pending) = self
+        if let Some(pending) = server
             .pending_rebinds
             .get_mut(&message.account_id)
             .filter(|pending| matches_target(&pending.detached) && !pending.despawn_requested)
@@ -117,11 +172,11 @@ impl Handler<DespawnDetachedPrincipal> for Server {
             return Box::pin(ready(false));
         }
 
-        let world = self
+        let world = server
             .world_generations
             .get(&message.world_name)
             .filter(|generation| *generation == &message.world_generation)
-            .and_then(|_| self.worlds.get(&message.world_name))
+            .and_then(|_| server.worlds.get(&message.world_name))
             .cloned();
         let Some(world) = world else {
             return Box::pin(ready(true));
@@ -138,7 +193,6 @@ impl Handler<DespawnDetachedPrincipal> for Server {
                 .await;
                 true
             }
-            .into_actor(self),
+            .into_actor(server),
         )
-    }
 }

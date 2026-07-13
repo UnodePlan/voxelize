@@ -6,22 +6,27 @@ use voxelize::World;
 
 use super::{
     authority::GameplayAuthority,
+    combat_system::CombatResolutionSystem,
     components::{
-        FixedEquipmentComp, LootDropComp, MatchPlayerComp, MiningComp, ResourceInventoryComp,
+        CombatComp, EliminationComp, FixedEquipmentComp, HealthComp, LootDropComp, MatchPlayerComp,
+        MiningComp, ResourceInventoryComp, RoundStatsComp,
     },
-    intents::{DropSlotIntentQueue, MiningIntentQueue},
+    intents::{AttackIntentQueue, DropSlotIntentQueue, MiningIntentQueue},
     methods::install_gameplay_methods,
     mining_system::MiningResolutionSystem,
     system::GameplayRuntimeSystem,
+    ForcedEliminationQueue,
 };
 use crate::{
     contracts::{bundled_manifest, ExtractionManifest, ResourceKey},
     gameplay::{
+        combat::{CombatState, HealthState},
         config::GameplayConfig,
         drop_queue::{PendingDropQueue, SpawnedDropIds},
         equipment::FixedEquipment,
         harvest::HarvestedVoxelSet,
         inventory::MatchInventory,
+        round_stats::RoundStats,
     },
     generation::GenerationConfig,
     match_world::PlayableBounds,
@@ -30,8 +35,10 @@ use crate::{
 
 pub(super) const GAMEPLAY_SYSTEM_NAME: &str = "extraction-gameplay-runtime";
 pub(super) const MINING_SYSTEM_NAME: &str = "extraction-mining-resolution";
+pub(super) const COMBAT_SYSTEM_NAME: &str = "extraction-combat-resolution";
 const DEFAULT_DISPATCHER_LEAVES: &[&str] = &[
     MINING_SYSTEM_NAME,
+    COMBAT_SYSTEM_NAME,
     "chunk-saving",
     "entities-saving",
     "cleanup",
@@ -104,6 +111,7 @@ pub(crate) fn install_gameplay_runtime(
     if config.inventory_slots != spec.loadout.resource_backpack_slots
         || equipment.pickaxe != spec.loadout.pickaxe
         || equipment.melee_weapon != spec.loadout.melee_weapon
+        || spec.loadout.max_health_half_hearts != crate::contracts::MAX_HALF_HEARTS
     {
         return Err(GameplayInstallError::LoadoutMismatch);
     }
@@ -137,6 +145,10 @@ pub(crate) fn install_gameplay_runtime(
     world.ecs_mut().register::<FixedEquipmentComp>();
     world.ecs_mut().register::<MiningComp>();
     world.ecs_mut().register::<LootDropComp>();
+    world.ecs_mut().register::<HealthComp>();
+    world.ecs_mut().register::<CombatComp>();
+    world.ecs_mut().register::<RoundStatsComp>();
+    world.ecs_mut().register::<EliminationComp>();
     world.ecs_mut().insert(GameplayRuntimeContext::new(
         spec.match_id,
         config,
@@ -146,16 +158,21 @@ pub(crate) fn install_gameplay_runtime(
         max_height,
         chunk_size,
     ));
+    let player_clock = authority.clone();
     world.ecs_mut().insert(authority);
     world.ecs_mut().insert(PendingDropQueue::default());
     world.ecs_mut().insert(SpawnedDropIds::default());
     world.ecs_mut().insert(HarvestedVoxelSet::default());
+    world.ecs_mut().insert(ForcedEliminationQueue::default());
     world
         .ecs_mut()
         .insert(DropSlotIntentQueue::new(config.intent_queue_capacity));
     world
         .ecs_mut()
         .insert(MiningIntentQueue::new(config.intent_queue_capacity));
+    world
+        .ecs_mut()
+        .insert(AttackIntentQueue::new(config.intent_queue_capacity));
 
     let players = spec
         .roster
@@ -172,12 +189,19 @@ pub(crate) fn install_gameplay_runtime(
         })
         .collect::<HashMap<_, _>>();
     let players = Arc::new(players);
+    let max_health_half_hearts = spec.loadout.max_health_half_hearts;
     world.add_client_modifier(move |world, entity| {
         let client_id = world.get_id(entity);
         let Some(player) = players.get(&client_id) else {
             return;
         };
         let Ok(inventory) = MatchInventory::new(config.max_stack) else {
+            return;
+        };
+        let Ok(health) = HealthState::new(max_health_half_hearts) else {
+            return;
+        };
+        let Some(now) = player_clock.monotonic_now() else {
             return;
         };
         world.add(
@@ -191,11 +215,18 @@ pub(crate) fn install_gameplay_runtime(
         world.add(entity, ResourceInventoryComp::new(inventory));
         world.add(entity, FixedEquipmentComp::standard());
         world.add(entity, MiningComp::new());
+        world.add(entity, HealthComp::new(health));
+        world.add(entity, CombatComp::new(CombatState::default()));
+        world.add(entity, RoundStatsComp::new(RoundStats::new(now)));
+        world.add(entity, EliminationComp::alive());
     });
 
     install_gameplay_methods(world);
     world
         .install_before_chunk_updating_system(MINING_SYSTEM_NAME, || MiningResolutionSystem)
+        .map_err(|_| GameplayInstallError::DispatcherUnavailable)?;
+    world
+        .install_before_broadcast_system(COMBAT_SYSTEM_NAME, || CombatResolutionSystem)
         .map_err(|_| GameplayInstallError::DispatcherUnavailable)?;
     world.extend_dispatcher(|builder| {
         builder.with(

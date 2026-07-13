@@ -5,7 +5,7 @@ use voxelize::{Chunks, Clients, DirectionComp, MessageQueues, PositionComp};
 
 use super::{
     authority::GameplayAuthority,
-    components::{FixedEquipmentComp, MatchPlayerComp, MiningComp},
+    components::{EliminationComp, FixedEquipmentComp, MatchPlayerComp, MiningComp},
     intents::MiningIntentQueue,
     mining_dirty::MiningDirtyPlayers,
     mining_intent_actions::{
@@ -32,6 +32,7 @@ pub(super) struct MiningIntentAccess<'a, 'world> {
     pub equipment: &'a ReadStorage<'world, FixedEquipmentComp>,
     pub positions: &'a ReadStorage<'world, PositionComp>,
     pub directions: &'a ReadStorage<'world, DirectionComp>,
+    pub eliminations: &'a ReadStorage<'world, EliminationComp>,
     pub mining: &'a mut WriteStorage<'world, MiningComp>,
     pub dirty: &'a mut MiningDirtyPlayers,
 }
@@ -56,7 +57,11 @@ pub(super) fn process_mining_intents(mut access: MiningIntentAccess<'_, '_>) {
                 intent.entity,
                 &intent.client_id,
                 player.account_id(),
-            );
+            )
+            && access
+                .eliminations
+                .get(intent.entity)
+                .is_some_and(|state| state.record().is_none());
         if !authorized {
             reject_intent(
                 &mut access,

@@ -64,7 +64,10 @@ impl Server {
         }))
     }
 
-    fn leave_world(&mut self, connection_id: String) -> ResponseActFuture<Self, Option<String>> {
+    pub(super) fn leave_world(
+        &mut self,
+        connection_id: String,
+    ) -> ResponseActFuture<Self, Option<String>> {
         let leaving = if let Some(pending) = self.pending_joins.remove(&connection_id) {
             let world = self
                 .world_generations

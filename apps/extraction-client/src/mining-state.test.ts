@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { MiningStateEnvelope } from "../../../contracts/extraction/v1/typescript";
+
 import {
   authoritativeMiningProgress,
   INITIAL_MINING_VIEW_STATE,

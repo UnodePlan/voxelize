@@ -6,6 +6,8 @@ use uuid::Uuid;
 mod command;
 mod coordinator;
 mod coordinator_connections;
+#[cfg(any(feature = "engine", test))]
+mod coordinator_deaths;
 mod coordinator_events;
 mod coordinator_lifecycle;
 mod coordinator_participants;
@@ -20,6 +22,8 @@ mod gate_tests;
 mod gate_types;
 mod model;
 mod service;
+#[cfg(any(feature = "engine", test))]
+mod service_deaths;
 #[cfg(test)]
 mod service_tests;
 mod service_ticker;
@@ -27,8 +31,9 @@ mod state;
 
 pub use model::{
     ActivationDeadlines, CreatePreparingMatch, FrozenParticipant, FrozenRoster, FrozenRosterError,
-    MatchRecord, MatchVersions, ParticipantRecord, QueuedPlayer, SeatId, SeatIdError, StoredMatch,
-    MATCH_SIZE, RECONNECT_WINDOW,
+    MatchDeathNotice, MatchRecord, MatchTimeoutNotice, MatchVersions, ParticipantDeath,
+    ParticipantMatchStats, ParticipantRecord, ParticipantResourceCounts, ParticipantTimeout,
+    QueuedPlayer, SeatId, SeatIdError, StoredMatch, MATCH_SIZE, RECONNECT_WINDOW,
 };
 pub use service::{
     MatchAttachKind, MatchConnectionEvent, MatchmakingError, MatchmakingService, QueueSnapshot,

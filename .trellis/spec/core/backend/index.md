@@ -25,6 +25,7 @@ This directory contains guidelines for backend development. Fill in each file wi
 | [Deterministic World Generation](./deterministic-world-generation.md) | Stable catalogs, versioned terrain, actual-Chunk fingerprints, and preload readiness | Active |
 | [Authoritative Match Inventory and Loot](./authoritative-match-assets.md) | Private inventory, pending ownership, deterministic drops, auto-pickup, and Direct state | Active |
 | [Authoritative Match Mining](./authoritative-mining.md) | Strict mining intents, server timing/raycast, atomic harvest, AIR ordering, and full progress snapshots | Active |
+| [Authoritative Match Combat](./authoritative-combat.md) | Half-heart health, server-selected melee targets, terminal inventory drops, timeout arbitration, and death persistence | Active |
 
 ---
 

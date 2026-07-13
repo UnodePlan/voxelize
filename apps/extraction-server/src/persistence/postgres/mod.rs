@@ -11,7 +11,7 @@ use sqlx::{migrate::Migrator, postgres::PgPoolOptions, PgPool};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-use crate::matchmaking::{CreatePreparingMatch, ParticipantRecord, StoredMatch};
+use crate::matchmaking::{CreatePreparingMatch, ParticipantDeath, ParticipantRecord, StoredMatch};
 use crate::ports::{
     AuthRepository, AuthRepositoryError, LoginCommand, LoginResult, MatchRepository,
     MatchRepositoryError, NewNonce, RepositoryError, RepositoryFuture, RepositoryProbe,
@@ -189,13 +189,19 @@ impl MatchRepository for PgRepository {
         matchmaking::reconnect(&self.pool, match_id, account_id, at).await
     }
 
-    async fn time_out(
+    async fn mark_dead(
         &self,
-        match_id: Uuid,
-        account_id: Uuid,
+        death: ParticipantDeath,
+    ) -> Result<TransitionOutcome<ParticipantRecord>, MatchRepositoryError> {
+        matchmaking::mark_dead(&self.pool, death).await
+    }
+
+    async fn mark_timed_out(
+        &self,
+        timeout: crate::matchmaking::ParticipantTimeout,
         at: OffsetDateTime,
     ) -> Result<TransitionOutcome<ParticipantRecord>, MatchRepositoryError> {
-        matchmaking::time_out(&self.pool, match_id, account_id, at).await
+        matchmaking::mark_timed_out(&self.pool, timeout, at).await
     }
 
     async fn open_extraction(

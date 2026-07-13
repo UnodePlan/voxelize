@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
 
+import manifestJson from "../../../contracts/extraction/v1/manifest.json";
 import {
   decodeMiningIntent,
   decodeProtocolEnvelope,
 } from "../../../contracts/extraction/v1/typescript";
-import manifestJson from "../../../contracts/extraction/v1/manifest.json";
 import type { ExtractionManifest } from "../../../contracts/extraction/v1/typescript";
+
 import { MiningIntentFactory } from "./mining-intents";
 
 const manifest = manifestJson as ExtractionManifest;
@@ -13,7 +14,11 @@ const manifest = manifestJson as ExtractionManifest;
 describe("MiningIntentFactory", () => {
   it("只生成严格递增的 start/maintain/cancel 意图", () => {
     const factory = new MiningIntentFactory(manifest.protocolVersion, 8);
-    const messages = [factory.start([4, 28, -9]), factory.maintain(), factory.cancel()];
+    const messages = [
+      factory.start([4, 28, -9]),
+      factory.maintain(),
+      factory.cancel(),
+    ];
 
     expect(messages.map((message) => message.sequence)).toEqual([9, 10, 11]);
     expect(

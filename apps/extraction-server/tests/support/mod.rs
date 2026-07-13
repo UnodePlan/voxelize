@@ -11,7 +11,8 @@ use extraction_server::{
         SignatureVerifier,
     },
     matchmaking::{
-        CreatePreparingMatch, MatchVersions, MatchmakingService, ParticipantRecord, StoredMatch,
+        CreatePreparingMatch, MatchVersions, MatchmakingService, ParticipantDeath,
+        ParticipantRecord, ParticipantTimeout, StoredMatch,
     },
     ports::{
         AuthRepository, AuthRepositoryError, Clock, LoginCommand, LoginResult, MatchRepository,
@@ -389,10 +390,16 @@ impl MatchRepository for EmptyMatchRepository {
         Err(MatchRepositoryError::Unavailable)
     }
 
-    async fn time_out(
+    async fn mark_dead(
         &self,
-        _match_id: Uuid,
-        _account_id: Uuid,
+        _death: ParticipantDeath,
+    ) -> Result<TransitionOutcome<ParticipantRecord>, MatchRepositoryError> {
+        Err(MatchRepositoryError::Unavailable)
+    }
+
+    async fn mark_timed_out(
+        &self,
+        _timeout: ParticipantTimeout,
         _at: OffsetDateTime,
     ) -> Result<TransitionOutcome<ParticipantRecord>, MatchRepositoryError> {
         Err(MatchRepositoryError::Unavailable)
@@ -446,6 +453,22 @@ impl MatchWorldRuntime for EmptyWorldRuntime {
     }
 
     async fn despawn_detached(
+        &self,
+        _world_name: &str,
+        _account_id: Uuid,
+    ) -> Result<bool, MatchWorldRuntimeError> {
+        Ok(false)
+    }
+
+    async fn evict_participant(
+        &self,
+        _world_name: &str,
+        _account_id: Uuid,
+    ) -> Result<bool, MatchWorldRuntimeError> {
+        Ok(false)
+    }
+
+    async fn request_timeout_elimination(
         &self,
         _world_name: &str,
         _account_id: Uuid,

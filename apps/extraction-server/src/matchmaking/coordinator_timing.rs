@@ -7,6 +7,18 @@ use crate::ports::SettlingTrigger;
 
 impl Coordinator {
     pub(super) async fn advance_time(&mut self) -> Result<(), MatchmakingError> {
+        if self.current.is_none() && self.queue.len() == super::MATCH_SIZE {
+            if self.gate.is_failed_closed() {
+                return Err(MatchmakingError::Unavailable);
+            }
+            let requesting_account = self
+                .queue
+                .front()
+                .map(|entry| entry.account_id)
+                .ok_or(MatchmakingError::Unavailable)?;
+            self.prepare_first_roster(requesting_account).await?;
+            return Ok(());
+        }
         let now = self.clock.monotonic_now();
         let state = self.current.as_ref().map(|current| current.state);
         if state == Some(MatchState::Aborted) {

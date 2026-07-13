@@ -746,6 +746,84 @@ async fn stale_generation_rebind_receipt_emits_rejected_lifecycle_event() {
 }
 
 #[actix::test]
+async fn eviction_is_generation_safe_and_returns_online_session_to_lobby() {
+    let observer = RecordingObserver::default();
+    let mut server = Server::new()
+        .debug(false)
+        .connection_lifecycle_observer(observer.clone())
+        .build();
+    server
+        .add_world(World::new("arena", &WorldConfig::default()))
+        .unwrap();
+    server.prepare().await;
+    let world = server.worlds.get("arena").unwrap().clone();
+    let server = server.start();
+    let (sender, _receiver) = ws_sender();
+    let (connection_id, _) = server
+        .send(Connect {
+            id: None,
+            principal: Some(ConnectionPrincipal::new("account-1", "session-1")),
+            is_transport: false,
+            sender,
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        server
+            .send(ClientMessage {
+                id: connection_id.clone(),
+                data: Message::new(&MessageType::Join)
+                    .json(r#"{"world":"arena","username":"Ignored"}"#)
+                    .build(),
+            })
+            .await
+            .unwrap(),
+        None
+    );
+    let events = observer.wait_for_len(2).await;
+    let generation = match &events[1] {
+        ConnectionLifecycleEvent::JoinCommitted {
+            world_generation, ..
+        } => world_generation.clone(),
+        event => panic!("unexpected join event: {event:?}"),
+    };
+
+    assert!(!server
+        .send(EvictMatchPrincipal {
+            account_id: "account-1".to_owned(),
+            world_name: "arena".to_owned(),
+            world_generation: "stale-generation".to_owned(),
+        })
+        .await
+        .unwrap());
+    assert_eq!(world.send(GetWorldStats).await.unwrap().client_count, 1);
+
+    assert!(server
+        .send(EvictMatchPrincipal {
+            account_id: "account-1".to_owned(),
+            world_name: "arena".to_owned(),
+            world_generation: generation,
+        })
+        .await
+        .unwrap());
+    assert_eq!(world.send(GetWorldStats).await.unwrap().client_count, 0);
+
+    assert_eq!(
+        server
+            .send(ClientMessage {
+                id: connection_id,
+                data: Message::new(&MessageType::Join)
+                    .json(r#"{"world":"arena","username":"Ignored"}"#)
+                    .build(),
+            })
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(world.send(GetWorldStats).await.unwrap().client_count, 1);
+}
+
+#[actix::test]
 async fn rejected_rebind_attempt_is_distinct_from_the_successful_retry() {
     let observer = RecordingObserver::default();
     let rebind_attempts = Arc::new(Mutex::new(Vec::new()));

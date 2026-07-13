@@ -3,7 +3,10 @@ use voxelize::{Chunks, Clients, DirectionComp, MessageQueues, PositionComp};
 
 use super::{
     authority::GameplayAuthority,
-    components::{FixedEquipmentComp, MatchPlayerComp, MiningComp, ResourceInventoryComp},
+    components::{
+        EliminationComp, FixedEquipmentComp, MatchPlayerComp, MiningComp, ResourceInventoryComp,
+        RoundStatsComp,
+    },
     intents::MiningIntentQueue,
     messaging::{queue_error, queue_inventory_state, queue_mining_state},
     mining_completion::{advance_mining, MiningCompletionAccess},
@@ -37,8 +40,10 @@ impl<'a> System<'a> for MiningResolutionSystem {
         ReadStorage<'a, FixedEquipmentComp>,
         ReadStorage<'a, PositionComp>,
         ReadStorage<'a, DirectionComp>,
+        ReadStorage<'a, EliminationComp>,
         WriteStorage<'a, MiningComp>,
         WriteStorage<'a, ResourceInventoryComp>,
+        WriteStorage<'a, RoundStatsComp>,
     );
 
     fn run(&mut self, data: Self::SystemData) {
@@ -57,8 +62,10 @@ impl<'a> System<'a> for MiningResolutionSystem {
             equipment,
             positions,
             directions,
+            eliminations,
             mut mining,
             mut inventories,
+            mut stats,
         ) = data;
         let mut dirty = MiningDirtyPlayers::default();
         let Some(now) = authority.monotonic_now() else {
@@ -96,6 +103,7 @@ impl<'a> System<'a> for MiningResolutionSystem {
             equipment: &equipment,
             positions: &positions,
             directions: &directions,
+            eliminations: &eliminations,
             mining: &mut mining,
             dirty: &mut dirty,
         });
@@ -113,8 +121,10 @@ impl<'a> System<'a> for MiningResolutionSystem {
             equipment: &equipment,
             positions: &positions,
             directions: &directions,
+            eliminations: &eliminations,
             mining: &mut mining,
             inventories: &mut inventories,
+            stats: &mut stats,
             dirty: &mut dirty,
         });
         sync_dirty(

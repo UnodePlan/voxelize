@@ -2,11 +2,14 @@ use specs::{Component, DenseVecStorage, VecStorage};
 use uuid::Uuid;
 
 use crate::{
+    contracts::DeathResultEnvelope,
     gameplay::{
+        combat::{CombatState, HealthState},
         equipment::{FixedEquipment, FixedEquipmentSnapshot},
         inventory::{InventorySnapshot, MatchInventory},
         loot::LootDrop,
         mining::MiningState,
+        round_stats::RoundStats,
     },
     matchmaking::SeatId,
 };
@@ -81,6 +84,10 @@ impl FixedEquipmentComp {
     pub(super) const fn has_basic_pickaxe(&self) -> bool {
         self.0.has_basic_pickaxe()
     }
+
+    pub(super) const fn has_basic_melee_weapon(&self) -> bool {
+        self.0.has_basic_melee_weapon()
+    }
 }
 
 impl Component for FixedEquipmentComp {
@@ -125,4 +132,98 @@ impl LootDropComp {
 
 impl Component for LootDropComp {
     type Storage = DenseVecStorage<Self>;
+}
+
+pub(super) struct HealthComp(HealthState);
+
+impl HealthComp {
+    pub(super) const fn new(health: HealthState) -> Self {
+        Self(health)
+    }
+
+    pub(super) const fn state(&self) -> &HealthState {
+        &self.0
+    }
+
+    pub(super) fn state_mut(&mut self) -> &mut HealthState {
+        &mut self.0
+    }
+}
+
+impl Component for HealthComp {
+    type Storage = VecStorage<Self>;
+}
+
+pub(super) struct CombatComp(CombatState);
+
+impl CombatComp {
+    pub(super) const fn new(combat: CombatState) -> Self {
+        Self(combat)
+    }
+
+    pub(super) const fn state(&self) -> &CombatState {
+        &self.0
+    }
+
+    pub(super) fn state_mut(&mut self) -> &mut CombatState {
+        &mut self.0
+    }
+}
+
+impl Component for CombatComp {
+    type Storage = DenseVecStorage<Self>;
+}
+
+pub(super) struct RoundStatsComp(RoundStats);
+
+impl RoundStatsComp {
+    pub(super) const fn new(stats: RoundStats) -> Self {
+        Self(stats)
+    }
+
+    pub(super) const fn stats(&self) -> &RoundStats {
+        &self.0
+    }
+
+    pub(super) fn stats_mut(&mut self) -> &mut RoundStats {
+        &mut self.0
+    }
+}
+
+impl Component for RoundStatsComp {
+    type Storage = DenseVecStorage<Self>;
+}
+
+pub(super) struct EliminationRecord {
+    pub killer_account_id: Option<Uuid>,
+    pub result: DeathResultEnvelope,
+    pub notice_sent: bool,
+}
+
+pub(super) struct EliminationComp(Option<EliminationRecord>);
+
+impl EliminationComp {
+    pub(super) const fn alive() -> Self {
+        Self(None)
+    }
+
+    pub(super) fn record(&self) -> Option<&EliminationRecord> {
+        self.0.as_ref()
+    }
+
+    pub(super) fn record_mut(&mut self) -> Option<&mut EliminationRecord> {
+        self.0.as_mut()
+    }
+
+    pub(super) fn eliminate(&mut self, record: EliminationRecord) -> bool {
+        if self.0.is_some() {
+            return false;
+        }
+        self.0 = Some(record);
+        true
+    }
+}
+
+impl Component for EliminationComp {
+    type Storage = VecStorage<Self>;
 }

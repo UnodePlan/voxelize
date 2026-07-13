@@ -1,13 +1,21 @@
 import { describe, expect, it } from "vitest";
 
+import combatStateFixtureJson from "../../../contracts/extraction/v1/fixtures/combat-states.json";
 import envelopeFixtureJson from "../../../contracts/extraction/v1/fixtures/envelopes.json";
 import gameplayIntentFixtureJson from "../../../contracts/extraction/v1/fixtures/gameplay-intents.json";
-import manifestJson from "../../../contracts/extraction/v1/manifest.json";
+import getStateFixtureJson from "../../../contracts/extraction/v1/fixtures/get-state-results.json";
 import miningStateFixtureJson from "../../../contracts/extraction/v1/fixtures/mining-states.json";
+import manifestJson from "../../../contracts/extraction/v1/manifest.json";
 import {
-  decodeEnvelopeFixture,
+  decodeAttackIntent,
+  decodeAttackResultData,
+  decodeDeathResultEnvelope,
   decodeDropSlotIntent,
+  decodeEnvelopeFixture,
   decodeExtractionManifest,
+  decodeGameplayStateData,
+  decodeGetStateIntent,
+  decodeHealthStateEnvelope,
   decodeMiningIntent,
   decodeMiningStateEnvelope,
   decodeProtocolEnvelope,
@@ -22,6 +30,10 @@ describe("extraction contract fixtures", () => {
   const miningStateFixture = decodeEnvelopeFixture(
     miningStateFixtureJson as unknown,
   );
+  const combatStateFixture = decodeEnvelopeFixture(
+    combatStateFixtureJson as unknown,
+  );
+  const getStateFixture = decodeEnvelopeFixture(getStateFixtureJson as unknown);
 
   it("keeps stable resources, stack limits, IDs and score weights", () => {
     expect(
@@ -96,16 +108,45 @@ describe("extraction contract fixtures", () => {
     }
   });
 
-  it.each(gameplayIntentFixture.cases)("matches gameplay $name", (fixtureCase) => {
+  it.each(gameplayIntentFixture.cases)(
+    "matches gameplay $name",
+    (fixtureCase) => {
+      const decode = () => {
+        const envelope = decodeProtocolEnvelope(fixtureCase.value, manifest);
+        if (fixtureCase.route === "pvp:v1:drop-slot") {
+          return decodeDropSlotIntent(envelope);
+        }
+        if (fixtureCase.route === "pvp:v1:mining") {
+          return decodeMiningIntent(envelope);
+        }
+        if (fixtureCase.route === "pvp:v1:attack") {
+          return decodeAttackIntent(envelope);
+        }
+        if (fixtureCase.route === "pvp:v1:get-state") {
+          return decodeGetStateIntent(envelope);
+        }
+        throw new Error(`unknown gameplay fixture route ${fixtureCase.route}`);
+      };
+      if (fixtureCase.accept) {
+        expect(decode).not.toThrow();
+      } else {
+        expect(decode).toThrow();
+      }
+    },
+  );
+
+  it.each(combatStateFixture.cases)("matches combat $name", (fixtureCase) => {
     const decode = () => {
-      const envelope = decodeProtocolEnvelope(fixtureCase.value, manifest);
-      if (fixtureCase.route === "pvp:v1:drop-slot") {
-        return decodeDropSlotIntent(envelope);
+      if (fixtureCase.route === "pvp:v1:attack-result") {
+        return decodeAttackResultData(fixtureCase.value);
       }
-      if (fixtureCase.route === "pvp:v1:mining") {
-        return decodeMiningIntent(envelope);
+      if (fixtureCase.route === "pvp:v1:health-state") {
+        return decodeHealthStateEnvelope(fixtureCase.value, manifest);
       }
-      throw new Error(`unknown gameplay fixture route ${fixtureCase.route}`);
+      if (fixtureCase.route === "pvp:v1:death-result") {
+        return decodeDeathResultEnvelope(fixtureCase.value, manifest);
+      }
+      throw new Error(`unknown combat fixture route ${fixtureCase.route}`);
     };
     if (fixtureCase.accept) {
       expect(decode).not.toThrow();
@@ -114,12 +155,25 @@ describe("extraction contract fixtures", () => {
     }
   });
 
-  it.each(miningStateFixture.cases)("matches mining state $name", (fixtureCase) => {
-    const decode = () => decodeMiningStateEnvelope(fixtureCase.value, manifest);
+  it.each(getStateFixture.cases)("matches get-state $name", (fixtureCase) => {
+    const decode = () => decodeGameplayStateData(fixtureCase.value, manifest);
     if (fixtureCase.accept) {
       expect(decode).not.toThrow();
     } else {
       expect(decode).toThrow();
     }
   });
+
+  it.each(miningStateFixture.cases)(
+    "matches mining state $name",
+    (fixtureCase) => {
+      const decode = () =>
+        decodeMiningStateEnvelope(fixtureCase.value, manifest);
+      if (fixtureCase.accept) {
+        expect(decode).not.toThrow();
+      } else {
+        expect(decode).toThrow();
+      }
+    },
+  );
 });

@@ -7,17 +7,22 @@ use voxelize::{DirectionComp, PositionComp, World, WorldConfig};
 
 use super::{
     authority::GameplayAuthority,
-    components::{LootDropComp, MatchPlayerComp, ResourceInventoryComp},
+    components::{
+        CombatComp, EliminationComp, FixedEquipmentComp, HealthComp, LootDropComp, MatchPlayerComp,
+        MiningComp, ResourceInventoryComp, RoundStatsComp,
+    },
     intents::{DropSlotIntentQueue, QueuedDropSlotIntent},
-    runtime::install_gameplay_runtime,
+    runtime::{install_gameplay_runtime, GameplayInstallError},
     system::GameplayRuntimeSystem,
 };
 use crate::{
     contracts::{DropSlotPayload, ResourceKey},
     gameplay::{
+        combat::{CombatState, HealthState},
         drop_queue::PendingDropQueue,
         inventory::{MatchInventory, ResourceStack},
         loot::{DropId, LootDrop, ResourceBundle},
+        round_stats::RoundStats,
     },
     match_world::{FixedMatchLoadout, PlayableBounds, ENGINE_MAX_CHUNK, ENGINE_MIN_CHUNK},
     matchmaking::{FrozenRoster, QueuedPlayer},
@@ -48,6 +53,22 @@ pub(super) fn match_spec() -> MatchWorldSpec {
     }
 }
 
+#[test]
+fn gameplay_rejects_a_health_loadout_that_disagrees_with_the_protocol() {
+    let mut spec = match_spec();
+    spec.loadout.max_health_half_hearts = 18;
+    let mut world = World::new(&spec.world_name, &WorldConfig::default());
+
+    assert_eq!(
+        install_gameplay_runtime(
+            &mut world,
+            &spec,
+            GameplayAuthority::allow_all_at(Duration::ZERO),
+        ),
+        Err(GameplayInstallError::LoadoutMismatch)
+    );
+}
+
 fn world_and_player(
     now: Duration,
     initial: Option<ResourceStack>,
@@ -69,6 +90,12 @@ fn world_and_player(
             participant.seat_id,
         ))
         .with(ResourceInventoryComp::new(inventory))
+        .with(FixedEquipmentComp::standard())
+        .with(MiningComp::new())
+        .with(HealthComp::new(HealthState::new(20).unwrap()))
+        .with(CombatComp::new(CombatState::default()))
+        .with(RoundStatsComp::new(RoundStats::new(now)))
+        .with(EliminationComp::alive())
         .with(PositionComp::new(0.0, 1.0, 0.0))
         .with(DirectionComp::new(1.0, 0.0, 0.0))
         .build();

@@ -8,7 +8,9 @@ use specs::Entity;
 use uuid::Uuid;
 use voxelize::{Clients, World};
 
-use crate::matchmaking::MatchmakingService;
+use crate::matchmaking::{
+    MatchDeathNotice, MatchTimeoutNotice, MatchmakingService, ParticipantDeath, ParticipantTimeout,
+};
 
 #[derive(Clone)]
 pub(crate) struct GameplayAuthority {
@@ -111,6 +113,48 @@ impl GameplayAuthority {
         self.matchmaking
             .upgrade()
             .map(|service| service.monotonic_now())
+    }
+
+    pub(super) fn report_death(&self, death: ParticipantDeath) -> bool {
+        #[cfg(test)]
+        if self.test_now.is_some() {
+            return death.is_valid();
+        }
+        let Some(service) = self.matchmaking.upgrade() else {
+            return false;
+        };
+        let Some(world_generation) = self.world_generation(&service) else {
+            return false;
+        };
+        service.observe_death(MatchDeathNotice {
+            world_name: self.world_name.clone(),
+            world_generation,
+            death,
+        })
+    }
+
+    pub(super) fn report_timeout_elimination(&self, timeout: ParticipantTimeout) -> bool {
+        #[cfg(test)]
+        if self.test_now.is_some() {
+            return timeout.is_valid();
+        }
+        let Some(service) = self.matchmaking.upgrade() else {
+            return false;
+        };
+        let Some(world_generation) = self.world_generation(&service) else {
+            return false;
+        };
+        service.observe_timeout_elimination(MatchTimeoutNotice {
+            world_name: self.world_name.clone(),
+            world_generation,
+            timeout,
+        })
+    }
+
+    pub(super) fn fail_closed(&self) {
+        if let Some(service) = self.matchmaking.upgrade() {
+            service.fail_closed();
+        }
     }
 
     fn parse_account_id(&self, value: &str) -> Option<Uuid> {

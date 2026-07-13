@@ -1,0 +1,220 @@
+{
+  "fixtureVersion": 1,
+  "cases": [
+    {
+      "name": "valid-alive-gameplay-state",
+      "route": "pvp:v1:get-state",
+      "accept": true,
+      "value": {
+        "matchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "inventory": {
+          "slots": [
+            { "resource": "gold", "quantity": 3 }, null, null, null,
+            null, null, null, null, null, null, null, null
+          ],
+          "revision": 4,
+          "frozen": false
+        },
+        "equipment": {
+          "pickaxe": "basic_pickaxe",
+          "meleeWeapon": "basic_melee_weapon"
+        },
+        "mining": {
+          "protocolVersion": 1,
+          "type": "state",
+          "matchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "stream": "mining",
+          "revision": 2,
+          "data": { "status": "idle", "acceptedSequence": 1, "reason": "completed" }
+        },
+        "health": {
+          "protocolVersion": 1,
+          "type": "state",
+          "matchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "stream": "health",
+          "revision": 0,
+          "data": { "status": "alive", "currentHalfHearts": 20, "maxHalfHearts": 20 }
+        },
+        "attack": { "revision": 0, "acceptedSequence": null },
+        "deathResult": null
+      }
+    },
+    {
+      "name": "valid-dead-gameplay-state",
+      "route": "pvp:v1:get-state",
+      "accept": true,
+      "value": {
+        "matchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "inventory": {
+          "slots": [null, null, null, null, null, null, null, null, null, null, null, null],
+          "revision": 8,
+          "frozen": true
+        },
+        "equipment": {
+          "pickaxe": "basic_pickaxe",
+          "meleeWeapon": "basic_melee_weapon"
+        },
+        "mining": {
+          "protocolVersion": 1,
+          "type": "state",
+          "matchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "stream": "mining",
+          "revision": 5,
+          "data": { "status": "idle", "acceptedSequence": 4, "reason": "timedOut" }
+        },
+        "health": {
+          "protocolVersion": 1,
+          "type": "state",
+          "matchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "stream": "health",
+          "revision": 10,
+          "data": { "status": "dead", "currentHalfHearts": 0, "maxHalfHearts": 20 }
+        },
+        "attack": { "revision": 3, "acceptedSequence": 2 },
+        "deathResult": {
+          "protocolVersion": 1,
+          "type": "state",
+          "matchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "stream": "deathResult",
+          "revision": 10,
+          "data": {
+            "cause": "melee",
+            "killerPublicPlayerId": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+            "survivedMs": 120000,
+            "mined": { "dirt": 8, "gold": 3, "diamond": 1 },
+            "pickedUp": { "dirt": 2, "gold": 0, "diamond": 0 },
+            "lost": { "dirt": 10, "gold": 3, "diamond": 1 }
+          }
+        }
+      }
+    },
+    {
+      "name": "get-state-requires-twelve-slots",
+      "route": "pvp:v1:get-state",
+      "accept": false,
+      "value": {
+        "matchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "inventory": { "slots": [null], "revision": 0, "frozen": false },
+        "equipment": { "pickaxe": "basic_pickaxe", "meleeWeapon": "basic_melee_weapon" },
+        "mining": {
+          "protocolVersion": 1, "type": "state",
+          "matchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "stream": "mining", "revision": 0,
+          "data": { "status": "idle", "acceptedSequence": null, "reason": "initial" }
+        },
+        "health": {
+          "protocolVersion": 1, "type": "state",
+          "matchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "stream": "health", "revision": 0,
+          "data": { "status": "alive", "currentHalfHearts": 20, "maxHalfHearts": 20 }
+        },
+        "attack": { "revision": 0, "acceptedSequence": null },
+        "deathResult": null
+      }
+    },
+    {
+      "name": "get-state-rejects-nested-match-mismatch",
+      "route": "pvp:v1:get-state",
+      "accept": false,
+      "value": {
+        "matchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "inventory": {
+          "slots": [null, null, null, null, null, null, null, null, null, null, null, null],
+          "revision": 0, "frozen": false
+        },
+        "equipment": { "pickaxe": "basic_pickaxe", "meleeWeapon": "basic_melee_weapon" },
+        "mining": {
+          "protocolVersion": 1, "type": "state",
+          "matchId": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+          "stream": "mining", "revision": 0,
+          "data": { "status": "idle", "acceptedSequence": null, "reason": "initial" }
+        },
+        "health": {
+          "protocolVersion": 1, "type": "state",
+          "matchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "stream": "health", "revision": 0,
+          "data": { "status": "alive", "currentHalfHearts": 20, "maxHalfHearts": 20 }
+        },
+        "attack": { "revision": 0, "acceptedSequence": null },
+        "deathResult": null
+      }
+    },
+    {
+      "name": "alive-get-state-cannot-carry-death-result",
+      "route": "pvp:v1:get-state",
+      "accept": false,
+      "value": {
+        "matchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "inventory": {
+          "slots": [null, null, null, null, null, null, null, null, null, null, null, null],
+          "revision": 0, "frozen": false
+        },
+        "equipment": { "pickaxe": "basic_pickaxe", "meleeWeapon": "basic_melee_weapon" },
+        "mining": {
+          "protocolVersion": 1, "type": "state",
+          "matchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "stream": "mining", "revision": 0,
+          "data": { "status": "idle", "acceptedSequence": null, "reason": "initial" }
+        },
+        "health": {
+          "protocolVersion": 1, "type": "state",
+          "matchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "stream": "health", "revision": 1,
+          "data": { "status": "alive", "currentHalfHearts": 19, "maxHalfHearts": 20 }
+        },
+        "attack": { "revision": 0, "acceptedSequence": null },
+        "deathResult": {
+          "protocolVersion": 1, "type": "state",
+          "matchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "stream": "deathResult", "revision": 1,
+          "data": {
+            "cause": "reconnectTimeout", "killerPublicPlayerId": null, "survivedMs": 1,
+            "mined": { "dirt": 0, "gold": 0, "diamond": 0 },
+            "pickedUp": { "dirt": 0, "gold": 0, "diamond": 0 },
+            "lost": { "dirt": 0, "gold": 0, "diamond": 0 }
+          }
+        }
+      }
+    },
+    {
+      "name": "dead-get-state-must-freeze-and-clear-inventory",
+      "route": "pvp:v1:get-state",
+      "accept": false,
+      "value": {
+        "matchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "inventory": {
+          "slots": [
+            { "resource": "diamond", "quantity": 1 }, null, null, null,
+            null, null, null, null, null, null, null, null
+          ],
+          "revision": 8, "frozen": false
+        },
+        "equipment": { "pickaxe": "basic_pickaxe", "meleeWeapon": "basic_melee_weapon" },
+        "mining": {
+          "protocolVersion": 1, "type": "state",
+          "matchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "stream": "mining", "revision": 5,
+          "data": { "status": "idle", "acceptedSequence": 4, "reason": "timedOut" }
+        },
+        "health": {
+          "protocolVersion": 1, "type": "state",
+          "matchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "stream": "health", "revision": 10,
+          "data": { "status": "dead", "currentHalfHearts": 0, "maxHalfHearts": 20 }
+        },
+        "attack": { "revision": 3, "acceptedSequence": 2 },
+        "deathResult": {
+          "protocolVersion": 1, "type": "state",
+          "matchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "stream": "deathResult", "revision": 10,
+          "data": {
+            "cause": "reconnectTimeout", "killerPublicPlayerId": null, "survivedMs": 1,
+            "mined": { "dirt": 0, "gold": 0, "diamond": 1 },
+            "pickedUp": { "dirt": 0, "gold": 0, "diamond": 0 },
+            "lost": { "dirt": 0, "gold": 0, "diamond": 1 }
+          }
+        }
+      }
+    }
+  ]
+}

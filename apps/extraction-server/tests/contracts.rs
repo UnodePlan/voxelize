@@ -1,6 +1,8 @@
 use extraction_server::contracts::{
-    bundled_envelope_fixture, bundled_gameplay_intent_fixture, bundled_manifest,
-    bundled_mining_state_fixture, decode_drop_slot_intent, decode_mining_intent,
+    bundled_combat_state_fixture, bundled_envelope_fixture, bundled_gameplay_intent_fixture,
+    bundled_get_state_fixture, bundled_manifest, bundled_mining_state_fixture,
+    decode_attack_intent, decode_attack_result_data, decode_death_result, decode_drop_slot_intent,
+    decode_gameplay_state, decode_get_state_intent, decode_health_state, decode_mining_intent,
     decode_mining_state, decode_protocol_envelope, EquipmentKey, ErrorCode, ExtractionManifest,
     ProtocolEnvelope, ResourceKey,
 };
@@ -165,6 +167,8 @@ fn rust_drop_slot_decoder_matches_shared_gameplay_cases() {
                 match fixture_case.route.as_str() {
                     "pvp:v1:drop-slot" => decode_drop_slot_intent(&envelope).is_ok(),
                     "pvp:v1:mining" => decode_mining_intent(&envelope).is_ok(),
+                    "pvp:v1:attack" => decode_attack_intent(&envelope).is_ok(),
+                    "pvp:v1:get-state" => decode_get_state_intent(&envelope).is_ok(),
                     _ => false,
                 }
             });
@@ -172,6 +176,41 @@ fn rust_drop_slot_decoder_matches_shared_gameplay_cases() {
             decoded, fixture_case.accept,
             "gameplay fixture case {} did not match",
             fixture_case.name
+        );
+    }
+}
+
+#[test]
+fn rust_decoder_matches_shared_combat_state_cases() {
+    let manifest = bundled_manifest().unwrap();
+    let fixture = bundled_combat_state_fixture().unwrap();
+    for fixture_case in fixture.cases {
+        let decoded = match fixture_case.route.as_str() {
+            "pvp:v1:attack-result" => decode_attack_result_data(fixture_case.value).is_ok(),
+            "pvp:v1:health-state" => decode_health_state(fixture_case.value, &manifest).is_ok(),
+            "pvp:v1:death-result" => decode_death_result(fixture_case.value, &manifest).is_ok(),
+            _ => false,
+        };
+        assert_eq!(
+            decoded, fixture_case.accept,
+            "combat state fixture case {} did not match",
+            fixture_case.name
+        );
+    }
+}
+
+#[test]
+fn rust_decoder_matches_shared_get_state_cases() {
+    let manifest = bundled_manifest().unwrap();
+    let fixture = bundled_get_state_fixture().unwrap();
+    for fixture_case in fixture.cases {
+        let decoded = decode_gameplay_state(fixture_case.value, &manifest);
+        assert_eq!(
+            decoded.is_ok(),
+            fixture_case.accept,
+            "get-state fixture case {} did not match: {:?}",
+            fixture_case.name,
+            decoded.err()
         );
     }
 }

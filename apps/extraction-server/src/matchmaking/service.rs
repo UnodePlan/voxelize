@@ -118,7 +118,7 @@ pub enum MatchAttachKind {
 
 pub struct MatchmakingService {
     pub(super) sender: mpsc::Sender<Command>,
-    gate: Arc<AttachGate>,
+    pub(super) gate: Arc<AttachGate>,
     clock: Arc<dyn Clock>,
     pub(super) tick_pending: Arc<AtomicBool>,
     overflow_recovery_started: AtomicBool,
@@ -287,7 +287,7 @@ impl MatchmakingService {
         response.await.map_err(|_| MatchmakingError::Unavailable)?
     }
 
-    fn fail_closed_after_overflow(&self) {
+    pub(super) fn fail_closed_after_overflow(&self) {
         self.gate.fail_closed();
         if self.overflow_recovery_started.swap(true, Ordering::AcqRel) {
             return;

@@ -121,6 +121,7 @@ impl MiningState {
         self.accept_idle(sequence, MiningIdleReason::Cancelled)
     }
 
+    #[cfg(feature = "engine")]
     pub(crate) fn reject(
         &mut self,
         sequence: u32,

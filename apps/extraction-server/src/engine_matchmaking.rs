@@ -1,3 +1,5 @@
+mod lifecycle;
+
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex, Weak},
@@ -5,16 +7,15 @@ use std::{
 
 use actix::Addr;
 use async_trait::async_trait;
-use tokio::time::{sleep, timeout, Duration};
 use uuid::Uuid;
 use voxelize::{
-    AddWorld, ClientAttachKind, ClientDisconnectPolicy, DespawnDetachedPrincipal, PrepareWorld,
-    RemoveWorld, Server, World, WorldConfig, WorldLifecycleState, WorldRequestPolicy,
+    AddWorld, ClientAttachKind, ClientDisconnectPolicy, DespawnDetachedPrincipal,
+    EvictMatchPrincipal, RemoveWorld, Server, World, WorldConfig, WorldRequestPolicy,
 };
 
 use crate::{
     engine_catalog::EngineCatalog,
-    engine_gameplay::{install_gameplay_runtime, GameplayAuthority},
+    engine_gameplay::{install_gameplay_runtime, ForcedEliminationQueue, GameplayAuthority},
     engine_movement::install_bounded_movement,
     generation::{install_generation_stage, install_spawn_assignment, GenerationPlan},
     match_world::{engine_seed_v1, MatchWorldMetadata},
@@ -23,15 +24,13 @@ use crate::{
 };
 
 const WORLD_PRELOAD_RADIUS: usize = 10;
-const WORLD_READY_TIMEOUT: Duration = Duration::from_secs(60);
-const WORLD_READY_POLL_INTERVAL: Duration = Duration::from_millis(25);
-const WORLD_ROLLBACK_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub(crate) struct EngineMatchWorldRuntime {
     server: Addr<Server>,
     matchmaking: Weak<MatchmakingService>,
     generations: Arc<Mutex<HashMap<String, String>>>,
     owned_matches: Mutex<HashMap<String, Uuid>>,
+    forced_eliminations: Mutex<HashMap<String, ForcedEliminationQueue>>,
     catalog: Arc<EngineCatalog>,
 }
 
@@ -46,51 +45,9 @@ impl EngineMatchWorldRuntime {
             matchmaking,
             generations: Arc::new(Mutex::new(HashMap::new())),
             owned_matches: Mutex::new(HashMap::new()),
+            forced_eliminations: Mutex::new(HashMap::new()),
             catalog,
         }
-    }
-
-    async fn wait_until_ready(&self, world_name: &str) -> Result<String, MatchWorldRuntimeError> {
-        let wait = async {
-            let mut expected_generation = None;
-            loop {
-                let prepared = self
-                    .server
-                    .send(PrepareWorld {
-                        name: world_name.to_owned(),
-                        expected_generation: expected_generation.clone(),
-                    })
-                    .await
-                    .map_err(|_| MatchWorldRuntimeError::Unavailable)?
-                    .map_err(|_| MatchWorldRuntimeError::Unavailable)?;
-                if prepared.lifecycle == WorldLifecycleState::Ready {
-                    return Ok(prepared.generation);
-                }
-                if prepared.lifecycle != WorldLifecycleState::Preparing {
-                    return Err(MatchWorldRuntimeError::Unavailable);
-                }
-                expected_generation = Some(prepared.generation);
-                sleep(WORLD_READY_POLL_INTERVAL).await;
-            }
-        };
-        timeout(WORLD_READY_TIMEOUT, wait)
-            .await
-            .map_err(|_| MatchWorldRuntimeError::Unavailable)?
-    }
-
-    async fn rollback_world(&self, world_name: &str) {
-        let remove = self.server.send(RemoveWorld {
-            name: world_name.to_owned(),
-        });
-        let _ = timeout(WORLD_ROLLBACK_TIMEOUT, remove).await;
-        self.generations
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .remove(world_name);
-        self.owned_matches
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .remove(world_name);
     }
 }
 
@@ -115,6 +72,7 @@ impl MatchWorldRuntime for EngineMatchWorldRuntime {
                 WorldRequestPolicy::strict()
                     .allow_method("pvp:v1:drop-slot")
                     .allow_method("pvp:v1:mining")
+                    .allow_method("pvp:v1:attack")
                     .allow_method("pvp:v1:get-state"),
             )
             .client_disconnect_policy(ClientDisconnectPolicy::Detach)
@@ -142,6 +100,10 @@ impl MatchWorldRuntime for EngineMatchWorldRuntime {
         );
         install_gameplay_runtime(&mut world, &spec, gameplay_authority)
             .map_err(|_| MatchWorldRuntimeError::Conflict)?;
+        let forced_eliminations = {
+            let queue = world.read_resource::<ForcedEliminationQueue>();
+            (*queue).clone()
+        };
         world.ecs_mut().insert(MatchWorldMetadata {
             match_id: spec.match_id,
             seed: plan.seed(),
@@ -205,6 +167,10 @@ impl MatchWorldRuntime for EngineMatchWorldRuntime {
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .insert(spec.world_name.clone(), spec.match_id);
+        self.forced_eliminations
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .insert(spec.world_name.clone(), forced_eliminations);
         let generation = match self.wait_until_ready(&spec.world_name).await {
             Ok(generation) => generation,
             Err(error) => {
@@ -251,6 +217,10 @@ impl MatchWorldRuntime for EngineMatchWorldRuntime {
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .remove(world_name);
+        self.forced_eliminations
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .remove(world_name);
         Ok(outcome.removed)
     }
 
@@ -275,6 +245,47 @@ impl MatchWorldRuntime for EngineMatchWorldRuntime {
                 world_generation,
             })
             .await
+            .map_err(|_| MatchWorldRuntimeError::Unavailable)
+    }
+
+    async fn evict_participant(
+        &self,
+        world_name: &str,
+        account_id: Uuid,
+    ) -> Result<bool, MatchWorldRuntimeError> {
+        let Some(world_generation) = self
+            .generations
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .get(world_name)
+            .cloned()
+        else {
+            return Ok(false);
+        };
+        self.server
+            .send(EvictMatchPrincipal {
+                account_id: account_id.to_string(),
+                world_name: world_name.to_owned(),
+                world_generation,
+            })
+            .await
+            .map_err(|_| MatchWorldRuntimeError::Unavailable)
+    }
+
+    async fn request_timeout_elimination(
+        &self,
+        world_name: &str,
+        account_id: Uuid,
+    ) -> Result<bool, MatchWorldRuntimeError> {
+        let queues = self
+            .forced_eliminations
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let Some(queue) = queues.get(world_name) else {
+            return Ok(false);
+        };
+        queue
+            .enqueue(account_id)
             .map_err(|_| MatchWorldRuntimeError::Unavailable)
     }
 }

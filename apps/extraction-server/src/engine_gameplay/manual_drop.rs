@@ -6,7 +6,7 @@ use voxelize::{DirectionComp, MessageQueues, PositionComp};
 
 use super::{
     authority::GameplayAuthority,
-    components::{MatchPlayerComp, ResourceInventoryComp},
+    components::{EliminationComp, HealthComp, MatchPlayerComp, ResourceInventoryComp},
     intents::DropSlotIntentQueue,
     messaging::{queue_error, queue_ok},
     runtime::GameplayRuntimeContext,
@@ -39,6 +39,8 @@ pub(super) struct ManualDropAccess<'a, 'world> {
     pub spawned: &'a SpawnedDropIds,
     pub queues: &'a mut MessageQueues,
     pub players: &'a ReadStorage<'world, MatchPlayerComp>,
+    pub health: &'a ReadStorage<'world, HealthComp>,
+    pub eliminations: &'a WriteStorage<'world, EliminationComp>,
     pub inventories: &'a mut WriteStorage<'world, ResourceInventoryComp>,
     pub positions: &'a WriteStorage<'world, PositionComp>,
     pub directions: &'a ReadStorage<'world, DirectionComp>,
@@ -56,6 +58,8 @@ pub(super) fn process_manual_drops(access: ManualDropAccess<'_, '_>) {
         spawned,
         queues,
         players,
+        health,
+        eliminations,
         inventories,
         positions,
         directions,
@@ -76,6 +80,12 @@ pub(super) fn process_manual_drops(access: ManualDropAccess<'_, '_>) {
         if !entities.is_alive(intent.entity)
             || player.public_player_id().to_string() != intent.client_id
             || !authority.allows(&intent.client_id, player.account_id())
+            || health
+                .get(intent.entity)
+                .is_none_or(|value| !value.state().is_alive())
+            || eliminations
+                .get(intent.entity)
+                .is_none_or(|value| value.record().is_some())
         {
             queue_error(
                 queues,

@@ -21,6 +21,10 @@ impl DropId {
         Self(format!("drop:v1:{match_id}:mined:{x}:{y}:{z}"))
     }
 
+    pub(crate) fn death(match_id: Uuid, seat_id: u8) -> Self {
+        Self(format!("drop:v1:{match_id}:seat:{seat_id}:death"))
+    }
+
     pub(crate) fn as_str(&self) -> &str {
         &self.0
     }
@@ -74,7 +78,7 @@ impl ResourceBundle {
         }
     }
 
-    fn checked_merge(&mut self, other: Self) -> Result<(), LootError> {
+    pub(crate) fn checked_merge(&mut self, other: Self) -> Result<(), LootError> {
         let dirt = self
             .dirt
             .checked_add(other.dirt)
@@ -161,10 +165,10 @@ impl LootDrop {
             .is_some_and(|exclusion| now < exclusion.until)
     }
 
-    pub(crate) fn transfer_into(
+    pub(crate) fn transfer_into_with_receipt(
         &mut self,
         inventory: &mut MatchInventory,
-    ) -> Result<u64, LootError> {
+    ) -> Result<ResourceBundle, LootError> {
         if self.revision == u32::MAX {
             return Err(LootError::RevisionExhausted);
         }
@@ -172,15 +176,23 @@ impl LootDrop {
         let outcomes = inventory
             .insert_batch(&entries)
             .map_err(LootError::Inventory)?;
-        let mut accepted_total = 0_u64;
+        let mut accepted = ResourceBundle::default();
         for ((resource, _), outcome) in entries.into_iter().zip(outcomes) {
             self.contents.set(resource, outcome.remainder);
-            accepted_total += u64::from(outcome.accepted);
+            accepted.set(resource, outcome.accepted);
         }
-        if accepted_total > 0 {
+        if !accepted.is_empty() {
             self.revision += 1;
         }
-        Ok(accepted_total)
+        Ok(accepted)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn transfer_into(
+        &mut self,
+        inventory: &mut MatchInventory,
+    ) -> Result<u64, LootError> {
+        Ok(self.transfer_into_with_receipt(inventory)?.total())
     }
 
     pub(crate) fn can_merge(

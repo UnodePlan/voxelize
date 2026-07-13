@@ -87,6 +87,22 @@ impl Coordinator {
                         let _ = self.abort_current("connection_event_failed").await;
                     }
                 }
+                #[cfg(any(feature = "engine", test))]
+                Command::Death { notice } => {
+                    if self.apply_death(notice).await.is_err() {
+                        self.gate.fail_closed();
+                        let _ = self.abort_current("death_notice_failed").await;
+                    }
+                }
+                #[cfg(any(feature = "engine", test))]
+                Command::TimeoutElimination { notice } => {
+                    if self.apply_timeout_elimination(notice).await.is_err() {
+                        self.gate.fail_closed();
+                        let _ = self
+                            .abort_current("timeout_elimination_notice_failed")
+                            .await;
+                    }
+                }
                 Command::Tick {
                     reply,
                     ticker_pending,
@@ -135,6 +151,21 @@ impl Coordinator {
     }
 
     pub(super) fn snapshot_for(&self, account_id: Uuid) -> Option<QueueSnapshot> {
+        if let Some(index) = self
+            .queue
+            .iter()
+            .position(|entry| entry.account_id == account_id)
+        {
+            let entry = &self.queue[index];
+            return Some(QueueSnapshot {
+                status: QueueStatus::Queued,
+                position: Some(index + 1),
+                enqueued_at: Some(entry.enqueued_at),
+                match_id: None,
+                world_name: None,
+                removed: None,
+            });
+        }
         if let Some(current) = self
             .current
             .as_ref()
@@ -142,20 +173,7 @@ impl Coordinator {
         {
             return Some(current.snapshot());
         }
-        self.queue
-            .iter()
-            .position(|entry| entry.account_id == account_id)
-            .map(|index| {
-                let entry = &self.queue[index];
-                QueueSnapshot {
-                    status: QueueStatus::Queued,
-                    position: Some(index + 1),
-                    enqueued_at: Some(entry.enqueued_at),
-                    match_id: None,
-                    world_name: None,
-                    removed: None,
-                }
-            })
+        None
     }
 
     pub(super) fn restore_waiting(&mut self, entries: Vec<QueueEntry>) {

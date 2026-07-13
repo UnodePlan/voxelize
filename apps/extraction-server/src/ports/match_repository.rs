@@ -2,7 +2,9 @@ use async_trait::async_trait;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-use crate::matchmaking::{CreatePreparingMatch, ParticipantRecord, StoredMatch};
+use crate::matchmaking::{
+    CreatePreparingMatch, ParticipantDeath, ParticipantRecord, ParticipantTimeout, StoredMatch,
+};
 
 use super::RepositoryProbe;
 
@@ -92,10 +94,14 @@ pub trait MatchRepository: RepositoryProbe + Send + Sync {
         at: OffsetDateTime,
     ) -> Result<TransitionOutcome<ParticipantRecord>, MatchRepositoryError>;
 
-    async fn time_out(
+    async fn mark_dead(
         &self,
-        match_id: Uuid,
-        account_id: Uuid,
+        death: ParticipantDeath,
+    ) -> Result<TransitionOutcome<ParticipantRecord>, MatchRepositoryError>;
+
+    async fn mark_timed_out(
+        &self,
+        timeout: ParticipantTimeout,
         at: OffsetDateTime,
     ) -> Result<TransitionOutcome<ParticipantRecord>, MatchRepositoryError>;
 

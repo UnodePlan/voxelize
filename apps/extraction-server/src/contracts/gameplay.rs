@@ -112,7 +112,7 @@ impl MiningStateEnvelope {
         Ok(state)
     }
 
-    fn validate(&self, manifest: &ExtractionManifest) -> Result<(), ContractError> {
+    pub(crate) fn validate(&self, manifest: &ExtractionManifest) -> Result<(), ContractError> {
         if self.protocol_version != manifest.protocol_version || self.match_id.is_nil() {
             return Err(ContractError::new("mining state envelope 身份或版本无效"));
         }

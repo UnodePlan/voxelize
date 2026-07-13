@@ -1,0 +1,234 @@
+{
+  "fixtureVersion": 1,
+  "cases": [
+    {
+      "name": "valid-attack-hit-result",
+      "route": "pvp:v1:attack-result",
+      "accept": true,
+      "value": {
+        "acceptedSequence": 8,
+        "attackRevision": 6,
+        "resolution": "hit"
+      }
+    },
+    {
+      "name": "attack-result-rejects-unknown-resolution",
+      "route": "pvp:v1:attack-result",
+      "accept": false,
+      "value": {
+        "acceptedSequence": 8,
+        "attackRevision": 6,
+        "resolution": "critical"
+      }
+    },
+    {
+      "name": "attack-result-cannot-leak-authoritative-target",
+      "route": "pvp:v1:attack-result",
+      "accept": false,
+      "value": {
+        "acceptedSequence": 8,
+        "attackRevision": 6,
+        "resolution": "kill",
+        "targetAccountId": "private-account"
+      }
+    },
+    {
+      "name": "valid-full-health",
+      "route": "pvp:v1:health-state",
+      "accept": true,
+      "value": {
+        "protocolVersion": 1,
+        "type": "state",
+        "matchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "stream": "health",
+        "revision": 0,
+        "data": { "status": "alive", "currentHalfHearts": 20, "maxHalfHearts": 20 }
+      }
+    },
+    {
+      "name": "valid-half-heart",
+      "route": "pvp:v1:health-state",
+      "accept": true,
+      "value": {
+        "protocolVersion": 1,
+        "type": "state",
+        "matchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "stream": "health",
+        "revision": 9,
+        "data": { "status": "alive", "currentHalfHearts": 1, "maxHalfHearts": 20 }
+      }
+    },
+    {
+      "name": "valid-dead-health",
+      "route": "pvp:v1:health-state",
+      "accept": true,
+      "value": {
+        "protocolVersion": 1,
+        "type": "state",
+        "matchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "stream": "health",
+        "revision": 10,
+        "data": { "status": "dead", "currentHalfHearts": 0, "maxHalfHearts": 20 }
+      }
+    },
+    {
+      "name": "alive-health-cannot-be-zero",
+      "route": "pvp:v1:health-state",
+      "accept": false,
+      "value": {
+        "protocolVersion": 1,
+        "type": "state",
+        "matchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "stream": "health",
+        "revision": 10,
+        "data": { "status": "alive", "currentHalfHearts": 0, "maxHalfHearts": 20 }
+      }
+    },
+    {
+      "name": "health-max-is-fixed",
+      "route": "pvp:v1:health-state",
+      "accept": false,
+      "value": {
+        "protocolVersion": 1,
+        "type": "state",
+        "matchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "stream": "health",
+        "revision": 1,
+        "data": { "status": "alive", "currentHalfHearts": 20, "maxHalfHearts": 40 }
+      }
+    },
+    {
+      "name": "dead-health-must-be-zero",
+      "route": "pvp:v1:health-state",
+      "accept": false,
+      "value": {
+        "protocolVersion": 1,
+        "type": "state",
+        "matchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "stream": "health",
+        "revision": 10,
+        "data": { "status": "dead", "currentHalfHearts": 1, "maxHalfHearts": 20 }
+      }
+    },
+    {
+      "name": "valid-melee-death-result",
+      "route": "pvp:v1:death-result",
+      "accept": true,
+      "value": {
+        "protocolVersion": 1,
+        "type": "state",
+        "matchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "stream": "deathResult",
+        "revision": 10,
+        "data": {
+          "cause": "melee",
+          "killerPublicPlayerId": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+          "survivedMs": 120000,
+          "mined": { "dirt": 8, "gold": 3, "diamond": 1 },
+          "pickedUp": { "dirt": 2, "gold": 0, "diamond": 0 },
+          "lost": { "dirt": 10, "gold": 3, "diamond": 1 }
+        }
+      }
+    },
+    {
+      "name": "valid-reconnect-timeout-death-result",
+      "route": "pvp:v1:death-result",
+      "accept": true,
+      "value": {
+        "protocolVersion": 1,
+        "type": "state",
+        "matchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "stream": "deathResult",
+        "revision": 7,
+        "data": {
+          "cause": "reconnectTimeout",
+          "killerPublicPlayerId": null,
+          "survivedMs": 45000,
+          "mined": { "dirt": 0, "gold": 0, "diamond": 0 },
+          "pickedUp": { "dirt": 0, "gold": 0, "diamond": 0 },
+          "lost": { "dirt": 0, "gold": 0, "diamond": 0 }
+        }
+      }
+    },
+    {
+      "name": "melee-death-requires-killer",
+      "route": "pvp:v1:death-result",
+      "accept": false,
+      "value": {
+        "protocolVersion": 1,
+        "type": "state",
+        "matchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "stream": "deathResult",
+        "revision": 10,
+        "data": {
+          "cause": "melee",
+          "killerPublicPlayerId": null,
+          "survivedMs": 1,
+          "mined": { "dirt": 0, "gold": 0, "diamond": 0 },
+          "pickedUp": { "dirt": 0, "gold": 0, "diamond": 0 },
+          "lost": { "dirt": 0, "gold": 0, "diamond": 0 }
+        }
+      }
+    },
+    {
+      "name": "timeout-death-cannot-have-killer",
+      "route": "pvp:v1:death-result",
+      "accept": false,
+      "value": {
+        "protocolVersion": 1,
+        "type": "state",
+        "matchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "stream": "deathResult",
+        "revision": 10,
+        "data": {
+          "cause": "reconnectTimeout",
+          "killerPublicPlayerId": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+          "survivedMs": 1,
+          "mined": { "dirt": 0, "gold": 0, "diamond": 0 },
+          "pickedUp": { "dirt": 0, "gold": 0, "diamond": 0 },
+          "lost": { "dirt": 0, "gold": 0, "diamond": 0 }
+        }
+      }
+    },
+    {
+      "name": "melee-death-rejects-nil-killer",
+      "route": "pvp:v1:death-result",
+      "accept": false,
+      "value": {
+        "protocolVersion": 1,
+        "type": "state",
+        "matchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "stream": "deathResult",
+        "revision": 10,
+        "data": {
+          "cause": "melee",
+          "killerPublicPlayerId": "00000000-0000-0000-0000-000000000000",
+          "survivedMs": 1,
+          "mined": { "dirt": 0, "gold": 0, "diamond": 0 },
+          "pickedUp": { "dirt": 0, "gold": 0, "diamond": 0 },
+          "lost": { "dirt": 0, "gold": 0, "diamond": 0 }
+        }
+      }
+    },
+    {
+      "name": "death-tally-rejects-extra-resource",
+      "route": "pvp:v1:death-result",
+      "accept": false,
+      "value": {
+        "protocolVersion": 1,
+        "type": "state",
+        "matchId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "stream": "deathResult",
+        "revision": 10,
+        "data": {
+          "cause": "melee",
+          "killerPublicPlayerId": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+          "survivedMs": 1,
+          "mined": { "dirt": 0, "gold": 0, "diamond": 0, "emerald": 1 },
+          "pickedUp": { "dirt": 0, "gold": 0, "diamond": 0 },
+          "lost": { "dirt": 0, "gold": 0, "diamond": 0 }
+        }
+      }
+    }
+  ]
+}

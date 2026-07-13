@@ -2,7 +2,7 @@ use voxelize::World;
 
 use super::{
     authority::GameplayAuthority,
-    components::{MatchPlayerComp, MiningComp},
+    components::{EliminationComp, MatchPlayerComp, MiningComp},
     intents::{MiningIntentQueue, QueuedMiningIntent},
     methods::{decode_envelope, send_decode_error, send_error},
     runtime::GameplayRuntimeContext,
@@ -63,6 +63,10 @@ fn handle_mining(world: &mut World, client_id: &str, payload: &str) {
         .get(entity)
         .zip(world.read_component::<MiningComp>().get(entity))
         .is_none()
+        || world
+            .read_component::<EliminationComp>()
+            .get(entity)
+            .is_none_or(|state| state.record().is_some())
     {
         send_error(
             world,

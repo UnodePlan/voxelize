@@ -191,6 +191,112 @@
         "sequence": 9,
         "payload": { "action": "complete" }
       }
+    },
+    {
+      "name": "valid-melee-attack",
+      "route": "pvp:v1:attack",
+      "accept": true,
+      "value": {
+        "protocolVersion": 1,
+        "type": "intent",
+        "requestId": "33333333-3333-4333-8333-333333333333",
+        "sequence": 10,
+        "payload": { "weaponSlot": "melee" }
+      }
+    },
+    {
+      "name": "valid-melee-attack-at-u32-limit",
+      "route": "pvp:v1:attack",
+      "accept": true,
+      "value": {
+        "protocolVersion": 1,
+        "type": "intent",
+        "requestId": "33333333-3333-4333-8333-333333333333",
+        "sequence": 4294967295,
+        "payload": { "weaponSlot": "melee" }
+      }
+    },
+    {
+      "name": "attack-requires-weapon-slot",
+      "route": "pvp:v1:attack",
+      "accept": false,
+      "value": {
+        "protocolVersion": 1,
+        "type": "intent",
+        "requestId": "33333333-3333-4333-8333-333333333333",
+        "sequence": 11,
+        "payload": {}
+      }
+    },
+    {
+      "name": "attack-rejects-unknown-weapon-slot",
+      "route": "pvp:v1:attack",
+      "accept": false,
+      "value": {
+        "protocolVersion": 1,
+        "type": "intent",
+        "requestId": "33333333-3333-4333-8333-333333333333",
+        "sequence": 12,
+        "payload": { "weaponSlot": "pickaxe" }
+      }
+    },
+    {
+      "name": "attack-cannot-invent-target-or-damage",
+      "route": "pvp:v1:attack",
+      "accept": false,
+      "value": {
+        "protocolVersion": 1,
+        "type": "intent",
+        "requestId": "33333333-3333-4333-8333-333333333333",
+        "sequence": 13,
+        "payload": {
+          "weaponSlot": "melee",
+          "targetPublicPlayerId": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+          "damageHalfHearts": 20
+        }
+      }
+    },
+    {
+      "name": "attack-cannot-invent-account-identity",
+      "route": "pvp:v1:attack",
+      "accept": false,
+      "value": {
+        "protocolVersion": 1,
+        "type": "intent",
+        "requestId": "33333333-3333-4333-8333-333333333333",
+        "sequence": 14,
+        "payload": {
+          "weaponSlot": "melee",
+          "accountId": "0x0000000000000000000000000000000000000000"
+        }
+      }
+    },
+    {
+      "name": "valid-get-state",
+      "route": "pvp:v1:get-state",
+      "accept": true,
+      "value": {
+        "protocolVersion": 1,
+        "type": "intent",
+        "requestId": "44444444-4444-4444-8444-444444444444",
+        "sequence": 15,
+        "payload": {}
+      }
+    },
+    {
+      "name": "get-state-cannot-select-account-or-revision",
+      "route": "pvp:v1:get-state",
+      "accept": false,
+      "value": {
+        "protocolVersion": 1,
+        "type": "intent",
+        "requestId": "44444444-4444-4444-8444-444444444444",
+        "sequence": 16,
+        "payload": {
+          "accountId": "private-account",
+          "fromRevision": 0
+        }
+      }
     }
   ]
 }

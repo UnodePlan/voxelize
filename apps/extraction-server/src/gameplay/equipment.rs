@@ -30,7 +30,13 @@ impl FixedEquipment {
         }
     }
 
+    #[cfg(feature = "engine")]
     pub(crate) const fn has_basic_pickaxe(self) -> bool {
         matches!(self.pickaxe, EquipmentKey::BasicPickaxe)
+    }
+
+    #[cfg(feature = "engine")]
+    pub(crate) const fn has_basic_melee_weapon(self) -> bool {
+        matches!(self.melee_weapon, EquipmentKey::BasicMeleeWeapon)
     }
 }

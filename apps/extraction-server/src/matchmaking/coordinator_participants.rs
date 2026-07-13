@@ -1,8 +1,13 @@
 use uuid::Uuid;
 
+#[cfg(not(test))]
+const PARTICIPANT_EVICTION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+#[cfg(test)]
+const PARTICIPANT_EVICTION_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(10);
+
 use super::{
     coordinator::{repository_error, runtime_error, Coordinator},
-    MatchmakingError, ParticipantState,
+    MatchmakingError,
 };
 
 impl Coordinator {
@@ -37,29 +42,19 @@ impl Coordinator {
     }
 
     pub(super) async fn time_out(&mut self, account_id: Uuid) -> Result<(), MatchmakingError> {
-        let Some((match_id, world_name)) = self
+        let Some(world_name) = self
             .current
             .as_ref()
-            .map(|current| (current.match_id, current.world_name.clone()))
+            .map(|current| current.world_name.clone())
         else {
             return Ok(());
         };
-        self.repository
-            .time_out(match_id, account_id, self.utc_now())
+        let runtime = self.runtime.as_ref().ok_or(MatchmakingError::Unavailable)?;
+        runtime
+            .request_timeout_elimination(&world_name, account_id)
             .await
-            .map_err(repository_error)?;
-        if let Some(participant) = self
-            .current
-            .as_mut()
-            .and_then(|current| current.participants.get_mut(&account_id))
-        {
-            participant.state = ParticipantState::TimedOut;
-            participant.control_connection = None;
-            participant.reconnect_deadline = None;
-            participant.despawn_pending = true;
-        }
-        self.sync_gate();
-        self.despawn_one(&world_name, account_id).await
+            .map_err(runtime_error)?;
+        Ok(())
     }
 
     pub(super) async fn retry_pending_despawns(&mut self) -> Result<(), MatchmakingError> {
@@ -74,21 +69,24 @@ impl Coordinator {
             .map(|(account_id, _)| *account_id)
             .collect::<Vec<_>>();
         for account_id in accounts {
-            self.despawn_one(&world_name, account_id).await?;
+            self.evict_one(&world_name, account_id).await?;
         }
         Ok(())
     }
 
-    async fn despawn_one(
+    pub(super) async fn evict_one(
         &mut self,
         world_name: &str,
         account_id: Uuid,
     ) -> Result<(), MatchmakingError> {
         let runtime = self.runtime.as_ref().ok_or(MatchmakingError::Unavailable)?;
-        runtime
-            .despawn_detached(world_name, account_id)
-            .await
-            .map_err(runtime_error)?;
+        tokio::time::timeout(
+            PARTICIPANT_EVICTION_TIMEOUT,
+            runtime.evict_participant(world_name, account_id),
+        )
+        .await
+        .map_err(|_| MatchmakingError::Unavailable)?
+        .map_err(runtime_error)?;
         if let Some(participant) = self
             .current
             .as_mut()

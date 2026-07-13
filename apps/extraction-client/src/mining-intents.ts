@@ -29,7 +29,8 @@ export class MiningIntentFactory {
     ) {
       throw new Error("lastAcceptedSequence 必须是 u32 或 null");
     }
-    this.nextSequence = lastAcceptedSequence === null ? 0 : lastAcceptedSequence + 1;
+    this.nextSequence =
+      lastAcceptedSequence === null ? 0 : lastAcceptedSequence + 1;
   }
 
   start(voxel: readonly [number, number, number]): IntentEnvelope {

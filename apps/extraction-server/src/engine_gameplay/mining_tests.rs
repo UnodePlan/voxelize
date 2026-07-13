@@ -9,7 +9,10 @@ use voxelize::{
 
 use super::{
     authority::GameplayAuthority,
-    components::{FixedEquipmentComp, MatchPlayerComp, MiningComp, ResourceInventoryComp},
+    components::{
+        EliminationComp, FixedEquipmentComp, MatchPlayerComp, MiningComp, ResourceInventoryComp,
+        RoundStatsComp,
+    },
     intents::{MiningIntentQueue, QueuedMiningIntent},
     mining_system::MiningResolutionSystem,
     runtime::{install_gameplay_runtime, GameplayRuntimeContext},
@@ -17,7 +20,7 @@ use super::{
 };
 use crate::{
     contracts::{MiningIdleReason, MiningPayload, MiningStateData, ResourceKey},
-    gameplay::{drop_queue::PendingDropQueue, inventory::MatchInventory},
+    gameplay::{drop_queue::PendingDropQueue, inventory::MatchInventory, round_stats::RoundStats},
 };
 
 const TARGET: [i32; 3] = [2, 2, 0];
@@ -65,6 +68,8 @@ fn add_player(
         .with(ResourceInventoryComp::new(inventory))
         .with(FixedEquipmentComp::standard())
         .with(MiningComp::new())
+        .with(RoundStatsComp::new(RoundStats::new(Duration::ZERO)))
+        .with(EliminationComp::alive())
         .with(PositionComp::new(ORIGIN[0], ORIGIN[1], ORIGIN[2]))
         .with(DirectionComp::new(direction[0], direction[1], direction[2]))
         .build();

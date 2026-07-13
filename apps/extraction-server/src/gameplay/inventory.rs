@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{contracts::ResourceKey, match_world::RESOURCE_BACKPACK_SLOTS};
 
+pub(crate) mod terminal;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ResourceStack {

@@ -74,7 +74,7 @@
 - [x] 开局记录 `+8m`、`+12m` 绝对 deadline；全部终态可提前进入 Settling。
 - [x] Waiting 断线离队；Active 断线 detach，60 秒内同账号 rebind，超时只进入一次 TimedOut 并按 generation 安全 despawn；死亡掉落接入保留到阶段 7。
 - [x] Finished/Aborted 冻结生命周期写入并清理本阶段创建的 World、连接租约、pending tick/request 和协调器局内状态。
-- [ ] 把 20 半心实际安装为服务端权威玩家 ECS 状态，并用不同永久仓库存量验证入场状态完全一致；固定装备和 12 格背包已在阶段 5 完成，生命组件留在阶段 7。
+- [x] 把 20 半心实际安装为服务端权威玩家 ECS 状态，并用不同永久仓库存量验证入场状态完全一致；固定装备和 12 格背包已在阶段 5 完成，生命组件留在阶段 7。
 
 实现记录（2026-07-13）：新增单进程有界命令协调器，统一排序 HTTP 排队、WS 连接生命周期与 fake-clock tick；只有已认证且存在游戏 socket、已绑定 World runtime、无非终态席位的账号可以进入 FIFO。第 10 人将恰好 10 个唯一账号原子固化为 `0..9` 座位，第 11 人失败；PostgreSQL 创建按 UUID 顺序锁账号，状态写按 match 后 participant 的固定顺序加锁，一致性读取使用可重复读。Preparing 仅在 10 个 World Join 全部提交后激活，任一名单成员断线会中止、停止部分 World，并按原时间与次序恢复其他在线玩家。
 
@@ -137,11 +137,19 @@
 
 ## 阶段 7：近战、生命、死亡与结果
 
-- [ ] 实现 20 半心、每次伤害 2、0.6 秒冷却、3 格距离、完整方块遮挡和无回血。
-- [ ] 攻击只提交 sequence/武器槽；服务端 ray-AABB 选择最近合法目标，落空也消费冷却。
-- [ ] 固定同 tick 优先级，死亡早于拾取和撤离；`Alive -> Dead` CAS 只执行一次。
-- [ ] 死亡冻结背包并转入唯一 pending loot，固定装备不掉，记录击杀者和结果统计。
+- [x] 实现 20 半心、每次伤害 2、0.6 秒冷却、3 格距离、完整方块遮挡和无回血。
+- [x] 攻击只提交 sequence/武器槽；服务端 ray-AABB 选择最近合法目标，落空也消费冷却。
+- [x] 固定同 tick 优先级，死亡早于拾取和撤离；`Alive -> Dead` CAS 只执行一次。
+- [x] 死亡冻结背包并转入唯一 pending loot，固定装备不掉，记录击杀者和结果统计。
 - [ ] 断线角色可被攻击；窗口内被杀和超时不能双掉落。死亡结果后离开原 World，不接收观战数据。
+
+实现记录（2026-07-13）：新增严格 `pvp:v1:attack` 协议，payload 只允许固定近战槽，目标、伤害、生命、击杀与队伍元数据均由服务端拒绝。每局玩家实体安装 20 半心、固定近战装备、攻击 sequence/cooldown revision、局内统计和不可逆淘汰组件；loadout 最大生命与协议 20 不一致时在创建 World 前失败关闭。服务端用权威 `PositionComp/DirectionComp` 对所有其他存活玩家执行 `0.8 x 1.8` ray-AABB，按距离和 seat 选择最近目标，Ready Chunk 内完整单位方块遮挡，未知或未 Ready 数据失败关闭；落空同样消费 600ms 冷却，同玩家网络接收顺序不按 sequence 重排。
+
+Combat 命名 hook 固定在 Broadcast 前，重连超时意图先于攻击解析，死亡在同 tick 早于 pending 生成和自动拾取。死亡事务先在副本准备生命、挖掘重置、存活/资源/击杀统计和结果，再原子冻结并排空 12 格背包，把全部资源转为 `drop:v1:{match}:seat:{seat}:death` 唯一 pending 所有权；固定装备不进入掉落。`EliminationComp` 保证 World 内只产生一个终态，PostgreSQL `mark_dead/mark_timed_out` 使用 match-first 行锁和精确 killer/stats 幂等 CAS，旧无统计 `time_out` 接口已移除。终态 Direct 在 Broadcast 发出后，matchmaking 先关闭 gate，并在等待 SQL 前执行 generation-safe 有限驱逐；卡住或失败进入 Tick 重试。终态玩家可以在旧局清理前进入下一等待队列，但满 10 人不会并行创建第二个 World；fail-closed 后 ticker 也不会创建不可 Join 的比赛。
+
+验证记录：应用 `engine` lib 现有 112 项全部通过，其中 ECS combat 覆盖真实 10 次攻击、第 10 次唯一死亡、599/600ms、落空冷却、精确 3 格/略超距离、最近目标、完整方块遮挡、断线目标、乱序 sequence、超时与攻击同 tick、唯一掉落和击杀统计；matchmaking 覆盖在线/断线死亡、超时统计、旧 generation、rebind 拒绝、驱逐错误/永久挂起超时、落库失败关闭和终态重排队。共享 Rust 契约 9 项、客户端 79 项、根引擎 64 项、E2E Actor 2 项、客户端生产 build、全 extraction ESLint、应用默认与 `engine,db-tests` Clippy `--no-deps -D warnings`、JSON 与 `git diff --check` 均通过。真实 PostgreSQL 新 CAS 测试已编译但本次环境无 `TEST_DATABASE_URL/DATABASE_URL`，因此不得声称执行；根引擎仍只有既有 84 条 warning 基线。
+
+剩余跨阶段约束：断线死亡/超时玩家无法接收原 World Direct，完整结果的耐久恢复和硬截止前终态通知封口并入阶段 8；当前位置入口仍只有有限数、300 边界和速率预算，完整体素碰撞 sweep、重力/落地/跳跃权威必须在发布门禁前完成。上述两项完成前不能把当前版本称为公平 PVP 发布候选，因此本阶段最后一项保持未完成。
 
 验收：第 10 次合法命中死亡一次；冷却、距离、遮挡、伪造目标/伤害、旧 sequence 和重连攻击均拒绝；team/role 元数据不产生友军豁免，重连不回血而新比赛恢复 20 半心。
 
@@ -156,6 +164,8 @@
 - [ ] 实现硬截止后 30 秒写入宽限期；期满不再发起写入，仅保留有界只读 reconciliation，并允许清理玩法 World。
 - [x] 启动时把未结束比赛标 Aborted，保留已提交收益，其他局内收益作废；完整 settlement reconciliation 仍留在本阶段后续子项。
 - [ ] 实现仅允许本人访问的 `/api/matches/{match_id}/result` 与 `/api/matches/latest-result`，覆盖 PendingReconciliation/Extracted/Aborted。
+- [ ] 持久化完整死亡/超时结果，使断线时未收到 Direct 的本人可在大厅恢复击杀者、存活时间和资源统计。
+- [ ] hard deadline 关闭 gate 后先封口 World 已发生的死亡/超时 outbox，再进入 participant 批量终态；携带权威发生时间，不能把截止前死亡覆盖为无统计 TimedOut。
 - [ ] 仓库只读展示数量和 settlement 聚合统计，不提供消费/交易/属性入口。
 
 验收：fake clock 覆盖 8m/8s/12m/30s 边界；截止前达标且截止后 commit 仍成功，截止后达标失败；故障注入覆盖 commit 前、回滚、commit 后响应前、宽限期后只读核对和重启核对。
@@ -187,6 +197,7 @@
 
 ## 阶段 11：E2E、观测与发布门禁
 
+- [ ] 在公平 PVP 验收前实现服务端体素碰撞 sweep、重力、落地和跳跃权威；合法速率内的小步穿墙/飞行也必须拒绝。
 - [ ] 轻量协议客户端覆盖容量与竞态；每次变更由 2 个 Playwright 浏览器 + 8 个轻量协议客户端组成合法 10 人闭环，10 浏览器完整场景用于 nightly/发布前。
 - [ ] 完整闭环：10 人 -> 挖掘 -> 10 次近战 -> 唯一掉落 -> 自动拾取 -> 8 分钟开放 -> 8 秒撤离 -> 一次入仓。
 - [ ] 覆盖第 11 人、迟到加入、断线重连/被杀/超时、满包、重复消息、DB 故障和 Aborted。
