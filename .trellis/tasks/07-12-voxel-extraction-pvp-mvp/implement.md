@@ -191,7 +191,7 @@ PostgreSQL 结算使用数据库事务时间、5 秒锁超时、15 秒语句超�
 
 实时状态由严格 decoder、单一 reducer 和 revision 单调规则拥有；重连只使用服务端自动 rebind，不重复 JOIN，并在 60 秒内恢复完整玩法快照。攻击、挖掘和丢弃共享服务端确认的全局 sequence cursor；背包快照增加必填 nullable `lastDropSequence`，刷新后从三类权威游标最大值继续。终态结果单调，旧比赛迟到结果不能中断新比赛；在线/断线非终态不会被误显示为 Aborted。
 
-响应式验收覆盖 1440x900、390x844、320x844、568x320 和 667x375：10 颗心、12 格背包与固定装备不越界，短横屏准星不覆盖生命条，登录/大厅/结果面板末端操作可滚动触达；canvas 非空且连续帧发生变化。`state.ts` 为 310 行，仅超过 300 行软上限且低于 500 行硬上限；它集中定义同一 reducer 的完整判别联合与转换，当前拆分会分散状态所有权，因此暂不拆分。
+响应式验收覆盖 1440x900、390x844、320x844、568x320 和 667x375：10 颗心、12 格背包与固定装备不越界，短横屏准星不覆盖生命条，登录/大厅/结果面板末端操作可滚动触达；canvas 非空且连续帧发生变化。`state.ts` 当前为 319 行，仅超过 300 行软上限且低于 500 行硬上限；它集中定义同一 reducer 的完整判别联合与转换，当前拆分会分散状态所有权，因此暂不拆分。
 
 阶段 9 当时的真实 World 接入阻断已由阶段 11 解决：生产客户端现已消费 Voxelize 压缩协议，并把键鼠、指针锁、移动、瞄准、挖掘、攻击和丢弃接到真实 300x300 服务端 World。当前唯一外部验收缺口是缺少 `VITE_REOWN_PROJECT_ID` 与用户真实钱包会话，因此不能把确定性 EOA 的服务端 SIWE 门禁冒充为 Reown AppKit 钱包弹窗验收。
 
@@ -241,7 +241,7 @@ World 生命周期已改为进程共享 Rayon 池，并以每 World RAII 任务�
 
 最终质量门禁：客户端 28 文件 181/181、Core 8 文件 15/15、E2E Actor 16 文件 65/65、进程监督/编排 30/30；TypeScript、ESLint、Prettier、Rust fmt 与 `git diff --check` 全部通过。根引擎 89 个库测试及全部集成测试通过；应用 `engine,e2e-control` 168 个库测试和全部集成测试通过；本地专用 PostgreSQL 串行执行认证 11、匹配 9、结算 7 项全部通过；应用 `engine,e2e-control,db-tests` Clippy `--no-deps -D warnings` 通过。根依赖仍输出 79 条既有 warning，未纳入本任务改动。
 
-文件规模说明：本阶段新增/拆分生产模块均低于 300 行。`apps/extraction-client/src/game/network.ts` 为 304 行，已将 egress、reconnect、decoder 和 router 拆为专责模块，剩余主体是单一 socket 生命周期编排，略超软上限但低于 500 行硬上限；继续为 4 行机械拆分会降低可读性。既有 `server/world/generators/pipeline.rs` 约 414 行，仍是单一生成阶段编排且低于硬上限，本次只注入共享池与任务许可；既有 `server/world/mod.rs` 超过 500 行且同目录已有 `SIZE_NOTES.md`，新增投影、生命周期和资源统计均拆到小模块，仅接线留在聚合文件。测试文件适用规模例外。
+文件规模说明：除已单独评估的 `state.ts` 与 `network.ts` 外，本阶段新增/拆分生产模块均低于 300 行。`apps/extraction-client/src/game/network.ts` 为 304 行，已将 egress、reconnect、decoder 和 router 拆为专责模块，剩余主体是单一 socket 生命周期编排，略超软上限但低于 500 行硬上限；继续为 4 行机械拆分会降低可读性。既有 `server/world/generators/pipeline.rs` 当前 409 行，仍是单一生成阶段编排且低于硬上限，本次只注入共享池与任务许可；既有 `server/world/mod.rs` 超过 500 行且同目录已有 `SIZE_NOTES.md`，新增投影、生命周期和资源统计均拆到小模块，仅接线留在聚合文件。`apps/extraction-e2e` 中超过 300 行的 Actor、Playwright、诊断和进程监督文件全部属于测试门禁例外；大型 Rust 测试同样适用测试例外。
 
 验收：受控环境核心闭环全绿，故障不复制永久资产，连续多局无泄漏。
 
