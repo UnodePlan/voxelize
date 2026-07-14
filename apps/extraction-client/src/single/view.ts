@@ -9,6 +9,8 @@ import { LOCAL_INVENTORY_SLOTS } from "./state";
 export interface LocalViewFrame {
   insideExtraction: boolean;
   targetName: string | null;
+  /** 本局地图风格名，如「荒漠 · 烈日」 */
+  styleLabel?: string | null;
 }
 
 export interface LocalViewActions {
@@ -23,7 +25,16 @@ export interface LocalViewActions {
 const BLOCK_CATALOG: ReadonlyArray<{
   id: string;
   label: string;
-  icon: "dirt" | "gold" | "diamond" | "grass" | "stone" | "planks" | "pickaxe";
+  icon:
+    | "dirt"
+    | "gold"
+    | "diamond"
+    | "grass"
+    | "stone"
+    | "planks"
+    | "pickaxe"
+    | "sword"
+    | "hand";
 }> = [
   { id: "dirt", label: "泥土", icon: "dirt" },
   { id: "gold", label: "黄金矿", icon: "gold" },
@@ -32,16 +43,15 @@ const BLOCK_CATALOG: ReadonlyArray<{
   { id: "stone", label: "岩石", icon: "stone" },
   { id: "planks", label: "木板", icon: "planks" },
   { id: "pickaxe", label: "铁镐", icon: "pickaxe" },
+  { id: "sword", label: "铁剑", icon: "sword" },
 ];
 
 export class LocalGameView {
   readonly canvas: HTMLCanvasElement;
   private readonly shell: HTMLElement;
   private readonly elapsed: HTMLElement;
+  private readonly styleLabel: HTMLElement;
   private readonly target: HTMLElement;
-  private readonly mining: HTMLElement;
-  private readonly miningLabel: HTMLElement;
-  private readonly miningFill: HTMLElement;
   private readonly extraction: HTMLElement;
   private readonly extractionFill: HTMLElement;
   private readonly hint: HTMLElement;
@@ -71,10 +81,8 @@ export class LocalGameView {
     this.shell = required(root, ".single-shell");
     this.canvas = required(root, ".single-canvas");
     this.elapsed = required(root, ".single-elapsed");
+    this.styleLabel = required(root, ".single-style");
     this.target = required(root, ".single-target");
-    this.mining = required(root, ".single-mining");
-    this.miningLabel = required(root, ".single-mining-label");
-    this.miningFill = required(root, ".single-mining-fill");
     this.extraction = required(root, ".single-extraction-progress");
     this.extractionFill = required(root, ".single-extraction-fill");
     this.hint = required(root, ".single-hint");
@@ -126,6 +134,9 @@ export class LocalGameView {
     this.shell.dataset.phase = state.phase;
     this.shell.dataset.inventory = state.inventoryOpen ? "open" : "closed";
     this.elapsed.textContent = formatElapsed(state.elapsedMs);
+    const styleText = frame.styleLabel?.trim() ?? "";
+    this.styleLabel.hidden = styleText === "" || state.phase === "loading";
+    this.styleLabel.textContent = styleText;
     this.loading.hidden = state.phase !== "loading";
     this.target.hidden =
       frame.targetName === null ||
@@ -133,7 +144,6 @@ export class LocalGameView {
       state.inventoryOpen;
     this.target.textContent = frame.targetName ?? "";
     this.renderHint(state);
-    this.renderMining(state);
     this.renderExtraction(state, frame.insideExtraction);
     this.renderHotbar(state);
     this.renderInventoryPanel(state);
@@ -168,19 +178,9 @@ export class LocalGameView {
         ? "<strong>点击继续</strong>"
         : [
             "<strong>进入矿坑</strong>",
-            "<span>WASD 移动　空格跳跃　按住左键挖掘</span>",
-            "<span>数字键选择　Q 丢弃　E 背包　拖拽整理　H 帮助</span>",
+            "<span>WASD 移动　空格跳跃　左键挖掘（石/矿需镐才掉落）</span>",
+            "<span>1 空手　2 铁镐　3 铁剑　Q 丢弃　E 背包　H 帮助</span>",
           ].join("");
-  }
-
-  private renderMining(state: LocalGameState): void {
-    const mining = state.mining;
-    this.mining.hidden =
-      mining === null || state.phase !== "playing" || state.inventoryOpen;
-    if (mining === null) return;
-    const progress = Math.min(1, mining.elapsedMs / mining.requiredMs);
-    this.miningLabel.textContent = `挖掘 ${resourceName(mining.resource)}`;
-    this.miningFill.style.width = `${progress * 100}%`;
   }
 
   private renderExtraction(state: LocalGameState, inside: boolean): void {
@@ -227,16 +227,35 @@ function paintSlots(elements: HTMLElement[], state: LocalGameState): void {
   elements.forEach((element, index) => {
     const slot = state.inventory[index] ?? null;
     element.dataset.selected = String(index === state.selectedSlot);
-    element.dataset.resource = slot?.resource ?? "empty";
+    // 快捷栏 1/2/3 键对应槽 0/1/2：空手、镐、剑（固定工具，叠在资源槽上显示）
+    const tool = toolForHotbarIndex(index);
+    if (tool !== null) {
+      element.dataset.tool = tool;
+      element.dataset.resource = "empty";
+    } else {
+      delete element.dataset.tool;
+      element.dataset.resource = slot?.resource ?? "empty";
+    }
     const quantity = element.querySelector<HTMLElement>(
       ".single-slot-quantity",
     );
     if (quantity !== null) {
-      const show = slot !== null && slot.quantity > 0;
+      // 工具槽不显示资源数量，避免盖住镐/剑图标
+      const show = tool === null && slot !== null && slot.quantity > 0;
       quantity.hidden = !show;
       quantity.textContent = show ? String(slot.quantity) : "";
     }
   });
+}
+
+/** 槽 0 空手，1 镐，2 剑；其余为资源（与 heldToolFromSlot 对齐） */
+function toolForHotbarIndex(
+  index: number,
+): "hand" | "pickaxe" | "sword" | null {
+  if (index === 0) return "hand";
+  if (index === 1) return "pickaxe";
+  if (index === 2) return "sword";
+  return null;
 }
 
 export function formatElapsed(elapsedMs: number): string {
@@ -262,12 +281,9 @@ function template(): string {
       <canvas class="single-canvas" aria-label="单机体素采石场"></canvas>
       <div class="single-vignette" aria-hidden="true"></div>
       <div class="single-elapsed" aria-label="本局经过时间">00:00</div>
+      <div class="single-style" hidden aria-label="地图风格"></div>
       <div class="single-target" hidden></div>
       <div class="single-crosshair" aria-hidden="true"><span></span><span></span></div>
-      <div class="single-mining" hidden>
-        <span class="single-mining-label">挖掘</span>
-        <i><b class="single-mining-fill"></b></i>
-      </div>
       <div class="single-extraction-progress" hidden>
         <span>保持停留 · 撤离</span><i><b class="single-extraction-fill"></b></i>
       </div>
@@ -292,7 +308,7 @@ function template(): string {
             <div class="single-inv-grid">
               ${panelSlots}
             </div>
-            <p class="single-inv-note">拖拽整理槽位 · 数字键选择 · Q 丢弃整槽</p>
+            <p class="single-inv-note">1 空手 · 2 铁镐 · 3 铁剑 · 拖拽整理 · Q 丢弃</p>
           </div>
           <div class="single-inv-blocks" role="tabpanel" hidden>
             <div class="single-catalog-grid">
@@ -334,10 +350,6 @@ function required<T extends Element>(root: ParentNode, selector: string): T {
   const element = root.querySelector<T>(selector);
   if (element === null) throw new Error(`单机界面缺少元素 ${selector}`);
   return element;
-}
-
-function resourceName(resource: LocalResourceKey): string {
-  return { dirt: "泥土", gold: "黄金矿", diamond: "钻石矿" }[resource];
 }
 
 function slotKey(index: number): string {

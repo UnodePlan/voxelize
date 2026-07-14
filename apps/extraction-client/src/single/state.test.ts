@@ -4,10 +4,12 @@ import {
   LOCAL_EXTRACTION_REQUIRED_MS,
   LOCAL_INVENTORY_SLOTS,
   LOCAL_STACK_LIMIT,
+  LOCAL_TOOL_HOTBAR_SLOTS,
   addResource,
   createInitialLocalGameState,
   dropInventorySlot,
   inventoryResourceCounts,
+  isToolHotbarSlot,
   reduceLocalGameState,
   swapInventorySlots,
   voxelKey,
@@ -39,31 +41,61 @@ describe("local single-player state", () => {
     expect(state.inventoryOpen).toBe(false);
   });
 
-  it("stacks the same resource before using a stable empty slot", () => {
+  it("reserves the first three hotbar slots for fixed tools", () => {
+    expect(LOCAL_TOOL_HOTBAR_SLOTS).toBe(3);
+    expect(isToolHotbarSlot(0)).toBe(true);
+    expect(isToolHotbarSlot(2)).toBe(true);
+    expect(isToolHotbarSlot(3)).toBe(false);
+  });
+
+  it("stacks the same resource before using a stable empty resource slot", () => {
     const inventory = emptyInventory();
-    inventory[0] = { resource: "gold", quantity: LOCAL_STACK_LIMIT - 1 };
-    inventory[2] = { resource: "dirt", quantity: 7 };
+    inventory[3] = { resource: "gold", quantity: LOCAL_STACK_LIMIT - 1 };
+    inventory[5] = { resource: "dirt", quantity: 7 };
 
     const result = addResource(inventory, "gold", 3);
 
     expect(result.remainder).toBe(0);
-    expect(result.inventory[0]).toEqual({
+    expect(result.inventory[0]).toBeNull();
+    expect(result.inventory[1]).toBeNull();
+    expect(result.inventory[2]).toBeNull();
+    expect(result.inventory[3]).toEqual({
       resource: "gold",
       quantity: LOCAL_STACK_LIMIT,
     });
-    expect(result.inventory[1]).toEqual({ resource: "gold", quantity: 2 });
-    expect(result.inventory[2]).toEqual({ resource: "dirt", quantity: 7 });
-    expect(inventory[0]).toEqual({
+    expect(result.inventory[4]).toEqual({ resource: "gold", quantity: 2 });
+    expect(result.inventory[5]).toEqual({ resource: "dirt", quantity: 7 });
+    expect(inventory[3]).toEqual({
       resource: "gold",
       quantity: LOCAL_STACK_LIMIT - 1,
     });
   });
 
+  it("never places mined resources into tool hotbar slots", () => {
+    const inventory = emptyInventory();
+    const result = addResource(inventory, "dirt", 1);
+
+    expect(result.remainder).toBe(0);
+    expect(result.inventory.slice(0, LOCAL_TOOL_HOTBAR_SLOTS)).toEqual([
+      null,
+      null,
+      null,
+    ]);
+    expect(result.inventory[LOCAL_TOOL_HOTBAR_SLOTS]).toEqual({
+      resource: "dirt",
+      quantity: 1,
+    });
+  });
+
   it("returns overflow without silently destroying a full backpack resource", () => {
-    const inventory = Array.from({ length: LOCAL_INVENTORY_SLOTS }, () => ({
-      resource: "dirt" as const,
-      quantity: LOCAL_STACK_LIMIT,
-    }));
+    const inventory = Array.from({ length: LOCAL_INVENTORY_SLOTS }, (_, index) =>
+      isToolHotbarSlot(index)
+        ? null
+        : {
+            resource: "dirt" as const,
+            quantity: LOCAL_STACK_LIMIT,
+          },
+    );
 
     const result = addResource(inventory, "diamond", 4);
 
@@ -82,16 +114,26 @@ describe("local single-player state", () => {
     expect(inventory[3]).toEqual({ resource: "diamond", quantity: 2 });
   });
 
+  it("refuses drop and swap on fixed tool hotbar slots", () => {
+    const inventory = emptyInventory();
+    inventory[1] = { resource: "gold", quantity: 3 };
+    inventory[4] = { resource: "dirt", quantity: 2 };
+
+    expect(dropInventorySlot(inventory, 1).dropped).toBeNull();
+    expect(swapInventorySlots(inventory, 1, 4)).toBe(inventory);
+    expect(swapInventorySlots(inventory, 4, 0)).toBe(inventory);
+  });
+
   it("swaps inventory slots for drag-and-drop rearrange", () => {
     const inventory = emptyInventory();
-    inventory[0] = { resource: "dirt", quantity: 5 };
-    inventory[2] = { resource: "gold", quantity: 1 };
+    inventory[3] = { resource: "dirt", quantity: 5 };
+    inventory[5] = { resource: "gold", quantity: 1 };
 
-    const swapped = swapInventorySlots(inventory, 0, 2);
+    const swapped = swapInventorySlots(inventory, 3, 5);
 
-    expect(swapped[0]).toEqual({ resource: "gold", quantity: 1 });
-    expect(swapped[2]).toEqual({ resource: "dirt", quantity: 5 });
-    expect(inventory[0]).toEqual({ resource: "dirt", quantity: 5 });
+    expect(swapped[3]).toEqual({ resource: "gold", quantity: 1 });
+    expect(swapped[5]).toEqual({ resource: "dirt", quantity: 5 });
+    expect(inventory[3]).toEqual({ resource: "dirt", quantity: 5 });
 
     let state = readyState();
     state = {
@@ -100,12 +142,12 @@ describe("local single-player state", () => {
     };
     state = reduceLocalGameState(state, {
       type: "INVENTORY_SWAP",
-      from: 2,
-      to: 5,
+      from: 5,
+      to: 8,
     });
-    expect(state.inventory[5]).toEqual({ resource: "dirt", quantity: 5 });
-    expect(state.inventory[2]).toBeNull();
-    expect(state.selectedSlot).toBe(5);
+    expect(state.inventory[8]).toEqual({ resource: "dirt", quantity: 5 });
+    expect(state.inventory[5]).toBeNull();
+    expect(state.selectedSlot).toBe(8);
   });
 
   it("advances only the active mining target and caps at completion", () => {
@@ -115,6 +157,7 @@ describe("local single-player state", () => {
       type: "MINING_STARTED",
       target,
       resource: "gold",
+      displayName: "黄金矿",
       requiredMs: 1_500,
     });
     state = reduceLocalGameState(state, {
@@ -178,9 +221,9 @@ describe("local single-player state", () => {
 
   it("captures resource counts without calculating a score", () => {
     const inventory = emptyInventory();
-    inventory[0] = { resource: "dirt", quantity: 4 };
-    inventory[1] = { resource: "gold", quantity: 1 };
-    inventory[2] = { resource: "diamond", quantity: 2 };
+    inventory[3] = { resource: "dirt", quantity: 4 };
+    inventory[4] = { resource: "gold", quantity: 1 };
+    inventory[5] = { resource: "diamond", quantity: 2 };
 
     expect(inventoryResourceCounts(inventory)).toEqual({
       dirt: 4,

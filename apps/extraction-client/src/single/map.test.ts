@@ -8,24 +8,30 @@ import {
   LOCAL_HEIGHT_AMP,
   LOCAL_MAP_SIZE,
   LOCAL_MAX_HEIGHT,
+  LOCAL_TERRAIN_SEED,
   LOCAL_WORLD_MAX,
   LOCAL_WORLD_MIN,
   createLocalQuarryMap,
   getLocalMapVoxel,
   localMapChecksum,
 } from "./map";
+import { LOCAL_RESOURCE_QUOTAS } from "./map-layout";
+import { LOCAL_MAP_STYLES, pickMapStyle } from "./map-style";
 
 describe("local random grassland map", () => {
-  it("generates a deterministic 60x60 world with open sky edges", () => {
-    const first = createLocalQuarryMap();
-    const second = createLocalQuarryMap();
+  it("is deterministic for the same seed and varies across seeds", () => {
+    const a = createLocalQuarryMap(LOCAL_TERRAIN_SEED);
+    const b = createLocalQuarryMap(LOCAL_TERRAIN_SEED);
+    const c = createLocalQuarryMap(LOCAL_TERRAIN_SEED ^ 0xdead_beef);
 
     expect(LOCAL_MAP_SIZE).toBe(60);
     expect(LOCAL_WORLD_MAX - LOCAL_WORLD_MIN + 1).toBe(60);
-    expect(first.chunks).toHaveLength(LOCAL_CHUNK_COUNT);
-    expect(localMapChecksum(first)).toBe(localMapChecksum(second));
+    expect(a.chunks).toHaveLength(LOCAL_CHUNK_COUNT);
+    expect(a.seed).toBe(LOCAL_TERRAIN_SEED);
+    expect(localMapChecksum(a)).toBe(localMapChecksum(b));
+    expect(localMapChecksum(a)).not.toBe(localMapChecksum(c));
     expect(
-      first.chunks.every(
+      a.chunks.every(
         (chunk) =>
           chunk.voxels.length ===
           LOCAL_CHUNK_SIZE * LOCAL_MAX_HEIGHT * LOCAL_CHUNK_SIZE,
@@ -34,36 +40,34 @@ describe("local random grassland map", () => {
 
     // 边界无墙：边上方是空气（旁边露天空）
     const edgeX = LOCAL_WORLD_MIN;
-    const edgeTop = first.surfaceY(edgeX, 0);
-    expect(getLocalMapVoxel(first, edgeX, edgeTop + 1, 0)).toBe(
+    const edgeTop = a.surfaceY(edgeX, 0);
+    expect(getLocalMapVoxel(a, edgeX, edgeTop + 1, 0)).toBe(
       LOCAL_BLOCK_IDS.air,
     );
-    // 世界外直接是空气
-    expect(getLocalMapVoxel(first, LOCAL_WORLD_MIN - 1, edgeTop, 0)).toBe(
+    expect(getLocalMapVoxel(a, LOCAL_WORLD_MIN - 1, edgeTop, 0)).toBe(
       LOCAL_BLOCK_IDS.air,
     );
-    expect(getLocalMapVoxel(first, LOCAL_WORLD_MAX + 1, edgeTop, 0)).toBe(
+    expect(getLocalMapVoxel(a, LOCAL_WORLD_MAX + 1, edgeTop, 0)).toBe(
       LOCAL_BLOCK_IDS.air,
     );
   });
 
   it("has designed height variation and solid surface tops", () => {
-    const map = createLocalQuarryMap();
+    const map = createLocalQuarryMap(LOCAL_TERRAIN_SEED);
     const heights = new Set<number>();
     for (let x = LOCAL_WORLD_MIN; x <= LOCAL_WORLD_MAX; x += 4) {
       for (let z = LOCAL_WORLD_MIN; z <= LOCAL_WORLD_MAX; z += 4) {
         heights.add(map.surfaceY(x, z));
       }
     }
-    // 应有起伏，不是整张平地
     expect(heights.size).toBeGreaterThan(4);
     for (const h of heights) {
       expect(h).toBeGreaterThanOrEqual(5);
       expect(h).toBeLessThan(LOCAL_MAX_HEIGHT);
-      expect(h).toBeLessThanOrEqual(LOCAL_BASE_HEIGHT + LOCAL_HEIGHT_AMP + 2);
+      // 各 biome 幅度不同，放宽上界
+      expect(h).toBeLessThanOrEqual(LOCAL_BASE_HEIGHT + LOCAL_HEIGHT_AMP + 12);
     }
 
-    // 抽样：地表为实心块（草/土/石/玩法覆盖），上方空气
     const sampleX = 20;
     const sampleZ = 20;
     const top = map.surfaceY(sampleX, sampleZ);
@@ -80,8 +84,8 @@ describe("local random grassland map", () => {
     );
   });
 
-  it("supports spawn headroom and exposes all resource tiers", () => {
-    const map = createLocalQuarryMap();
+  it("supports spawn headroom and seeded resource quotas", () => {
+    const map = createLocalQuarryMap(LOCAL_TERRAIN_SEED);
     const [x, y, z] = map.spawnFloor;
     const neighbors = [
       [1, 0, 0],
@@ -94,7 +98,11 @@ describe("local random grassland map", () => {
 
     expect(getLocalMapVoxel(map, x, y, z)).not.toBe(LOCAL_BLOCK_IDS.air);
     expect(getLocalMapVoxel(map, x, y + 1, z)).toBe(LOCAL_BLOCK_IDS.air);
-    expect(map.resourceCounts).toEqual({ dirt: 5, gold: 5, diamond: 5 });
+    expect(map.resourceCounts).toEqual({
+      dirt: LOCAL_RESOURCE_QUOTAS.dirt,
+      gold: LOCAL_RESOURCE_QUOTAS.gold,
+      diamond: LOCAL_RESOURCE_QUOTAS.diamond,
+    });
 
     const remaining = new Map(
       map.resourceVoxels.map((voxel) => [voxel.join(","), voxel]),
@@ -126,8 +134,109 @@ describe("local random grassland map", () => {
     expect([...remaining.keys()]).toEqual([]);
   });
 
+  it("scatters ore differently when the map seed changes", () => {
+    const a = createLocalQuarryMap(0x1111_aaaa);
+    const b = createLocalQuarryMap(0x2222_bbbb);
+    const keysA = a.resourceVoxels.map((v) => v.join(",")).sort();
+    const keysB = b.resourceVoxels.map((v) => v.join(",")).sort();
+    expect(keysA).not.toEqual(keysB);
+    expect(a.resourceCounts.gold).toBe(LOCAL_RESOURCE_QUOTAS.gold);
+    expect(b.resourceCounts.diamond).toBe(LOCAL_RESOURCE_QUOTAS.diamond);
+  });
+
+  it("varies terrain shape across biomes and across seeds within a biome", () => {
+    // 固定不同风格的种子（style = seed % styles.length）
+    const desert = createLocalQuarryMap(2); // desert_day 若 index 2
+    const snow = createLocalQuarryMap(4);
+    const waste = createLocalQuarryMap(8);
+    // 若长度变化，只要求「至少两种不同高度剖面」
+    const profiles = [desert, snow, waste].map((m) => {
+      const sample: number[] = [];
+      for (let x = LOCAL_WORLD_MIN; x <= LOCAL_WORLD_MAX; x += 6) {
+        sample.push(m.surfaceY(x, 0));
+      }
+      return sample.join(",");
+    });
+    expect(new Set(profiles).size).toBeGreaterThan(1);
+
+    // 同风格 id、不同 seed：高度场应不同（局内变化）
+    const s0 = LOCAL_MAP_STYLES[0];
+    let seedA = 0;
+    let seedB = 0;
+    for (let s = 0; s < 200; s += 1) {
+      if (pickMapStyle(s).id === s0.id) {
+        if (seedA === 0) seedA = s;
+        else if (s !== seedA) {
+          seedB = s;
+          break;
+        }
+      }
+    }
+    if (seedB !== 0) {
+      const a = createLocalQuarryMap(seedA);
+      const b = createLocalQuarryMap(seedB);
+      expect(a.style.id).toBe(b.style.id);
+      expect(localMapChecksum(a)).not.toBe(localMapChecksum(b));
+    }
+  });
+
+  it("picks a stable map style from the seed among curated biome/time sets", () => {
+    expect(LOCAL_MAP_STYLES.length).toBeGreaterThanOrEqual(12);
+    const styleA = pickMapStyle(LOCAL_TERRAIN_SEED);
+    const styleB = pickMapStyle(LOCAL_TERRAIN_SEED);
+    expect(styleA.id).toBe(styleB.id);
+    const map = createLocalQuarryMap(LOCAL_TERRAIN_SEED);
+    expect(map.style.id).toBe(styleA.id);
+    expect(map.style.label.length).toBeGreaterThan(2);
+    expect(map.style.ambientColor.length).toBeGreaterThan(0);
+    const ids = new Set(
+      Array.from({ length: LOCAL_MAP_STYLES.length }, (_, n) =>
+        pickMapStyle(n).id,
+      ),
+    );
+    expect(ids.size).toBe(LOCAL_MAP_STYLES.length);
+    // 覆盖雨林、春天与血月
+    expect(LOCAL_MAP_STYLES.some((s) => s.biome === "rainforest")).toBe(true);
+    expect(LOCAL_MAP_STYLES.some((s) => s.biome === "spring")).toBe(true);
+    expect(LOCAL_MAP_STYLES.some((s) => s.dayPhase === "blood")).toBe(true);
+  });
+
+  it("spring biome places grass and leafy trees without water", () => {
+    // 找一个 spring 风格种子
+    let springSeed = -1;
+    for (let s = 0; s < LOCAL_MAP_STYLES.length * 4; s += 1) {
+      if (pickMapStyle(s).biome === "spring") {
+        springSeed = s;
+        break;
+      }
+    }
+    expect(springSeed).toBeGreaterThanOrEqual(0);
+    const map = createLocalQuarryMap(springSeed);
+    expect(map.style.biome).toBe("spring");
+
+    let grass = 0;
+    let leaves = 0;
+    let timber = 0;
+    for (let x = LOCAL_WORLD_MIN; x <= LOCAL_WORLD_MAX; x += 2) {
+      for (let z = LOCAL_WORLD_MIN; z <= LOCAL_WORLD_MAX; z += 2) {
+        const top = map.surfaceY(x, z);
+        for (let y = top; y <= top + 8 && y < LOCAL_MAX_HEIGHT; y += 1) {
+          const id = getLocalMapVoxel(map, x, y, z);
+          if (id === LOCAL_BLOCK_IDS.grass) grass += 1;
+          if (id === LOCAL_BLOCK_IDS.leaves) leaves += 1;
+          if (id === LOCAL_BLOCK_IDS.weatheredTimber) timber += 1;
+        }
+      }
+    }
+    expect(grass).toBeGreaterThan(20);
+    expect(leaves).toBeGreaterThan(5);
+    expect(timber).toBeGreaterThan(2);
+    // 项目明确不生成水
+    expect("water" in LOCAL_BLOCK_IDS).toBe(false);
+  });
+
   it("spawns outside the extraction radius so extraction is always deliberate", () => {
-    const map = createLocalQuarryMap();
+    const map = createLocalQuarryMap(LOCAL_TERRAIN_SEED);
     const [spawnX, , spawnZ] = map.spawn;
     const [zoneX, , zoneZ] = map.extraction.center;
 
@@ -136,8 +245,16 @@ describe("local random grassland map", () => {
     );
   });
 
+  it("places the opening spawn high above the camp floor for a sky drop-in", () => {
+    const map = createLocalQuarryMap(LOCAL_TERRAIN_SEED);
+    const [, floorY] = map.spawnFloor;
+    const [, eyeY] = map.spawn;
+    expect(eyeY).toBeGreaterThan(floorY + 20);
+    expect(eyeY).toBeLessThan(LOCAL_MAX_HEIGHT);
+  });
+
   it("keeps the authored return route continuous without mining", () => {
-    const map = createLocalQuarryMap();
+    const map = createLocalQuarryMap(LOCAL_TERRAIN_SEED);
 
     for (let index = 0; index < map.route.length; index += 1) {
       const [x, y, z] = map.route[index];

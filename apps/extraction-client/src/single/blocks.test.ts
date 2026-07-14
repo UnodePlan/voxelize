@@ -2,19 +2,23 @@ import { describe, expect, it } from "vitest";
 
 import {
   LOCAL_BLOCK_IDS,
+  LOCAL_BLOCK_MINING,
   LOCAL_MINEABLE_BLOCKS,
   createLocalBlocks,
+  isBlockMineable,
 } from "./blocks";
 
 describe("local block registry", () => {
   it("builds a complete air block and textured block definitions", () => {
     const blocks = createLocalBlocks();
 
-    expect(Object.keys(blocks)).toHaveLength(10);
+    expect(Object.keys(blocks)).toHaveLength(11);
+    expect(blocks.Leaves.isSeeThrough).toBe(true);
+    expect(blocks.Water).toBeUndefined();
     expect(blocks.Grass.faces).toHaveLength(6);
-    expect(blocks.Grass.faces.find((face) => face.name === "py")?.textureGroup).toBe(
-      "single-grass-top",
-    );
+    expect(
+      blocks.Grass.faces.find((face) => face.name === "py")?.textureGroup,
+    ).toBe("single-grass-top");
     expect(blocks.Air).toMatchObject({
       id: LOCAL_BLOCK_IDS.air,
       isEmpty: true,
@@ -28,22 +32,37 @@ describe("local block registry", () => {
     ]);
   });
 
-  it("keeps only the three resource IDs mineable", () => {
-    expect(Object.keys(LOCAL_MINEABLE_BLOCKS).map(Number).sort()).toEqual([
-      LOCAL_BLOCK_IDS.dirt,
-      LOCAL_BLOCK_IDS.gold,
-      LOCAL_BLOCK_IDS.diamond,
-    ]);
+  it("allows mining registered terrain blocks but keeps bedrock and beacon solid", () => {
+    const mineableIds = Object.keys(LOCAL_BLOCK_MINING).map(Number).sort();
+    expect(mineableIds).toEqual(
+      [
+        LOCAL_BLOCK_IDS.quarryStone,
+        LOCAL_BLOCK_IDS.paleStone,
+        LOCAL_BLOCK_IDS.weatheredTimber,
+        LOCAL_BLOCK_IDS.grass,
+        LOCAL_BLOCK_IDS.dirt,
+        LOCAL_BLOCK_IDS.gold,
+        LOCAL_BLOCK_IDS.diamond,
+        LOCAL_BLOCK_IDS.leaves,
+      ].sort(),
+    );
+    expect(isBlockMineable(LOCAL_BLOCK_IDS.bedrock)).toBe(false);
+    expect(isBlockMineable(LOCAL_BLOCK_IDS.extractionMarker)).toBe(false);
+
+    // 兼容旧表：仅资源掉落方块
+    expect(Object.keys(LOCAL_MINEABLE_BLOCKS).map(Number).sort()).toEqual(
+      [
+        LOCAL_BLOCK_IDS.dirt,
+        LOCAL_BLOCK_IDS.grass,
+        LOCAL_BLOCK_IDS.gold,
+        LOCAL_BLOCK_IDS.diamond,
+      ].sort(),
+    );
+    // 兼容表：泥土空手原版 0.75s
     expect(LOCAL_MINEABLE_BLOCKS[LOCAL_BLOCK_IDS.dirt]).toMatchObject({
       resource: "dirt",
-      miningDurationMs: 500,
+      miningDurationMs: 750,
     });
-    expect(LOCAL_MINEABLE_BLOCKS[LOCAL_BLOCK_IDS.gold].miningDurationMs).toBe(
-      1_500,
-    );
-    expect(
-      LOCAL_MINEABLE_BLOCKS[LOCAL_BLOCK_IDS.diamond].miningDurationMs,
-    ).toBe(3_000);
   });
 
   it("assigns one stable atlas range to all faces in a texture group", () => {

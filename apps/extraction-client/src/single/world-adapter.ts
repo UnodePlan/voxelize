@@ -43,16 +43,14 @@ type LocalTextureFactory = () =>
   | LocalTextureSource[]
   | Promise<LocalTextureSource[]>;
 
-// create.town daylight 段 start=0.25..0.65；取 0.4*24000 固定在明亮白天（Lab 主观感）。
-const LOCAL_WORLD_TIME = 9_600;
-
 export class LocalWorldAdapter {
   readonly map: LocalQuarryMap;
   private readonly chunksByKey: Map<string, LocalQuarryMap["chunks"][number]>;
 
   constructor(
     map = createLocalQuarryMap(),
-    private readonly textureFactory: LocalTextureFactory = createLocalTextureSources,
+    private readonly textureFactory: LocalTextureFactory = () =>
+      createLocalTextureSources(map.style.biome),
   ) {
     this.map = map;
     this.chunksByKey = new Map(
@@ -156,7 +154,7 @@ export function createLocalInitData(map: LocalQuarryMap) {
       fluidDensity: 1,
       timePerDay: 24_000,
     },
-    stats: { time: LOCAL_WORLD_TIME },
+    stats: { time: map.style.worldTime },
     savedPosition: [...map.spawn],
     savedDirection: [...map.initialDirection],
   };

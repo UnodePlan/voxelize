@@ -1,14 +1,12 @@
-import { LOCAL_BLOCK_IDS } from "./blocks";
-
 /**
- * 玩法点只标 x/z；真实 y 由程序化高度图决定（见 map.ts）。
- * 出生偏南，撤离在中心，矿点散落附近。
+ * 玩法锚点只标 x/z；真实 y 由程序化高度图决定（见 map.ts）。
+ * 出生偏南，撤离在中心；矿点每局按种子随机散布。
  */
 
 export const LOCAL_SPAWN_XZ = [0, 10] as const;
 export const LOCAL_EXTRACTION_XZ = [0, 0] as const;
 
-/** 出生 → 资源带 → 撤离区的 xz 折线 */
+/** 出生 → 资源带方向 → 撤离区的 xz 折线（地表路线，每局高度随地形变） */
 export const LOCAL_ROUTE_XZ: ReadonlyArray<readonly [number, number]> = [
   [0, 10],
   [0, 4],
@@ -19,23 +17,16 @@ export const LOCAL_ROUTE_XZ: ReadonlyArray<readonly [number, number]> = [
   [0, 0],
 ];
 
-/** 地表可采矿：x, z, blockId */
-export const LOCAL_RESOURCE_SPOTS: ReadonlyArray<
-  readonly [number, number, number]
-> = [
-  [6, 6, LOCAL_BLOCK_IDS.dirt],
-  [7, 6, LOCAL_BLOCK_IDS.dirt],
-  [6, 7, LOCAL_BLOCK_IDS.dirt],
-  [8, 5, LOCAL_BLOCK_IDS.dirt],
-  [5, 8, LOCAL_BLOCK_IDS.dirt],
-  [14, 2, LOCAL_BLOCK_IDS.gold],
-  [15, 2, LOCAL_BLOCK_IDS.gold],
-  [14, 3, LOCAL_BLOCK_IDS.gold],
-  [16, 1, LOCAL_BLOCK_IDS.gold],
-  [13, 1, LOCAL_BLOCK_IDS.gold],
-  [-8, -4, LOCAL_BLOCK_IDS.diamond],
-  [-9, -4, LOCAL_BLOCK_IDS.diamond],
-  [-8, -5, LOCAL_BLOCK_IDS.diamond],
-  [-7, -3, LOCAL_BLOCK_IDS.diamond],
-  [-10, -5, LOCAL_BLOCK_IDS.diamond],
-];
+/**
+ * 每局地表可采矿配额。
+ * 泥土常见、黄金中等、钻石稀少偏远。
+ */
+export const LOCAL_RESOURCE_QUOTAS = {
+  dirt: 10,
+  gold: 7,
+  diamond: 5,
+} as const;
+
+/** 出生营 / 撤离广场周围不刷矿，避免开局踩矿或挡撤离 */
+export const LOCAL_RESOURCE_SPAWN_CLEAR_RADIUS = 5;
+export const LOCAL_RESOURCE_EXTRACT_CLEAR_RADIUS = 4;

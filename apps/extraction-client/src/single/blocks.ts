@@ -1,6 +1,11 @@
 import type { ResourceCounts } from "../api/models";
 
 import { LOCAL_FACE_TEMPLATES } from "./block-faces";
+import {
+  miningDurationMs,
+  type LocalPreferredTool,
+  type VanillaMiningInput,
+} from "./mining";
 import type { LocalResourceKey } from "./state";
 
 export const LOCAL_BLOCK_IDS = {
@@ -14,6 +19,7 @@ export const LOCAL_BLOCK_IDS = {
   dirt: 1001,
   gold: 1002,
   diamond: 1003,
+  leaves: 1004,
 } as const;
 
 export const LOCAL_TEXTURE_GROUPS = {
@@ -28,8 +34,94 @@ export const LOCAL_TEXTURE_GROUPS = {
   gold: "single-gold",
   diamond: "single-diamond",
   extractionMarker: "single-extraction-marker",
+  leaves: "single-leaves",
 } as const;
 
+/**
+ * 可破坏方块的挖掘档案（hardness 取自 MC 1.21.4 / minecraft-data）。
+ * 未列出的 id（air/基岩/信标）不可挖。
+ */
+export interface LocalBlockMiningProfile extends VanillaMiningInput {
+  displayName: string;
+  /** 正确收获时进背包的资源；结构块为 null */
+  drop: LocalResourceKey | null;
+  preferredTool: LocalPreferredTool;
+}
+
+/**
+ * 单机挖掘表：严格原版 hardness + requiresCorrectToolForDrops。
+ * 耗时见 mining.ts 的 destroySpeed / 30|100 公式。
+ */
+export const LOCAL_BLOCK_MINING: Readonly<
+  Record<number, LocalBlockMiningProfile>
+> = {
+  // grass_block hardness 0.6，mineable/shovel，手可掉落
+  [LOCAL_BLOCK_IDS.grass]: {
+    displayName: "草地",
+    hardness: 0.6,
+    preferredTool: "shovel",
+    requiresCorrectToolForDrops: false,
+    drop: "dirt",
+  },
+  // dirt 0.5
+  [LOCAL_BLOCK_IDS.dirt]: {
+    displayName: "泥土",
+    hardness: 0.5,
+    preferredTool: "shovel",
+    requiresCorrectToolForDrops: false,
+    drop: "dirt",
+  },
+  // oak_planks 2.0，mineable/axe，不要求正确工具掉落
+  [LOCAL_BLOCK_IDS.weatheredTimber]: {
+    displayName: "旧木梁",
+    hardness: 2.0,
+    preferredTool: "axe",
+    requiresCorrectToolForDrops: false,
+    drop: null,
+  },
+  // stone 1.5，需镐才掉落（结构块无掉落）
+  [LOCAL_BLOCK_IDS.paleStone]: {
+    displayName: "风化石台",
+    hardness: 1.5,
+    preferredTool: "pickaxe",
+    requiresCorrectToolForDrops: true,
+    drop: null,
+  },
+  // cobblestone 2.0 作为采石岩壁
+  [LOCAL_BLOCK_IDS.quarryStone]: {
+    displayName: "采石场岩壁",
+    hardness: 2.0,
+    preferredTool: "pickaxe",
+    requiresCorrectToolForDrops: true,
+    drop: null,
+  },
+  // gold_ore 3.0，需铁镐+
+  [LOCAL_BLOCK_IDS.gold]: {
+    displayName: "黄金矿",
+    hardness: 3.0,
+    preferredTool: "pickaxe",
+    requiresCorrectToolForDrops: true,
+    drop: "gold",
+  },
+  // diamond_ore 3.0，需铁镐+
+  [LOCAL_BLOCK_IDS.diamond]: {
+    displayName: "钻石矿",
+    hardness: 3.0,
+    preferredTool: "pickaxe",
+    requiresCorrectToolForDrops: true,
+    drop: "diamond",
+  },
+  // oak_leaves 0.2，手可破、无掉落（简化）
+  [LOCAL_BLOCK_IDS.leaves]: {
+    displayName: "树叶",
+    hardness: 0.2,
+    preferredTool: "axe",
+    requiresCorrectToolForDrops: false,
+    drop: null,
+  },
+};
+
+/** 兼容旧引用：仅含「存在掉落定义」的资源方块；时长=空手原版 ms */
 export const LOCAL_MINEABLE_BLOCKS: Readonly<
   Record<
     number,
@@ -39,23 +131,38 @@ export const LOCAL_MINEABLE_BLOCKS: Readonly<
       resource: LocalResourceKey;
     }
   >
-> = {
-  [LOCAL_BLOCK_IDS.dirt]: {
-    displayName: "泥土",
-    miningDurationMs: 500,
-    resource: "dirt",
-  },
-  [LOCAL_BLOCK_IDS.gold]: {
-    displayName: "黄金矿",
-    miningDurationMs: 1_500,
-    resource: "gold",
-  },
-  [LOCAL_BLOCK_IDS.diamond]: {
-    displayName: "钻石矿",
-    miningDurationMs: 3_000,
-    resource: "diamond",
-  },
-};
+> = Object.fromEntries(
+  Object.entries(LOCAL_BLOCK_MINING)
+    .filter(([, profile]) => profile.drop !== null)
+    .map(([id, profile]) => [
+      Number(id),
+      {
+        displayName: profile.displayName,
+        miningDurationMs: miningDurationMs(profile, "empty"),
+        resource: profile.drop as LocalResourceKey,
+      },
+    ]),
+) as Readonly<
+  Record<
+    number,
+    {
+      displayName: string;
+      miningDurationMs: number;
+      resource: LocalResourceKey;
+    }
+  >
+>;
+
+export function getBlockMiningProfile(
+  blockId: number,
+): LocalBlockMiningProfile | null {
+  return LOCAL_BLOCK_MINING[blockId] ?? null;
+}
+
+export function isBlockMineable(blockId: number): boolean {
+  const profile = getBlockMiningProfile(blockId);
+  return profile !== null && profile.hardness >= 0;
+}
 
 export const LOCAL_BLOCK_DISPLAY_NAMES: Readonly<Record<number, string>> = {
   [LOCAL_BLOCK_IDS.quarryStone]: "采石场岩壁",
@@ -67,6 +174,19 @@ export const LOCAL_BLOCK_DISPLAY_NAMES: Readonly<Record<number, string>> = {
   [LOCAL_BLOCK_IDS.dirt]: "泥土",
   [LOCAL_BLOCK_IDS.gold]: "黄金矿",
   [LOCAL_BLOCK_IDS.diamond]: "钻石矿",
+  [LOCAL_BLOCK_IDS.leaves]: "树叶",
+};
+
+/** 破坏碎片/掉落近似色（无贴图时的 fallback） */
+export const LOCAL_BLOCK_DEBRIS_COLORS: Readonly<Record<number, string>> = {
+  [LOCAL_BLOCK_IDS.quarryStone]: "#8a8a8a",
+  [LOCAL_BLOCK_IDS.paleStone]: "#b5b5a8",
+  [LOCAL_BLOCK_IDS.weatheredTimber]: "#9a7348",
+  [LOCAL_BLOCK_IDS.grass]: "#5d8a3a",
+  [LOCAL_BLOCK_IDS.dirt]: "#79523d",
+  [LOCAL_BLOCK_IDS.gold]: "#c9a227",
+  [LOCAL_BLOCK_IDS.diamond]: "#3dd2cc",
+  [LOCAL_BLOCK_IDS.leaves]: "#3d8c3a",
 };
 
 export interface LocalBlockFace {
@@ -189,14 +309,28 @@ export function createLocalBlocks(): Record<string, LocalSerializedBlock> {
         transparentStandalone: true,
       },
     ),
+    Leaves: makeSolidBlock(
+      LOCAL_BLOCK_IDS.leaves,
+      "Leaves",
+      LOCAL_TEXTURE_GROUPS.leaves,
+      11,
+      {
+        // 半透树冠：可挡视线但不完全遮光
+        isOpaque: false,
+        isSeeThrough: true,
+        isTransparent: [true, true, true, true, true, true],
+        lightReduce: true,
+        transparentStandalone: true,
+      },
+    ),
   };
 }
 
 export function resourceCountsFromIds(ids: readonly number[]): ResourceCounts {
   const counts: ResourceCounts = { dirt: 0, gold: 0, diamond: 0 };
   for (const id of ids) {
-    const resource = LOCAL_MINEABLE_BLOCKS[id]?.resource;
-    if (resource !== undefined) counts[resource] += 1;
+    const drop = LOCAL_BLOCK_MINING[id]?.drop;
+    if (drop !== null && drop !== undefined) counts[drop] += 1;
   }
   return counts;
 }

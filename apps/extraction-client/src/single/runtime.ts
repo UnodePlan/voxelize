@@ -3,7 +3,6 @@ import {
   RigidControls,
   VoxelInteract,
   World,
-  artFunctions,
 } from "@voxelize/core";
 import {
   AmbientLight,
@@ -18,8 +17,10 @@ import {
 
 import { disposeObjectTree } from "../game/object-disposal";
 
+import { LocalAnimalSystem, planBiomeAnimals } from "./animals";
 import { createExtractionBeacon } from "./beacon";
-import { LocalViewmodel } from "./viewmodel";
+import { BlockBreakFx } from "./block-break-fx";
+import { LocalViewmodel, type LocalHeldTool } from "./viewmodel";
 import { LocalWorldAdapter } from "./world-adapter";
 
 export interface LocalRuntimeFrame {
@@ -77,7 +78,7 @@ export class LocalWorldRuntime {
     maxProcessesPerUpdate: 4,
     maxUpdatesPerUpdate: 10_000,
     mergeChunkGeometries: true,
-    minLightLevel: 0.04,
+    minLightLevel: this.adapter.map.style.minLightLevel,
     textureUnitDimension: 16,
     useLightWorkers: true,
   });
@@ -93,6 +94,9 @@ export class LocalWorldRuntime {
   private readonly beacon: Group;
   private readonly viewmodel: LocalViewmodel;
   private readonly armCamera: PerspectiveCamera;
+  private readonly breakFx: BlockBreakFx;
+  private readonly ambientLight: AmbientLight;
+  private animals: LocalAnimalSystem | null = null;
   private initialized = false;
   private ready = false;
   private disposed = false;
@@ -144,9 +148,13 @@ export class LocalWorldRuntime {
     this.world.add(this.interact);
     this.beacon = createExtractionBeacon(this.adapter.map.extraction);
     this.world.add(this.beacon);
+    this.breakFx = new BlockBreakFx(this.world);
 
-    // lab: AmbientLight(0xffffff, 0.3)
-    this.world.add(new AmbientLight(0xffffff, 0.3));
+    this.ambientLight = new AmbientLight(
+      new Color(this.adapter.map.style.ambientColor),
+      this.adapter.map.style.ambientIntensity,
+    );
+    this.world.add(this.ambientLight);
 
     // 独立手臂相机：固定在原点朝 -Z，不跟随玩家世界位姿（examples + lab 同构）
     this.armCamera = new PerspectiveCamera(90, 1, 0.05, 10);
@@ -159,7 +167,8 @@ export class LocalWorldRuntime {
     };
     this.disconnectArm = this.viewmodel.arm.connect(this.inputs, "in-game");
 
-    this.configureAtmosphere();
+    this.configureAtmosphere(this.adapter.map.style);
+    this.animals = this.createAnimals();
 
     this.resizeObserver = new ResizeObserver(this.resize);
     this.resizeObserver.observe(canvas);
@@ -175,8 +184,8 @@ export class LocalWorldRuntime {
       await this.adapter.initializeWorld(this.world);
       if (this.disposed) return;
       this.world.renderRadius = 6;
-      this.controls.teleportToExact(...this.adapter.map.spawn);
-      this.controls.setDirection(...this.adapter.map.initialDirection);
+      // 高空开局：清零速度后从 spawn 天空点落下
+      this.dropInFromSky(this.adapter.map.spawn);
       this.initialized = true;
       this.canvas.dataset.singleWorld = "loading";
     } catch {
@@ -205,10 +214,15 @@ export class LocalWorldRuntime {
 
     if (!this.ready && this.adapter.isWorldReady(this.world)) {
       this.ready = true;
-      this.controls.teleportToExact(...this.adapter.map.spawn);
-      this.controls.setDirection(...this.adapter.map.initialDirection);
+      // 区块就绪后再放一次高空，避免加载期间提前落地
+      this.dropInFromSky(this.adapter.map.spawn);
       this.canvas.dataset.singleWorld = "ready";
       this.actions.onWorldReady();
+    }
+
+    this.breakFx.update(deltaMs);
+    if (this.ready) {
+      this.animals?.update(deltaMs);
     }
 
     // builder 脚步只用 state.running；moving 另含其它输入，供 UI/逻辑
@@ -259,6 +273,34 @@ export class LocalWorldRuntime {
     this.viewmodel.setMiningProgress(progress);
   }
 
+  /**
+   * MC 裂纹进度：progress 0–1 映射 destroy_stage 0–9；null 隐藏。
+   */
+  setBreakCrack(
+    progress: number | null,
+    voxel: readonly [number, number, number] | null,
+  ): void {
+    this.breakFx.setCrack(progress, voxel);
+  }
+
+  /** 方块打碎碎片喷发 */
+  playBlockBreakBurst(
+    voxel: readonly [number, number, number],
+    color: string,
+    now: number,
+  ): void {
+    this.breakFx.burst(voxel, color, now);
+  }
+
+  /** 同步第一人称握持（空手手臂 / 镐 / 剑） */
+  setHeldTool(tool: LocalHeldTool, animate = true): void {
+    this.viewmodel.setHeldTool(tool, animate);
+  }
+
+  get heldTool(): LocalHeldTool {
+    return this.viewmodel.heldTool;
+  }
+
   getDirection(): Vector3 {
     return this.camera.getWorldDirection(new Vector3()).normalize();
   }
@@ -270,9 +312,15 @@ export class LocalWorldRuntime {
   respawnRandomFromSky(
     drop: readonly [number, number, number],
   ): readonly [number, number, number] {
-    this.controls.resetMovements();
-    this.controls.teleportToExact(drop[0], drop[1], drop[2]);
+    this.dropInFromSky(drop);
     return drop;
+  }
+
+  /** 清零移动后放到高空点；teleportToExact 会清零速度，由重力下落 */
+  private dropInFromSky(eye: readonly [number, number, number]): void {
+    this.controls.resetMovements();
+    this.controls.teleportToExact(eye[0], eye[1], eye[2]);
+    this.controls.setDirection(...this.adapter.map.initialDirection);
   }
 
   freeze(): void {
@@ -301,6 +349,9 @@ export class LocalWorldRuntime {
     if (document.pointerLockElement === this.canvas) document.exitPointerLock();
     disposeObjectTree(this.interact, true);
     disposeObjectTree(this.beacon, true);
+    this.animals?.dispose();
+    this.animals = null;
+    this.breakFx.dispose();
     this.viewmodel.dispose();
     this.world.dispose();
     this.renderer.dispose();
@@ -329,54 +380,67 @@ export class LocalWorldRuntime {
     this.viewmodel.resize(width, height);
   };
 
-  private configureAtmosphere(): void {
-    // lab: 完整昼夜 phases + 多层天空绘制（layers 在 Sky 构造后通过 paint 分层表达）
+  private createAnimals(): LocalAnimalSystem {
+    const map = this.adapter.map;
+    const plans = planBiomeAnimals(map.seed, map.style.biome, map.surfaceY);
+    return new LocalAnimalSystem(
+      this.world,
+      plans,
+      map.surfaceY,
+      () => false,
+      map.seed,
+    );
+  }
+
+  private configureAtmosphere(style: {
+    backgroundColor: string;
+    cloudsVisible: boolean;
+    drawSun: boolean;
+    drawStars: boolean;
+    sky: {
+      name: string;
+      start: number;
+      color: { top: string; middle: string; bottom: string };
+      skyOffset: number;
+      voidOffset: number;
+    };
+  }): void {
     this.world.sky.visible = true;
-    this.world.clouds.visible = true;
+    this.world.clouds.visible = style.cloudsVisible;
+    // 单段锁定当前风格时段，避免跨多 phase 混色
     this.world.sky.setShadingPhases([
       {
-        name: "sunrise",
-        start: 0.2,
-        color: { top: "#5D6DB5", middle: "#FF9A6C", bottom: "#FFC670" },
-        skyOffset: 0.15,
-        voidOffset: 0.6,
+        name: style.sky.name,
+        start: 0,
+        color: { ...style.sky.color },
+        skyOffset: style.sky.skyOffset,
+        voidOffset: style.sky.voidOffset,
       },
       {
-        name: "daylight",
-        start: 0.25,
-        color: { top: "#4A90D9", middle: "#7EC8E3", bottom: "#C9E4F6" },
-        skyOffset: 0.2,
-        voidOffset: 0.6,
-      },
-      {
-        name: "sunset",
-        start: 0.65,
-        color: { top: "#4A5F8C", middle: "#FF7B54", bottom: "#FFB26B" },
-        skyOffset: 0.15,
-        voidOffset: 0.6,
-      },
-      {
-        name: "twilight",
-        start: 0.75,
-        color: { top: "#1A1A2E", middle: "#2A2040", bottom: "#3A3050" },
-        skyOffset: 0.08,
-        voidOffset: 0.6,
-      },
-      {
-        name: "night",
-        start: 0.88,
-        color: { top: "#010101", middle: "#000000", bottom: "#000000" },
-        skyOffset: 0.1,
-        voidOffset: 0.6,
+        name: `${style.sky.name}-hold`,
+        start: 1,
+        color: { ...style.sky.color },
+        skyOffset: style.sky.skyOffset,
+        voidOffset: style.sky.voidOffset,
       },
     ]);
-    // 与 lab 类似：底面太阳 + 顶面星空（原创绘制，不用其贴图）
-    this.world.sky.paint("bottom", (context, canvas) => {
-      paintCreateTownStyleSun(context, canvas);
-    });
-    this.world.sky.paint("top", artFunctions.drawStars());
-    this.world.sky.paint("sides", artFunctions.drawStars());
-    this.world.background = new Color("#4A90D9");
+    // 颜色只靠外层 dodecahedron 渐变（setShadingPhases）。
+    // 内层 CanvasBox 若铺整面不透明色，会变成「巨大紫色/红色贴纸」盖住渐变
+    // （黄昏 top=#3D2A5C、血月底/顶反差都是这个问题）。
+    // 内层只允许：透明底 + 星点，和/或底面太阳；绝不整面 fill 实色。
+    this.world.sky.paint("all", clearSkyFace);
+    if (style.drawStars) {
+      this.world.sky.paint("top", paintStarsTransparent());
+      this.world.sky.paint("sides", paintStarsTransparent());
+      this.world.sky.paint("bottom", paintStarsTransparent());
+    }
+    if (style.drawSun) {
+      this.world.sky.paint("bottom", (context, canvas) => {
+        // 保留已有星点（若有），再画太阳辉光
+        paintCreateTownStyleSun(context, canvas);
+      });
+    }
+    this.world.background = new Color(style.backgroundColor);
   }
 
   private emptyFrame(deltaMs: number): LocalRuntimeFrame {
@@ -391,6 +455,52 @@ export class LocalWorldRuntime {
       target: null,
     };
   }
+}
+
+/** 清空天空盒面为全透明，露出外层渐变 */
+function clearSkyFace(
+  context: CanvasRenderingContext2D,
+  canvas: HTMLCanvasElement,
+): void {
+  context.save();
+  context.setTransform(1, 0, 0, 1, 0, 0);
+  context.clearRect(0, 0, canvas.width, canvas.height);
+  context.restore();
+}
+
+/**
+ * 透明底画星：只画点，不铺实色底，渐变天空透过 CanvasBox 可见。
+ */
+function paintStarsTransparent(
+  starCount = 140,
+): (context: CanvasRenderingContext2D, canvas: HTMLCanvasElement) => void {
+  return (context, canvas) => {
+    context.save();
+    context.setTransform(1, 0, 0, 1, 0, 0);
+    // 不 clear：调用方已 paint("all", clearSkyFace)；此处叠加即可
+    const colors = [
+      "#FFFFFF",
+      "#FFFFFF",
+      "#FFE8E0",
+      "#FFD0C8",
+      "#E8E8FF",
+      "#FF8585",
+    ];
+    for (let i = 0; i < starCount; i += 1) {
+      context.globalAlpha = 0.45 + Math.random() * 0.55;
+      context.beginPath();
+      context.arc(
+        Math.random() * canvas.width,
+        Math.random() * canvas.height,
+        Math.random() * 0.7 + 0.15,
+        0,
+        Math.PI * 2,
+      );
+      context.fillStyle = colors[Math.floor(Math.random() * colors.length)];
+      context.fill();
+    }
+    context.restore();
+  };
 }
 
 /** 按 lab 解包逻辑重绘太阳：低分 canvas + 径向辉光 + 实心核（原创实现）。 */

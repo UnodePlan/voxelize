@@ -1,4 +1,4 @@
-import { LOCAL_INVENTORY_SLOTS } from "./state";
+import { isToolHotbarSlot, LOCAL_INVENTORY_SLOTS } from "./state";
 
 /** 背包打开时槽位拖拽整理（热栏 + My Items 网格）。 */
 export class InventoryDragController {
@@ -42,6 +42,11 @@ export class InventoryDragController {
     const index = Number(slot.dataset.index);
     if (!Number.isInteger(index) || index < 0 || index >= LOCAL_INVENTORY_SLOTS)
       return;
+    // 固定工具槽只切换握持，不参与资源拖拽
+    if (isToolHotbarSlot(index)) {
+      this.onSelect(index);
+      return;
+    }
     const content = this.getResource(index);
     if (content === null) {
       this.onSelect(index);
@@ -74,8 +79,17 @@ export class InventoryDragController {
     const to = slotIndexFromPoint(event.clientX, event.clientY);
     const moved = this.dragMoved;
     this.endDrag();
-    if (to !== null && to !== from && moved) this.onSwap(from, to);
-    else if (to !== null) this.onSelect(to);
+    if (
+      to !== null &&
+      to !== from &&
+      moved &&
+      !isToolHotbarSlot(from) &&
+      !isToolHotbarSlot(to)
+    ) {
+      this.onSwap(from, to);
+    } else if (to !== null) {
+      this.onSelect(to);
+    }
   };
 
   private moveGhost(x: number, y: number): void {

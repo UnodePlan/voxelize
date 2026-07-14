@@ -30,6 +30,7 @@ PRD for task `07-14-extraction-single-player-vertical-slice` allows porting Lab 
 | `gold_ore.png` | Lab `stone` + gold flecks | gold resource |
 | `diamond_ore.png` | Lab `stone` + cyan flecks | diamond resource |
 | `extraction.png` | glowstone recolored mint | extraction marker |
+| `oak_log.png` | oak log | spring/meadow/rainforest timber |
 
 ## Notes
 

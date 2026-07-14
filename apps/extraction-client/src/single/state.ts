@@ -3,6 +3,14 @@ import type { ResourceCounts } from "../api/models";
 export const LOCAL_INVENTORY_SLOTS = 12;
 export const LOCAL_STACK_LIMIT = 64;
 export const LOCAL_EXTRACTION_REQUIRED_MS = 3_000;
+/** 快捷栏前 3 格固定工具：0 空手 / 1 镐 / 2 剑；资源只进入后续槽 */
+export const LOCAL_TOOL_HOTBAR_SLOTS = 3;
+
+export function isToolHotbarSlot(slot: number): boolean {
+  return (
+    Number.isInteger(slot) && slot >= 0 && slot < LOCAL_TOOL_HOTBAR_SLOTS
+  );
+}
 
 export type LocalResourceKey = keyof ResourceCounts;
 export type LocalVoxel = readonly [number, number, number];
@@ -18,7 +26,10 @@ export interface LocalInventorySlot {
 export interface LocalMiningState {
   elapsedMs: number;
   requiredMs: number;
-  resource: LocalResourceKey;
+  /** 破坏后进背包的资源；结构块为 null */
+  resource: LocalResourceKey | null;
+  /** HUD 显示名 */
+  displayName: string;
   target: LocalVoxel;
   targetKey: string;
 }
@@ -56,7 +67,8 @@ export type LocalGameAction =
   | {
       type: "MINING_STARTED";
       target: LocalVoxel;
-      resource: LocalResourceKey;
+      resource: LocalResourceKey | null;
+      displayName: string;
       requiredMs: number;
     }
   | { type: "MINING_ADVANCED"; deltaMs: number; targetKey: string }
@@ -127,7 +139,8 @@ export function reduceLocalGameState(
       if (
         state.phase !== "playing" ||
         state.inventoryOpen ||
-        action.requiredMs <= 0
+        action.requiredMs <= 0 ||
+        action.displayName.trim() === ""
       )
         return state;
       return {
@@ -136,6 +149,7 @@ export function reduceLocalGameState(
           elapsedMs: 0,
           requiredMs: action.requiredMs,
           resource: action.resource,
+          displayName: action.displayName,
           target: action.target,
           targetKey: voxelKey(action.target),
         },
@@ -215,7 +229,9 @@ export function addResource(
   const next = inventory.map((slot) => (slot === null ? null : { ...slot }));
   let remainder = quantity;
 
-  for (const slot of next) {
+  // 先叠已有同类堆；工具槽不参与资源堆叠
+  for (let index = LOCAL_TOOL_HOTBAR_SLOTS; index < next.length; index += 1) {
+    const slot = next[index];
     if (slot?.resource !== resource || slot.quantity >= LOCAL_STACK_LIMIT) {
       continue;
     }
@@ -225,7 +241,11 @@ export function addResource(
     if (remainder === 0) return { inventory: next, remainder };
   }
 
-  for (let index = 0; index < next.length && remainder > 0; index += 1) {
+  for (
+    let index = LOCAL_TOOL_HOTBAR_SLOTS;
+    index < next.length && remainder > 0;
+    index += 1
+  ) {
     if (next[index] !== null) continue;
     const accepted = Math.min(LOCAL_STACK_LIMIT, remainder);
     next[index] = { quantity: accepted, resource };
@@ -243,7 +263,13 @@ export function dropInventorySlot(
   inventory: ReadonlyArray<LocalInventorySlot | null>;
 } {
   assertInventory(inventory);
-  if (!Number.isInteger(slot) || slot < 0 || slot >= inventory.length) {
+  // 工具槽不是资源格，Q 丢弃不生效
+  if (
+    !Number.isInteger(slot) ||
+    slot < 0 ||
+    slot >= inventory.length ||
+    isToolHotbarSlot(slot)
+  ) {
     return { dropped: null, inventory };
   }
   const dropped = inventory[slot];
@@ -253,7 +279,7 @@ export function dropInventorySlot(
   return { dropped: { ...dropped }, inventory: next };
 }
 
-/** 拖拽整理：交换两个槽；同源或非法索引则原样返回。 */
+/** 拖拽整理：交换两个槽；同源、非法索引或工具槽则原样返回。 */
 export function swapInventorySlots(
   inventory: ReadonlyArray<LocalInventorySlot | null>,
   from: number,
@@ -267,7 +293,9 @@ export function swapInventorySlots(
     to < 0 ||
     from >= inventory.length ||
     to >= inventory.length ||
-    from === to
+    from === to ||
+    isToolHotbarSlot(from) ||
+    isToolHotbarSlot(to)
   ) {
     return inventory;
   }

@@ -2,9 +2,10 @@ import { Vector3 } from "three";
 
 import { LocalSfx } from "./audio";
 import {
+  getBlockMiningProfile,
+  LOCAL_BLOCK_DEBRIS_COLORS,
   LOCAL_BLOCK_DISPLAY_NAMES,
   LOCAL_BLOCK_IDS,
-  LOCAL_MINEABLE_BLOCKS,
 } from "./blocks";
 import {
   hasFallenOutOfTerrain,
@@ -19,6 +20,12 @@ import {
   LOCAL_WORLD_MAX,
   LOCAL_WORLD_MIN,
 } from "./map";
+import {
+  digIntervalMs,
+  digRateFor,
+  harvestDrop,
+  miningDurationMs,
+} from "./mining";
 import { LocalWorldRuntime, type LocalRuntimeFrame } from "./runtime";
 import {
   addResource,
@@ -30,6 +37,7 @@ import {
   type LocalResourceKey,
 } from "./state";
 import { LocalGameView } from "./view";
+import { heldToolFromSlot } from "./viewmodel";
 
 export class SinglePlayerController {
   private readonly view: LocalGameView;
@@ -60,8 +68,13 @@ export class SinglePlayerController {
       },
       selectSlot: (slot) => {
         this.sfx.unlock();
-        if (slot !== this.state.selectedSlot) this.sfx.play("select");
+        if (slot !== this.state.selectedSlot) {
+          this.sfx.play("select");
+          // 换工具会改变硬度结算，取消进行中的挖掘
+          this.cancelMining();
+        }
         this.dispatch({ type: "SLOT_SELECTED", slot });
+        this.syncHeldTool(true);
       },
       setInventoryTab: (tab) => {
         this.sfx.unlock();
@@ -72,6 +85,8 @@ export class SinglePlayerController {
         this.sfx.unlock();
         this.sfx.play("ui");
         this.dispatch({ type: "INVENTORY_SWAP", from, to });
+        // 交换后 selectedSlot 可能变化，同步第一人称握持
+        this.syncHeldTool(true);
       },
       onRestart: () => void this.restart(),
     });
@@ -122,18 +137,24 @@ export class SinglePlayerController {
       },
       cycleSlot: (direction) => {
         this.sfx.play("select");
+        this.cancelMining();
         this.dispatch({
           type: "SLOT_SELECTED",
           slot: cycleInventorySlot(this.state.selectedSlot, direction),
         });
+        this.syncHeldTool(true);
       },
       dropSelectedSlot: () => this.dropSelectedSlot(),
       isGameplayActive: () => this.state.phase === "playing",
       isInventoryOpen: () => this.state.inventoryOpen,
       isPointerLocked: () => this.runtime?.isLocked === true,
       selectSlot: (slot) => {
-        if (slot !== this.state.selectedSlot) this.sfx.play("select");
+        if (slot !== this.state.selectedSlot) {
+          this.sfx.play("select");
+          this.cancelMining();
+        }
         this.dispatch({ type: "SLOT_SELECTED", slot });
+        this.syncHeldTool(true);
       },
       toggleHelp: () => {
         this.sfx.play("ui");
@@ -146,8 +167,12 @@ export class SinglePlayerController {
     this.input = input;
     this.loot = loot;
     await runtime.initialize();
-    if (generation !== this.sessionGeneration || this.disposed)
+    if (generation !== this.sessionGeneration || this.disposed) {
       runtime.dispose();
+      return;
+    }
+    // 默认槽 0 = 空手手臂；镐/剑贴图异步预载
+    this.syncHeldTool(false);
   }
 
   private readonly animate = (now: number): void => {
@@ -187,7 +212,7 @@ export class SinglePlayerController {
           this.sfx.play("extractDone");
         }
       } else if (!this.state.inventoryOpen) {
-        this.collectLoot(frame.playerPosition, now);
+        this.collectLoot(frame.playerPosition, now, frame.deltaMs);
         this.advanceMining(runtime, frame, now);
         this.playStepSfx(frame, now);
       } else {
@@ -195,7 +220,9 @@ export class SinglePlayerController {
         this.cancelMining();
       }
     }
-    runtime.setMiningProgress(miningProgress(this.state));
+    const digProgress = miningProgress(this.state);
+    runtime.setMiningProgress(digProgress);
+    runtime.setBreakCrack(digProgress, this.state.mining?.target ?? null);
     this.render();
   }
 
@@ -204,15 +231,15 @@ export class SinglePlayerController {
     frame: LocalRuntimeFrame,
     now: number,
   ): void {
+    const tool = heldToolFromSlot(this.state.selectedSlot);
     const target = frame.target;
-    const mineable =
-      target === null ? undefined : LOCAL_MINEABLE_BLOCKS[target.id];
+    const profile = target === null ? null : getBlockMiningProfile(target.id);
     const key = target === null ? null : voxelKey(target.voxel);
     if (
       this.input?.primaryHeld !== true ||
       !runtime.isLocked ||
       target === null ||
-      mineable === undefined ||
+      profile === null ||
       key === null ||
       this.claimed.has(key)
     ) {
@@ -220,14 +247,20 @@ export class SinglePlayerController {
       return;
     }
 
-    if (this.state.mining?.targetKey !== key) {
+    const requiredMs = miningDurationMs(profile, tool);
+    const drop = harvestDrop(profile.drop, tool, profile);
+    if (
+      this.state.mining?.targetKey !== key ||
+      this.state.mining.requiredMs !== requiredMs
+    ) {
       this.dispatch({
         type: "MINING_STARTED",
         target: target.voxel,
-        resource: mineable.resource,
-        requiredMs: mineable.miningDurationMs,
+        resource: drop,
+        displayName: profile.displayName,
+        requiredMs,
       });
-      this.sfx.play("dig", { rate: digRate(mineable.resource) });
+      this.sfx.play("dig", { rate: digRateFor(drop, tool) });
       this.lastDigAt = now;
     }
     this.dispatch({
@@ -235,23 +268,22 @@ export class SinglePlayerController {
       deltaMs: frame.deltaMs,
       targetKey: key,
     });
-    // 挖掘过程中按间隔播镐击声
-    if (now - this.lastDigAt > 220) {
-      this.sfx.play("dig", { rate: digRate(mineable.resource) });
+    if (now - this.lastDigAt > digIntervalMs(tool)) {
+      this.sfx.play("dig", { rate: digRateFor(drop, tool) });
       this.lastDigAt = now;
     }
     if (
       this.state.mining !== null &&
       this.state.mining.elapsedMs >= this.state.mining.requiredMs
     ) {
-      this.completeMining(runtime, target, mineable.resource, now);
+      this.completeMining(runtime, target, drop, now);
     }
   }
 
   private completeMining(
     runtime: LocalWorldRuntime,
     target: { id: number; voxel: [number, number, number] },
-    resource: LocalResourceKey,
+    drop: LocalResourceKey | null,
     now: number,
   ): void {
     const key = voxelKey(target.voxel);
@@ -274,32 +306,32 @@ export class SinglePlayerController {
       this.cancelMining();
       return;
     }
-    this.sfx.play("break", { rate: digRate(resource) });
-    const result = addResource(this.state.inventory, resource, 1);
-    this.dispatch({ type: "INVENTORY_REPLACED", inventory: result.inventory });
-    if (result.remainder > 0) {
+    runtime.setBreakCrack(null, null);
+    runtime.playBlockBreakBurst(
+      target.voxel,
+      LOCAL_BLOCK_DEBRIS_COLORS[target.id] ?? "#888888",
+      now,
+    );
+    this.sfx.play("break", {
+      rate: digRateFor(drop, heldToolFromSlot(this.state.selectedSlot)),
+    });
+    if (drop !== null) {
       this.loot?.drop(
-        resource,
-        result.remainder,
-        [target.voxel[0] + 0.5, target.voxel[1] + 0.8, target.voxel[2] + 0.5],
+        drop,
+        1,
+        [target.voxel[0] + 0.5, target.voxel[1] + 0.55, target.voxel[2] + 0.5],
         now,
-        350,
+        280,
       );
       this.sfx.play("drop");
-      this.showNotice("背包已满，资源留在矿坑中");
-    } else {
-      this.sfx.play("pickup");
     }
     this.cancelMining();
   }
 
-  private collectLoot(position: Vector3, now: number): void {
-    this.loot?.updateAndCollect(position, now, (resource, quantity) => {
+  private collectLoot(position: Vector3, now: number, deltaMs: number): void {
+    this.loot?.updateAndCollect(position, now, deltaMs, (resource, quantity) => {
       const result = addResource(this.state.inventory, resource, quantity);
-      this.dispatch({
-        type: "INVENTORY_REPLACED",
-        inventory: result.inventory,
-      });
+      this.dispatch({ type: "INVENTORY_REPLACED", inventory: result.inventory });
       if (result.remainder < quantity) this.sfx.play("pickup");
       return result.remainder;
     });
@@ -337,6 +369,13 @@ export class SinglePlayerController {
       this.input?.cancelMining();
       this.runtime?.unlockPointer();
     }
+  }
+
+  private syncHeldTool(animate: boolean): void {
+    this.runtime?.setHeldTool(
+      heldToolFromSlot(this.state.selectedSlot),
+      animate,
+    );
   }
 
   private playStepSfx(frame: LocalRuntimeFrame, _now: number): void {
@@ -441,13 +480,9 @@ export class SinglePlayerController {
     this.view.render(this.state, {
       insideExtraction: this.insideExtraction,
       targetName: this.targetName,
+      styleLabel: this.runtime?.adapter.map.style.label ?? null,
     });
   }
 }
 
-function digRate(resource: LocalResourceKey): number {
-  // 泥土脆、钻石沉
-  if (resource === "dirt") return 1.15;
-  if (resource === "gold") return 0.95;
-  return 0.8;
-}
+
