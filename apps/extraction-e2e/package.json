@@ -10,6 +10,7 @@
     "test:live:crash-recovery": "node scripts/run-live-gameplay.mjs --crash-recovery",
     "test:live:settlement-uncertainty": "node scripts/run-live-gameplay.mjs --settlement-uncertainty",
     "test:live:reconnect": "node scripts/run-live-reconnect.mjs",
+    "test:live:appkit": "node scripts/run-live-smoke.mjs --appkit",
     "test:live:smoke": "node scripts/run-live-smoke.mjs",
     "test:live:10p": "node scripts/run-live-smoke.mjs --10p",
     "test:live:multi-round": "node scripts/run-live-smoke.mjs --multi-round",
@@ -26,7 +27,10 @@
   },
   "devDependencies": {
     "@playwright/test": "1.61.1",
+    "@reown/walletkit": "1.5.6",
     "@types/ws": "8.18.0",
+    "@walletconnect/core": "2.23.10",
+    "@walletconnect/utils": "2.23.10",
     "typescript": "^5.8.2",
     "vitest": "^1.6.1"
   }

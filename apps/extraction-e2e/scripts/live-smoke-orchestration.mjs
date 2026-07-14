@@ -1,5 +1,9 @@
 import { isChildRunning } from "./child-process-state.mjs";
-import { bindAddress, STARTUP_TIMEOUT_MS } from "./live-smoke-config.mjs";
+import {
+  bindAddress,
+  readRequiredProjectId,
+  STARTUP_TIMEOUT_MS,
+} from "./live-smoke-config.mjs";
 
 export async function executeLiveSmoke({
   artifactDir,
@@ -7,9 +11,16 @@ export async function executeLiveSmoke({
   commonEnvironment,
   gate,
   processes,
+  projectId,
   serverOrigin,
   waitForReady = waitForHttpReady,
 }) {
+  const { VITE_REOWN_PROJECT_ID: _removedProjectId, ...baseEnvironment } =
+    commonEnvironment;
+  const projectEnvironment =
+    gate.requiresProjectId === true
+      ? { VITE_REOWN_PROJECT_ID: readRequiredProjectId(projectId) }
+      : {};
   await processes.runCommand(
     "数据库 migration",
     "cargo",
@@ -21,7 +32,7 @@ export async function executeLiveSmoke({
       "migrate",
       "--locked",
     ],
-    { environment: commonEnvironment, timeoutMs: STARTUP_TIMEOUT_MS },
+    { environment: baseEnvironment, timeoutMs: STARTUP_TIMEOUT_MS },
   );
 
   if (gate.startServer) {
@@ -40,7 +51,7 @@ export async function executeLiveSmoke({
       ],
       {
         environment: {
-          ...commonEnvironment,
+          ...baseEnvironment,
           EXTRACTION_AUTH_LOGIN_ENABLED: "true",
           EXTRACTION_COOKIE_SECURE: "false",
           EXTRACTION_MATCHMAKING_ENABLED: "true",
@@ -59,8 +70,9 @@ export async function executeLiveSmoke({
     );
   }
 
+  const clientMode = gate.clientMode ?? "live-e2e";
   const client = processes.startCommand(
-    "live-e2e Vite",
+    `${clientMode} Vite`,
     "pnpm",
     [
       "--filter",
@@ -68,7 +80,7 @@ export async function executeLiveSmoke({
       "exec",
       "vite",
       "--mode",
-      "live-e2e",
+      clientMode,
       "--host",
       "127.0.0.1",
       "--port",
@@ -77,7 +89,8 @@ export async function executeLiveSmoke({
     ],
     {
       environment: {
-        ...commonEnvironment,
+        ...baseEnvironment,
+        ...projectEnvironment,
         EXTRACTION_E2E_PUBLIC_ORIGIN: clientOrigin,
         EXTRACTION_E2E_SERVER_TARGET: serverOrigin,
         VITE_EXTRACTION_API_URL: "",
@@ -103,7 +116,8 @@ export async function executeLiveSmoke({
     ],
     {
       environment: {
-        ...commonEnvironment,
+        ...baseEnvironment,
+        ...projectEnvironment,
         EXTRACTION_E2E_ARTIFACT_DIR: artifactDir,
         EXTRACTION_E2E_CLIENT_URL: clientOrigin,
         EXTRACTION_E2E_HEADED: process.env.EXTRACTION_E2E_HEADED ?? "true",

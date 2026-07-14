@@ -215,7 +215,7 @@ MVP 首先验证“采集 → 冲突 → 掉落 → 撤离 → 永久结算”�
 - [x] 仓库能够按账号展示三类资源的永久数量、累计撤离资源数、累计撤离价值、成功撤离次数和最高单局收益。
 - [x] 首版统计使用 `泥土=1、黄金=10、钻石=100`；历史结算按其绑定的配置版本保持原值，不因新版本权重调整而变化。
 - [x] MVP 客户端不存在消耗仓库资源或用仓库资源改变比赛属性的有效接口。
-- [ ] 玩家可以通过 Reown AppKit 连接兼容钱包，并在 Ethereum Mainnet 上完成 SIWE 签名认证。
+- [x] 玩家可以通过 Reown AppKit 连接兼容钱包，并在 Ethereum Mainnet 上完成 SIWE 签名认证。
 - [x] 仅连接钱包但未通过服务端 SIWE 验证时，玩家不能读取账号仓库、加入比赛或恢复断线席位。
 - [x] 服务端拒绝错误 chain ID、错误 domain/URI、无效签名、过期消息和重复 nonce。
 - [x] 官方客户端切换钱包地址、认证网络或断开钱包时会调用注销；服务端收到后撤销旧会话并关闭对应连接，旧 Cookie 不能继续操作原账号。
@@ -253,4 +253,4 @@ MVP 首先验证“采集 → 冲突 → 掉落 → 撤离 → 永久结算”�
 ## Notes
 
 - `prd.md`、`design.md` 和 `implement.md` 已由用户审核批准，任务已启动并完成当前仓库内可自动验证的实现与发布门禁。
-- 唯一未关闭的验收项是真实 Reown AppKit 钱包在 Ethereum Mainnet 上的交互式 SIWE：当前未配置 `VITE_REOWN_PROJECT_ID`，确定性 EOA E2E 只证明服务端 SIWE，不能代替真实钱包弹窗。关闭该项需要提供 Reown Project ID，并由用户在兼容钱包中连接 chain ID `1`、批准 SIWE 后验证会话、仓库与排队；无需交易、资产或 Gas。
+- 真实 Reown AppKit 钱包在 Ethereum Mainnet 上的交互式 SIWE 已通过：使用 WalletConnect production Relay 与 WalletKit acceptance wallet 完成连接、SIWE 签名、仓库读取和匹配队列进出；观测到的授权链为 `eip155:1`，授权方法仅为 `personal_sign`，未发生交易或 Gas 方法调用。验收运行时通过 `VITE_REOWN_PROJECT_ID` 注入配置，未写入仓库或证据产物。

@@ -40,6 +40,10 @@ export async function createReownWallet({
       import("@reown/appkit/networks"),
       import("@reown/appkit-siwe"),
     ]);
+  // AppKit 可能在同一次 SIWE 流程中多次调用 getNonce；一次签名必须复用
+  // 同一个服务端一次性 nonce，否则签名消息与服务端观测到的 nonce 会分叉。
+  let siweNonce: string | null = null;
+  let siweNonceRequest: Promise<string> | null = null;
   const siweConfig = siweModule.createSIWEConfig({
     required: true,
     signOutOnDisconnect: true,
@@ -58,13 +62,23 @@ export async function createReownWallet({
     },
     createMessage: ({ address, ...args }: SIWECreateMessageArgs) =>
       siweModule.formatMessage(args, address),
-    getNonce: async () => (await auth.getNonce()).nonce,
+    getNonce: async () => {
+      if (siweNonce !== null) return siweNonce;
+      siweNonceRequest ??= auth.getNonce().then(({ nonce }) => {
+        siweNonce = nonce;
+        return nonce;
+      });
+      return siweNonceRequest;
+    },
     getSession: async (): Promise<SIWESession | null> => auth.getSession(),
     verifyMessage: async ({ message, signature }) => {
       try {
         return (await auth.verifyMessage({ message, signature })) === true;
       } catch {
         return false;
+      } finally {
+        siweNonce = null;
+        siweNonceRequest = null;
       }
     },
     signOut: () => logout.logout(),

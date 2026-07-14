@@ -6,6 +6,7 @@ import {
   DEFAULT_DATABASE_URL,
   DEFAULT_SERVER_ORIGIN,
   readExclusiveDatabaseUrl,
+  readRequiredProjectId,
   selectSmokeGate,
 } from "./live-smoke-config.mjs";
 import { executeLiveSmoke } from "./live-smoke-orchestration.mjs";
@@ -22,8 +23,17 @@ try {
   const databaseUrl = readExclusiveDatabaseUrl(
     process.env.DATABASE_URL ?? DEFAULT_DATABASE_URL,
   );
+  const { VITE_REOWN_PROJECT_ID: rawProjectId, ...processEnvironment } =
+    process.env;
+  const projectId =
+    gate.requiresProjectId === true
+      ? readRequiredProjectId(rawProjectId)
+      : undefined;
   const artifactDir = await createUniqueArtifactPath(REPOSITORY_ROOT);
-  const commonEnvironment = { ...process.env, DATABASE_URL: databaseUrl };
+  const commonEnvironment = {
+    ...processEnvironment,
+    DATABASE_URL: databaseUrl,
+  };
   supervisor = new ProcessSupervisor({
     cwd: REPOSITORY_ROOT,
     environment: commonEnvironment,
@@ -37,6 +47,7 @@ try {
       commonEnvironment,
       gate,
       processes,
+      projectId,
       serverOrigin,
     }),
   );

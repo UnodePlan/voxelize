@@ -38,7 +38,29 @@ export function selectSmokeGate(args) {
       startServer: false,
     };
   }
-  throw new Error("run-live-smoke 只接受可选参数 --10p 或 --multi-round");
+  if (args.length === 1 && args[0] === "--appkit") {
+    return {
+      clientMode: "appkit-e2e",
+      clientOrigin: "http://127.0.0.1:5217",
+      grep: "@appkit",
+      label: "Playwright 真实 AppKit WalletKit SIWE 门禁",
+      name: "AppKit WalletKit SIWE 门禁",
+      requiresProjectId: true,
+      serverOrigin: "http://127.0.0.1:4217",
+      spec: "src/live/appkit-siwe.live.spec.ts",
+      startServer: true,
+    };
+  }
+  throw new Error(
+    "run-live-smoke 只接受可选参数 --10p、--multi-round 或 --appkit",
+  );
+}
+
+export function readRequiredProjectId(value) {
+  if (typeof value !== "string" || value.trim() === "") {
+    throw new Error("AppKit 门禁需要非空 VITE_REOWN_PROJECT_ID");
+  }
+  return value.trim();
 }
 
 export function readExclusiveDatabaseUrl(value) {

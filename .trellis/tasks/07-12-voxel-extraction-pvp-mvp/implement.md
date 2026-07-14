@@ -197,6 +197,8 @@ PostgreSQL 结算使用数据库事务时间、5 秒锁超时、15 秒语句超�
 
 阶段 9 当时验证记录：客户端 Vitest 22 个文件、154/154 通过；TypeScript、全 extraction ESLint、生产 build 与测试后门扫描通过。Rust `cargo fmt --all -- --check` 与应用 `engine` Clippy `--no-deps -D warnings` 通过；根 Voxelize 仍只有既有 84 条 warning。浏览器逐视口检查无页面横向溢出或不可达操作；当时尚未运行后续阶段的真实 PostgreSQL 门禁。
 
+阶段 9 最终补充验证（2026-07-14）：配置 `VITE_REOWN_PROJECT_ID` 后，真实 AppKit/WalletKit SIWE 门禁 `1/1` 通过。测试通过 WalletConnect production Relay 连接产品 UI，使用 Ethereum Mainnet（`eip155:1`）完成一次 `personal_sign` SIWE，验证服务端会话、三类仓库读取、匹配队列加入与退出；钱包审计确认没有交易、转账或 Gas 方法调用。期间修复了 Node JSON import attribute、单次 SIWE 流程 nonce 缓存、以及从子包目录运行时 Git 根目录解析三个门禁问题。Project ID 仅通过进程环境变量注入，未落盘到代码或证据。
+
 阶段 11 补充实现（2026-07-13）：比赛 `INIT` 现在创建真实 Voxelize World，协议 Worker 解码并路由 Chunk、Peer、Entity 与生命周期消息；客户端以 20Hz 上限发送移动意图并只转发 World 的 `LOAD/UNLOAD`。指针锁输入接入挖掘、近战、整槽丢弃，服务端权威 PEER 纠正本地预测。离场、策略关闭、重连过期、显式登出、钱包/链变化和替换 INIT 都会幂等销毁旧 World、Worker、监听器、定时器、控制器及实例资源，异步初始化在 dispose 后不能复活。生产构建只链接真实 Core，测试 facade 仅由 Vitest alias 注入并由产物扫描阻断。
 
 验收：Vitest 覆盖钱包/换链注销、revision、心形 HUD、待核对/异常结果；模拟 EIP-1193 provider 断言闭环中从不调用交易方法；生产 build 不含测试后门。
