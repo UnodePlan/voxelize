@@ -775,11 +775,7 @@ fn dispatcher(
         broadcast_dependencies.push(hook.name);
     }
     builder
-        .with(
-            BroadcastSystem,
-            "broadcast",
-            &broadcast_dependencies,
-        )
+        .with(BroadcastSystem, "broadcast", &broadcast_dependencies)
         .with(
             CleanupSystem,
             "cleanup",

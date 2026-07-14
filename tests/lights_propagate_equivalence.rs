@@ -70,7 +70,11 @@ fn build_terrain(chunk: &mut Chunk) {
     chunk.set_voxel(12, 70, 12, TORCH);
 }
 
-fn hash_state(space: &dyn VoxelAccess, queues: &[std::collections::VecDeque<voxelize::LightNode>], hasher: &mut DefaultHasher) {
+fn hash_state(
+    space: &dyn VoxelAccess,
+    queues: &[std::collections::VecDeque<voxelize::LightNode>],
+    hasher: &mut DefaultHasher,
+) {
     for vx in 0..CHUNK_SIZE as i32 {
         for vz in 0..CHUNK_SIZE as i32 {
             for vy in 0..MAX_HEIGHT as i32 {

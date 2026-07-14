@@ -146,9 +146,7 @@ pub struct MeshConfig {
 
 impl Default for MeshConfig {
     fn default() -> Self {
-        Self {
-            chunk_size: 16,
-        }
+        Self { chunk_size: 16 }
     }
 }
 
@@ -578,7 +576,13 @@ fn vertex_ao(side1: bool, side2: bool, corner: bool) -> i32 {
     }
 }
 
-fn should_skip_opaque_light_sample(dir: [i32; 3], ddx: i32, ddy: i32, ddz: i32, is_opaque: bool) -> bool {
+fn should_skip_opaque_light_sample(
+    dir: [i32; 3],
+    ddx: i32,
+    ddy: i32,
+    ddz: i32,
+    is_opaque: bool,
+) -> bool {
     if !is_opaque {
         return false;
     }
@@ -1839,10 +1843,7 @@ fn process_face<S: VoxelAccess>(
         let mut b110 = !get_block_occluder(dx, dy, 0);
         let mut b111 = !get_block_occluder(dx, dy, dz);
 
-        if has_multi_aabb
-            && !is_see_through
-            && should_apply_stair_self_ao(face.dir, corner.pos)
-        {
+        if has_multi_aabb && !is_see_through && should_apply_stair_self_ao(face.dir, corner.pos) {
             let (s011, s101, s110, s111) =
                 compute_self_ao(corner.pos, face.dir, face_bbox_min, &block.aabbs);
             if s011 {
@@ -2266,18 +2267,17 @@ pub fn mesh_space_greedy<S: VoxelAccess>(
                         continue;
                     }
 
-                    let faces: Vec<(BlockFace, bool)> = if is_fluid
-                        && has_standard_six_faces(&block.faces)
-                    {
+                    let faces: Vec<(BlockFace, bool)> =
+                        if is_fluid && has_standard_six_faces(&block.faces) {
                             create_fluid_faces(vx, vy, vz, block.id, space, &block.faces, registry)
                                 .into_iter()
                                 .map(|f| (f, false))
                                 .collect()
-                    } else if block.dynamic_patterns.is_some() {
-                        get_dynamic_faces(block, [vx, vy, vz], space, &rotation)
-                    } else {
-                        block.faces.iter().cloned().map(|f| (f, false)).collect()
-                    };
+                        } else if block.dynamic_patterns.is_some() {
+                            get_dynamic_faces(block, [vx, vy, vz], space, &rotation)
+                        } else {
+                            block.faces.iter().cloned().map(|f| (f, false)).collect()
+                        };
 
                     if processed_non_greedy.contains(&(vx, vy, vz)) {
                         continue;
@@ -2404,8 +2404,7 @@ pub fn mesh_space_greedy<S: VoxelAccess>(
         }
     }
 
-    map
-        .into_iter()
+    map.into_iter()
         .map(|(_, geometry)| geometry)
         .filter(|geometry| !geometry.indices.is_empty())
         .collect()
@@ -2689,8 +2688,7 @@ mod tests {
             [0.0, 1.0, 0.5],
             [1.0, 1.0, 0.5],
         ] {
-            let (s011, s101, s110, s111) =
-                compute_self_ao(pos, face_dir, face_bbox_min, &aabbs);
+            let (s011, s101, s110, s111) = compute_self_ao(pos, face_dir, face_bbox_min, &aabbs);
             assert!(
                 !s011 && !s101 && !s110 && !s111,
                 "upper tread top corner at {pos:?} should have no self-occlusion, \
@@ -2779,13 +2777,7 @@ mod tests {
                 self.get_all_lights(vx, vy, vz).0
             }
 
-            fn get_torch_light(
-                &self,
-                vx: i32,
-                vy: i32,
-                vz: i32,
-                color: LightColor,
-            ) -> u32 {
+            fn get_torch_light(&self, vx: i32, vy: i32, vz: i32, color: LightColor) -> u32 {
                 let (_, red, green, blue) = self.get_all_lights(vx, vy, vz);
                 match color {
                     LightColor::Red => red,
@@ -2867,8 +2859,12 @@ mod tests {
             stone_id: 2,
         };
         let neighbors = NeighborCache::populate(0, 0, 0, &space);
-        let (_aos, lights) =
-            compute_face_ao_and_light([0, 1, 0], registry.get_block_by_id(1).unwrap(), &neighbors, &registry);
+        let (_aos, lights) = compute_face_ao_and_light(
+            [0, 1, 0],
+            registry.get_block_by_id(1).unwrap(),
+            &neighbors,
+            &registry,
+        );
 
         let mut max_sunlight = 0;
         for packed in lights {

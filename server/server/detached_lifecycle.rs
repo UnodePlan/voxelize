@@ -93,21 +93,19 @@ impl Handler<EvictMatchPrincipal> for Server {
             return Box::pin(ready(false));
         }
 
-        let active_connection = self.connection_principals.iter().find_map(
-            |(connection_id, principal)| {
-                (principal.account_id == message.account_id
-                    && self
-                        .connections
-                        .get(connection_id)
-                        .is_some_and(|(_, world_name, _)| world_name == &message.world_name))
-                .then(|| connection_id.clone())
-            },
-        );
+        let active_connection =
+            self.connection_principals
+                .iter()
+                .find_map(|(connection_id, principal)| {
+                    (principal.account_id == message.account_id
+                        && self
+                            .connections
+                            .get(connection_id)
+                            .is_some_and(|(_, world_name, _)| world_name == &message.world_name))
+                    .then(|| connection_id.clone())
+                });
         if let Some(connection_id) = active_connection {
-            return Box::pin(
-                self.leave_world(connection_id)
-                    .map(|_, _, _| true),
-            );
+            return Box::pin(self.leave_world(connection_id).map(|_, _, _| true));
         }
 
         let detached = DespawnDetachedPrincipal {
@@ -131,68 +129,68 @@ fn despawn_detached(
     server: &mut Server,
     message: DespawnDetachedPrincipal,
 ) -> ResponseActFuture<Server, bool> {
-        let matches_target = |detached: &DetachedConnection| {
-            detached.world_name == message.world_name
-                && detached.world_generation == message.world_generation
-        };
-        let mut client_ids = Vec::new();
+    let matches_target = |detached: &DetachedConnection| {
+        detached.world_name == message.world_name
+            && detached.world_generation == message.world_generation
+    };
+    let mut client_ids = Vec::new();
 
-        if server
+    if server
+        .detached_connections
+        .get(&message.account_id)
+        .is_some_and(matches_target)
+    {
+        let detached = server
             .detached_connections
-            .get(&message.account_id)
-            .is_some_and(matches_target)
-        {
-            let detached = server
-                .detached_connections
-                .remove(&message.account_id)
-                .unwrap();
-            client_ids.push(detached.client_id);
-        }
-        if server
-            .pending_detaches
-            .get(&message.account_id)
-            .is_some_and(matches_target)
-        {
-            let detached = server.pending_detaches.remove(&message.account_id).unwrap();
-            client_ids.push(detached.client_id);
-        }
-        if let Some(pending) = server
-            .pending_rebinds
-            .get_mut(&message.account_id)
-            .filter(|pending| matches_target(&pending.detached) && !pending.despawn_requested)
-        {
-            // 保留过渡租约供 Disconnect 校验 token；回调看到标记后只做清理，不再提交路由。
-            pending.despawn_requested = true;
-            client_ids.push(pending.detached.client_id.clone());
-        }
+            .remove(&message.account_id)
+            .unwrap();
+        client_ids.push(detached.client_id);
+    }
+    if server
+        .pending_detaches
+        .get(&message.account_id)
+        .is_some_and(matches_target)
+    {
+        let detached = server.pending_detaches.remove(&message.account_id).unwrap();
+        client_ids.push(detached.client_id);
+    }
+    if let Some(pending) = server
+        .pending_rebinds
+        .get_mut(&message.account_id)
+        .filter(|pending| matches_target(&pending.detached) && !pending.despawn_requested)
+    {
+        // 保留过渡租约供 Disconnect 校验 token；回调看到标记后只做清理，不再提交路由。
+        pending.despawn_requested = true;
+        client_ids.push(pending.detached.client_id.clone());
+    }
 
-        client_ids.sort_unstable();
-        client_ids.dedup();
-        if client_ids.is_empty() {
-            return Box::pin(ready(false));
+    client_ids.sort_unstable();
+    client_ids.dedup();
+    if client_ids.is_empty() {
+        return Box::pin(ready(false));
+    }
+
+    let world = server
+        .world_generations
+        .get(&message.world_name)
+        .filter(|generation| *generation == &message.world_generation)
+        .and_then(|_| server.worlds.get(&message.world_name))
+        .cloned();
+    let Some(world) = world else {
+        return Box::pin(ready(true));
+    };
+
+    Box::pin(
+        async move {
+            join_all(client_ids.into_iter().map(|id| {
+                world.send(ClientDespawnRequest {
+                    id,
+                    join_attempt_id: None,
+                })
+            }))
+            .await;
+            true
         }
-
-        let world = server
-            .world_generations
-            .get(&message.world_name)
-            .filter(|generation| *generation == &message.world_generation)
-            .and_then(|_| server.worlds.get(&message.world_name))
-            .cloned();
-        let Some(world) = world else {
-            return Box::pin(ready(true));
-        };
-
-        Box::pin(
-            async move {
-                join_all(client_ids.into_iter().map(|id| {
-                    world.send(ClientDespawnRequest {
-                        id,
-                        join_attempt_id: None,
-                    })
-                }))
-                .await;
-                true
-            }
-            .into_actor(server),
-        )
+        .into_actor(server),
+    )
 }

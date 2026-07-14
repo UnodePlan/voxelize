@@ -188,8 +188,8 @@ impl Chunks {
             let decoded = STANDARD
                 .decode(base)
                 .map_err(|err| format!("base64 decode failed: {err}"))?;
-            let mut decoder = Decoder::new(&decoded[..])
-                .map_err(|err| format!("zlib decoder failed: {err}"))?;
+            let mut decoder =
+                Decoder::new(&decoded[..]).map_err(|err| format!("zlib decoder failed: {err}"))?;
             let mut buf = Vec::new();
             decoder
                 .read_to_end(&mut buf)
