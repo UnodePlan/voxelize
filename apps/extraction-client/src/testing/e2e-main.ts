@@ -35,18 +35,31 @@ declare global {
 }
 
 export function startE2eClient(root: HTMLElement): void {
+  const parameters = new URLSearchParams(window.location.search);
+  const singlePlayer = parameters.get("single") === "1";
   const elements = mountProductShell(root);
+  let state = lobbyState();
+  const updateSinglePlayer = (next: AppState): void => {
+    if (!singlePlayer) return;
+    state = next;
+    render();
+  };
   const scene = new VoxelBackdrop(elements.canvas, {
-    attack: () => undefined,
-    dropSlot: () => undefined,
+    attack: () =>
+      updateSinglePlayer({
+        ...state,
+        notice: "单机调试：当前没有本地战斗目标。",
+      }),
+    dropSlot: (slot) => updateSinglePlayer(dropLocalSlot(state, slot)),
     getManifest: () => manifest,
-    mining: () => undefined,
+    mining: (action) => {
+      if (action === "start") updateSinglePlayer(mineLocalDirt(state));
+    },
     movement: () => undefined,
     onError: () => undefined,
     onWorldReady: () => undefined,
     sendWorldPacket: () => undefined,
   });
-  let state = lobbyState();
 
   const render = () => {
     renderProductView(state, elements);
@@ -79,9 +92,35 @@ export function startE2eClient(root: HTMLElement): void {
     }),
   };
   window.__VOXEL_EXTRACTION_E2E__ = bridge;
-  const parameters = new URLSearchParams(window.location.search);
   const requestedScreen = parameters.get("screen");
   if (isE2eScreen(requestedScreen)) state = screenState(requestedScreen);
+  if (parameters.get("single") === "1") {
+    state = {
+      ...screenState("match"),
+      notice: "单机调试：点击场景或按 E 挖掘，按 Q 丢弃首个资源槽，空格测试攻击。刷新即清空。",
+    };
+    const mine = () => updateSinglePlayer(mineLocalDirt(state));
+    elements.canvas.addEventListener("click", mine);
+    window.addEventListener("keydown", (event) => {
+      if (event.repeat) return;
+      if (event.code === "KeyE") mine();
+      if (event.code === "KeyQ") {
+        const firstOccupied = state.gameplay?.inventory.slots.findIndex(
+          (slot) => slot !== null,
+        );
+        if (firstOccupied !== undefined && firstOccupied >= 0) {
+          updateSinglePlayer(dropLocalSlot(state, firstOccupied));
+        }
+      }
+      if (event.code === "Space") {
+        event.preventDefault();
+        updateSinglePlayer({
+          ...state,
+          notice: "单机调试：当前没有本地战斗目标。",
+        });
+      }
+    });
+  }
   const requestedResult = parameters.get("result");
   if (isResultStatus(requestedResult)) {
     state = {
@@ -95,6 +134,57 @@ export function startE2eClient(root: HTMLElement): void {
     state = withHalfHearts(state, requestedHealth);
   }
   render();
+}
+
+function mineLocalDirt(state: AppState): AppState {
+  const gameplay = state.gameplay ?? gameplayState();
+  const slots = [...gameplay.inventory.slots];
+  const dirtSlot = slots.findIndex((slot) => slot?.resource === "dirt");
+  if (dirtSlot >= 0 && slots[dirtSlot] !== null) {
+    const current = slots[dirtSlot];
+    if (current.quantity >= 64) {
+      return { ...state, notice: "单机调试：泥土堆叠已达到 64。" };
+    }
+    slots[dirtSlot] = { ...current, quantity: current.quantity + 1 };
+  } else {
+    const emptySlot = slots.findIndex((slot) => slot === null);
+    if (emptySlot < 0) {
+      return { ...state, notice: "单机调试：背包已满。" };
+    }
+    slots[emptySlot] = { resource: "dirt", quantity: 1 };
+  }
+  return withLocalSlots(state, gameplay, slots, "单机调试：获得 1 个泥土。刷新页面后清空。 ");
+}
+
+function dropLocalSlot(state: AppState, slot: number): AppState {
+  const gameplay = state.gameplay ?? gameplayState();
+  if (!Number.isInteger(slot) || slot < 0 || slot >= gameplay.inventory.slots.length) {
+    return state;
+  }
+  const slots = [...gameplay.inventory.slots];
+  if (slots[slot] === null) return state;
+  slots[slot] = null;
+  return withLocalSlots(state, gameplay, slots, "单机调试：已丢弃该资源槽。刷新页面后重置。 ");
+}
+
+function withLocalSlots(
+  state: AppState,
+  gameplay: GameplayStateData,
+  slots: GameplayStateData["inventory"]["slots"],
+  notice: string,
+): AppState {
+  return {
+    ...state,
+    notice: notice.trim(),
+    gameplay: {
+      ...gameplay,
+      inventory: {
+        ...gameplay.inventory,
+        slots,
+        revision: gameplay.inventory.revision + 1,
+      },
+    },
+  };
 }
 
 function withHalfHearts(state: AppState, value: number): AppState {

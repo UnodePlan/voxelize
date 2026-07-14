@@ -1,0 +1,294 @@
+@import "./styles-overlays.css";
+
+body.single-player-mode {
+  overflow: hidden;
+  background: #0a0a0a;
+}
+
+body.single-player-mode #app {
+  display: block;
+  min-height: 100dvh;
+  padding: 0;
+}
+
+.single-shell {
+  --single-mint: #72e6ba;
+  --single-ink: #f5f5f5;
+  --single-panel: rgb(12 14 15 / 72%);
+  position: relative;
+  width: 100%;
+  height: 100dvh;
+  min-height: 320px;
+  overflow: hidden;
+  color: var(--single-ink);
+  background: #0a0a0a;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  image-rendering: pixelated;
+  isolation: isolate;
+}
+
+.single-canvas,
+.single-vignette {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.single-canvas {
+  display: block;
+  touch-action: none;
+}
+
+/* lab 几乎无暗角，世界即界面 */
+.single-vignette {
+  z-index: 1;
+  pointer-events: none;
+  box-shadow: none;
+}
+
+.single-elapsed,
+.single-target,
+.single-mining,
+.single-extraction-progress,
+.single-hotbar,
+.single-hint,
+.single-loading,
+.single-notice,
+.single-result,
+.single-crosshair,
+.single-inventory {
+  position: absolute;
+  z-index: 3;
+}
+
+.single-elapsed {
+  top: 12px;
+  right: 14px;
+  padding: 0;
+  color: rgb(255 255 255 / 80%);
+  background: transparent;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-shadow: 1px 1px 0 #000;
+}
+
+.single-target {
+  top: 12px;
+  left: 50%;
+  min-width: 0;
+  padding: 4px 10px;
+  transform: translateX(-50%);
+  border: 0;
+  border-radius: 2px;
+  background: rgb(10 12 12 / 50%);
+  font-size: 12px;
+  text-align: center;
+  text-shadow: 1px 1px 0 #111;
+}
+
+/* lab 准星：小十字，无外框面板 */
+.single-crosshair {
+  top: 50%;
+  left: 50%;
+  width: 14px;
+  height: 14px;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.single-crosshair span {
+  position: absolute;
+  top: 6px;
+  left: 1px;
+  width: 12px;
+  height: 2px;
+  background: rgb(255 255 255 / 92%);
+  box-shadow: 0 0 0 1px rgb(0 0 0 / 55%);
+}
+
+.single-crosshair span:last-child {
+  transform: rotate(90deg);
+}
+
+.single-mining {
+  top: calc(50% + 22px);
+  left: 50%;
+  display: grid;
+  width: 160px;
+  gap: 4px;
+  transform: translateX(-50%);
+  color: #fff;
+  font-size: 10px;
+  text-align: center;
+  text-shadow: 1px 1px 0 #111;
+}
+
+.single-mining > i,
+.single-extraction-progress > i {
+  display: block;
+  height: 3px;
+  border: 1px solid rgb(255 255 255 / 35%);
+  background: rgb(0 0 0 / 45%);
+}
+
+.single-mining b,
+.single-extraction-progress b {
+  display: block;
+  width: 0;
+  height: 100%;
+  background: #f2d08a;
+}
+
+.single-extraction-progress {
+  top: 44px;
+  left: 50%;
+  display: grid;
+  width: 200px;
+  gap: 5px;
+  transform: translateX(-50%);
+  color: var(--single-mint);
+  font-size: 11px;
+  text-align: center;
+  text-shadow: 1px 1px 0 #10251e;
+}
+
+.single-extraction-progress b {
+  background: var(--single-mint);
+}
+
+/*
+ * create.town/lab ItemSlots 解包规格：
+ * bottom 12px, bg #1a1a1a, outline 2px #2a2a2a,
+ * slot 36×36, gap 4, padding 6, 上左亮/下右暗 2px 边框, 内凹阴影
+ * 角标：bottom 0 / right 2px / 10px / rgba(255,255,255,0.9) + 黑描边
+ * Lab 为 9 格；本模式 12 格玩法，视觉语言与 Lab 一致。
+ */
+.single-hotbar {
+  bottom: 12px;
+  left: 50%;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 4px;
+  height: auto;
+  padding: 6px;
+  transform: translateX(-50%);
+  margin: 0;
+  border: 0;
+  outline: 2px solid #2a2a2a;
+  background: #1a1a1a;
+  box-shadow: none;
+  pointer-events: none;
+  z-index: 10000;
+  image-rendering: pixelated;
+}
+
+.single-slot {
+  position: relative;
+  display: block;
+  flex: 0 0 36px;
+  width: 36px;
+  height: 36px;
+  margin: 0;
+  padding: 0;
+  border-width: 2px;
+  border-style: solid;
+  border-top-color: #353535;
+  border-left-color: #353535;
+  border-bottom-color: #0e0e0e;
+  border-right-color: #0e0e0e;
+  border-radius: 0;
+  background: #141414;
+  box-shadow:
+    inset 1px 1px 0 rgb(255 255 255 / 4%),
+    inset -1px -1px 0 rgb(0 0 0 / 30%);
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+/* 选中：Lab/MC 式外扩白框，压住相邻槽 */
+.single-slot[data-selected="true"] {
+  z-index: 2;
+  border-color: #ffffff;
+  background: #1c1c1c;
+  box-shadow:
+    0 0 0 1px #ffffff,
+    inset 1px 1px 0 rgb(255 255 255 / 8%),
+    inset -1px -1px 0 rgb(0 0 0 / 35%);
+}
+
+/* 物品图标：Lab 搬运的 16px 像素贴图，居中最近邻放大 */
+.single-slot-icon {
+  position: absolute;
+  inset: 4px;
+  display: none;
+  margin: 0;
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 24px 24px;
+  image-rendering: pixelated;
+  pointer-events: none;
+}
+
+.single-slot:not([data-resource="empty"]) .single-slot-icon {
+  display: block;
+}
+
+.single-slot[data-resource="dirt"] .single-slot-icon,
+.single-slot-icon[data-icon="dirt"] {
+  background-image: url("../assets/single/blocks/dirt.png");
+}
+
+.single-slot[data-resource="gold"] .single-slot-icon,
+.single-slot-icon[data-icon="gold"] {
+  background-image: url("../assets/single/blocks/gold_ore.png");
+}
+
+.single-slot[data-resource="diamond"] .single-slot-icon,
+.single-slot-icon[data-icon="diamond"] {
+  background-image: url("../assets/single/blocks/diamond_ore.png");
+}
+
+.single-slot-icon[data-icon="grass"] {
+  background-image: url("../assets/single/blocks/grass_top.png");
+}
+
+.single-slot-icon[data-icon="stone"] {
+  background-image: url("../assets/single/blocks/stone.png");
+}
+
+.single-slot-icon[data-icon="planks"] {
+  background-image: url("../assets/single/blocks/oak_planks.png");
+}
+
+.single-slot-icon[data-icon="pickaxe"] {
+  background-image: url("../assets/single/items/iron_pickaxe.png");
+}
+
+/* Lab SLOT_SUBSCRIPT_STYLES */
+.single-slot-quantity {
+  position: absolute;
+  right: 2px;
+  bottom: 0;
+  color: rgb(255 255 255 / 90%);
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 10px;
+  font-weight: 400;
+  line-height: 1;
+  text-shadow: 1px 1px 1px rgb(0 0 0 / 80%);
+  pointer-events: none;
+  user-select: none;
+}
+
+@media (max-width: 430px) {
+  .single-slot {
+    flex-basis: 30px;
+    width: 30px;
+    height: 30px;
+  }
+
+  .single-slot-icon {
+    background-size: 20px 20px;
+  }
+}

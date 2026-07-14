@@ -7,6 +7,8 @@ const forbidden = [
   "e2e-main",
   "live-e2e-main",
   "core-facade",
+  "single-player-mode",
+  "single-extraction-beacon",
 ];
 const forbiddenPatterns = [
   /\/assets\/data:application\/wasm/iu,

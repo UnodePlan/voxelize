@@ -114,6 +114,7 @@ function renderAuth(state: AppState): string {
       <button class="primary-command" type="button" data-action="connect-wallet" ${configured ? disabled(state) : "disabled"}>
         <i data-lucide="wallet"></i><span>${buttonLabel}</span>
       </button>
+      ${renderSinglePlayerEntry()}
       ${configured ? "" : `<p class="inline-error"><i data-lucide="circle-alert"></i>钱包连接尚未配置</p>`}
       <div class="server-status">
         <span class="status-dot" data-ready="${state.manifest !== null}"></span>
@@ -121,6 +122,16 @@ function renderAuth(state: AppState): string {
         <button class="text-command" type="button" data-action="retry-bootstrap"><i data-lucide="refresh-cw"></i>刷新</button>
       </div>
     </section>
+  `;
+}
+
+function renderSinglePlayerEntry(): string {
+  if (!import.meta.env.DEV) return "";
+  return `
+    <a class="secondary-command single-player-entry" href="?mode=single">
+      <i data-lucide="gamepad-2"></i><span>进入单机调试</span>
+    </a>
+    <p class="single-player-note">不连接服务器，不保存资源，刷新即重置</p>
   `;
 }
 

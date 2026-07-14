@@ -14,8 +14,15 @@ if (import.meta.env.MODE === "e2e") {
     startLiveE2eClient(root),
   );
 } else {
-  void import("./app/controller").then(({ ProductController }) => {
-    const controller = new ProductController(root);
-    return controller.start();
-  });
+  const parameters = new URLSearchParams(window.location.search);
+  if (import.meta.env.DEV && parameters.get("mode") === "single") {
+    void import("./single/main").then(({ startSinglePlayerClient }) =>
+      startSinglePlayerClient(root),
+    );
+  } else {
+    void import("./app/controller").then(({ ProductController }) => {
+      const controller = new ProductController(root);
+      return controller.start();
+    });
+  }
 }
