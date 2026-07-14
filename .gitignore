@@ -31,3 +31,8 @@ yarn-error.log
 
 # 二进制应用需要提交锁文件，根引擎库仍保持原有策略。
 !apps/extraction-server/Cargo.lock
+
+# Playwright / e2e 本地运行产物（勿入库）
+**/test-results/
+**/playwright-report/
+**/blob-report/
