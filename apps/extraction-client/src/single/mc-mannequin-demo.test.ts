@@ -96,4 +96,74 @@ describe("McMannequinDemo", () => {
     demo.update(500); // → walk
     expect(character.setHeldItem).toHaveBeenCalledWith(sword);
   });
+
+  it("pauses patrol set while character is knocked back", () => {
+    const character = fakeCharacter() as ReturnType<typeof fakeCharacter> & {
+      isKnockedBack?: () => boolean;
+      root: { position: { x: number; y: number; z: number }; visible: boolean };
+      clearKnockback?: () => void;
+    };
+    character.root = { position: { x: 1, y: 17.75, z: 0 }, visible: true };
+    let knocked = true;
+    character.isKnockedBack = () => knocked;
+    const demo = new McMannequinDemo({
+      character: character as never,
+      surfaceY: () => 16,
+      fromXZ: [0, 0],
+      toXZ: [4, 0],
+      walkSpeed: 2,
+      walkLegSeconds: 10,
+      mineSeconds: 3,
+      digIntervalSeconds: 0.5,
+    });
+    character.set.mockClear();
+    character.update.mockClear();
+    demo.update(100);
+    // 击退中不调用 set（巡逻暂停），但仍 update 角色积分
+    expect(character.set).not.toHaveBeenCalled();
+    expect(character.update).toHaveBeenCalled();
+    knocked = false;
+    character.set.mockClear();
+    demo.update(100);
+    // 击退结束会 reanchor 并 applyPose → set
+    expect(character.set).toHaveBeenCalled();
+  });
+
+  it("kill hides and drops held tool; respawnNear restores nearby", () => {
+    const character = fakeCharacter() as ReturnType<typeof fakeCharacter> & {
+      root: { position: { x: number; y: number; z: number }; visible: boolean };
+      clearKnockback: ReturnType<typeof vi.fn>;
+      setHeldItem: ReturnType<typeof vi.fn>;
+    };
+    character.root = { position: { x: 3, y: 17.75, z: 1 }, visible: true };
+    character.clearKnockback = vi.fn();
+    const sword = { name: "sword" };
+    const pickaxe = { name: "pickaxe" };
+    const demo = new McMannequinDemo({
+      character: character as never,
+      surfaceY: () => 16,
+      fromXZ: [0, 1],
+      toXZ: [4, 1],
+      walkSpeed: 2,
+      walkLegSeconds: 10,
+      mineSeconds: 3,
+      digIntervalSeconds: 0.5,
+      heldItems: { walk: sword as never, mine: pickaxe as never },
+    });
+    expect(demo.getHeldTool()).toBe("sword");
+    const held = demo.kill();
+    expect(held).toBe("sword");
+    expect(demo.isAlive).toBe(false);
+    expect(character.root.visible).toBe(false);
+    expect(character.setHeldItem).toHaveBeenCalledWith(null);
+    character.set.mockClear();
+    demo.update(100);
+    expect(character.set).not.toHaveBeenCalled();
+
+    demo.respawnNear(5, 2, 2);
+    expect(demo.isAlive).toBe(true);
+    expect(character.root.visible).toBe(true);
+    expect(character.snapToTarget).toHaveBeenCalled();
+    expect(demo.getHeldTool()).toBe("sword");
+  });
 });

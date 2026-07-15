@@ -4,6 +4,7 @@ import type { ResourceCounts } from "../api/models";
 
 import { LOCAL_BLOCK_IDS, resourceCountsFromIds } from "./blocks";
 import {
+  LOCAL_EXTRACTION_RADIUS,
   LOCAL_EXTRACTION_XZ,
   LOCAL_ROUTE_XZ,
   LOCAL_SPAWN_XZ,
@@ -169,7 +170,7 @@ export function createLocalQuarryMap(
     initialDirection: [0, 0, -1],
     extraction: {
       center: [ex + 0.5, extractY + 0.05, ez + 0.5],
-      radius: 2.1,
+      radius: LOCAL_EXTRACTION_RADIUS,
     },
     route,
     resourceVoxels: placed.voxels,
@@ -669,9 +670,12 @@ function stampExtractionPlaza(
   heightAt: (x: number, z: number) => number,
 ): void {
   const [ex, ez] = LOCAL_EXTRACTION_XZ;
-  for (let dx = -3; dx <= 3; dx += 1) {
-    for (let dz = -3; dz <= 3; dz += 1) {
-      if (dx * dx + dz * dz > 10) continue;
+  // 石板广场略大于判定半径，方便从远处辨认
+  const plazaR = Math.ceil(LOCAL_EXTRACTION_RADIUS) + 1;
+  const plazaR2 = plazaR * plazaR;
+  for (let dx = -plazaR; dx <= plazaR; dx += 1) {
+    for (let dz = -plazaR; dz <= plazaR; dz += 1) {
+      if (dx * dx + dz * dz > plazaR2) continue;
       const x = ex + dx;
       const z = ez + dz;
       if (!isInWorld(x, z)) continue;
@@ -679,18 +683,20 @@ function stampExtractionPlaza(
       setColumnTop(chunks, x, z, y, LOCAL_BLOCK_IDS.paleStone, heightAt);
     }
   }
-  // 四角短柱当信标底座装饰
+  // 圆周短柱当信标底座装饰
+  const pillarR = plazaR - 1;
   for (const [dx, dz] of [
-    [-3, 0],
-    [3, 0],
-    [0, -3],
-    [0, 3],
+    [-pillarR, 0],
+    [pillarR, 0],
+    [0, -pillarR],
+    [0, pillarR],
   ] as const) {
     const x = ex + dx;
     const z = ez + dz;
     if (!isInWorld(x, z)) continue;
     const y = heightAt(x, z);
     setVoxel(chunks, x, y + 1, z, LOCAL_BLOCK_IDS.weatheredTimber);
+    setVoxel(chunks, x, y + 2, z, LOCAL_BLOCK_IDS.weatheredTimber);
   }
 }
 

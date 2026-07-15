@@ -9,6 +9,15 @@ import {
 } from "./blocks";
 import { LocalBlockDurability } from "./block-durability";
 import {
+  applyDamage,
+  attackDamageHalfHearts,
+  fullHealth,
+  isDead,
+  knockbackImpulse,
+  LOCAL_ATTACK_COOLDOWN_MS,
+  LOCAL_ATTACK_RANGE,
+} from "./combat";
+import {
   hasFallenOutOfTerrain,
   isInsideExtraction,
   miningProgress,
@@ -33,6 +42,7 @@ import {
   addResource,
   createInitialLocalGameState,
   dropInventorySlot,
+  LOCAL_EXTRACTION_REQUIRED_MS,
   reduceLocalGameState,
   voxelKey,
   type LocalGameAction,
@@ -60,6 +70,13 @@ export class SinglePlayerController {
   private lastDigAt = 0;
   private lastExtractBucket = -1;
   private wasExtracted = false;
+  /** 假人生命（半心）；与玩家独立 */
+  private mannequinHealth = fullHealth();
+  private mannequinRespawnAt = 0;
+  /** 击杀时 xz，复活落在附近 */
+  private mannequinDeathXZ: [number, number] | null = null;
+  private attackCooldownUntil = 0;
+  private wasPrimaryHeld = false;
   /** 虚空重生冷却，避免同帧连跳 */
   private lastVoidRespawnAt = 0;
 
@@ -217,18 +234,124 @@ export class SinglePlayerController {
         }
       } else if (!this.state.inventoryOpen) {
         this.collectLoot(frame.playerPosition, now, frame.deltaMs);
-        this.advanceMining(runtime, frame, now);
+        this.tickMannequinRespawn(now);
+        const attacked = this.tryAttack(runtime, now);
+        if (!attacked) {
+          this.advanceMining(runtime, frame, now);
+        } else {
+          this.stopActiveMining();
+        }
         this.playStepSfx(frame, now);
       } else {
         this.input?.cancelMining();
         this.stopActiveMining();
       }
     }
+    this.wasPrimaryHeld = this.input?.primaryHeld === true;
     // 挥臂仅在主动按住挖掘时；裂纹按世界耐久显示（松开也保留）
     const digProgress = miningProgress(this.state);
     runtime.setMiningProgress(digProgress);
     this.syncBreakCrack(runtime, frame);
     this.render();
+  }
+
+  /**
+   * 近战：准星命中假人时优先攻击（不挖方块）。
+   * 上升沿或冷却结束后按住可再砍；伤害见 combat.ts。
+   */
+  private tryAttack(runtime: LocalWorldRuntime, now: number): boolean {
+    if (!runtime.isLocked || this.input?.primaryHeld !== true) return false;
+    if (this.mannequinHealth <= 0) return false;
+
+    const hitDist = runtime.raycastMannequin(LOCAL_ATTACK_RANGE);
+    if (hitDist === null) return false;
+
+    const rising = !this.wasPrimaryHeld;
+    const cooled = now >= this.attackCooldownUntil;
+    // 点按立刻砍；按住则等冷却结束再砍（类似原版连点节奏）
+    if (!rising && !cooled) return true; // 仍算「对准实体」，抑制挖矿
+    if (!cooled) return true;
+
+    const tool = heldToolFromSlot(this.state.selectedSlot);
+    const damage = attackDamageHalfHearts(tool);
+    this.mannequinHealth = applyDamage(this.mannequinHealth, damage);
+    this.attackCooldownUntil = now + LOCAL_ATTACK_COOLDOWN_MS;
+    runtime.playAttackSwing();
+    runtime.playMannequinHurtFeedback();
+    // 沿视线推开假人（剑更远）
+    const dir = runtime.getDirection();
+    const impulse = knockbackImpulse(tool, [dir.x, dir.y, dir.z]);
+    runtime.applyMannequinKnockback(impulse);
+    this.sfx.play("dig", { rate: tool === "sword" ? 1.15 : 1.05 });
+
+    if (isDead(this.mannequinHealth)) {
+      this.finishMannequinKill(runtime, now);
+    } else {
+      const heartsLeft = (this.mannequinHealth / 2).toFixed(
+        this.mannequinHealth % 2 === 0 ? 0 : 1,
+      );
+      this.targetName = `Steve · ${heartsLeft}♥`;
+    }
+    return true;
+  }
+
+  /**
+   * 击倒：立刻消失 + 掉落当前持有物；3 秒后在附近复活。
+   */
+  private finishMannequinKill(
+    runtime: LocalWorldRuntime,
+    now: number,
+  ): void {
+    const eye = runtime.getMannequinEyePosition();
+    const deathXZ: [number, number] = eye !== null ? [eye[0], eye[2]] : [0, 0];
+    this.mannequinDeathXZ = deathXZ;
+    // 掉落点：腰部附近（眼高约 1.75）
+    const dropPos: [number, number, number] =
+      eye !== null
+        ? [eye[0], eye[1] - 1.2, eye[2]]
+        : [deathXZ[0], 1, deathXZ[1]];
+
+    const held = runtime.killMannequin();
+    if (held !== null) {
+      this.loot?.dropTool(held, dropPos, now, 350);
+      this.sfx.play("drop");
+    }
+    this.mannequinRespawnAt = now + 3_000;
+    this.targetName = null;
+    this.showNotice(held !== null ? "击倒了 Steve · 掉落了物品" : "击倒了 Steve");
+  }
+
+  private tickMannequinRespawn(now: number): void {
+    if (this.mannequinHealth > 0) return;
+    if (this.mannequinRespawnAt <= 0 || now < this.mannequinRespawnAt) return;
+    const runtime = this.runtime;
+    const near = this.mannequinDeathXZ ?? [0, 0];
+    runtime?.respawnMannequinNear(near);
+    this.mannequinHealth = fullHealth();
+    this.mannequinRespawnAt = 0;
+    this.mannequinDeathXZ = null;
+    this.showNotice("Steve 在附近重新站了起来");
+  }
+
+  private collectLoot(position: Vector3, now: number, deltaMs: number): void {
+    this.loot?.updateAndCollect(position, now, deltaMs, (pickup) => {
+      if (pickup.kind === "tool") {
+        // 工具快捷栏已常驻；拾取仅反馈，不占资源格
+        this.showNotice(
+          pickup.tool === "sword" ? "捡到铁剑" : "捡到铁镐",
+        );
+        this.sfx.play("pickup");
+        return 0;
+      }
+      const result = addResource(
+        this.state.inventory,
+        pickup.resource,
+        pickup.quantity,
+      );
+      this.dispatch({ type: "INVENTORY_REPLACED", inventory: result.inventory });
+      if (result.remainder < pickup.quantity) this.sfx.play("pickup");
+      return result.remainder;
+    });
   }
 
   private advanceMining(
@@ -367,15 +490,6 @@ export class SinglePlayerController {
     this.stopActiveMining();
   }
 
-  private collectLoot(position: Vector3, now: number, deltaMs: number): void {
-    this.loot?.updateAndCollect(position, now, deltaMs, (resource, quantity) => {
-      const result = addResource(this.state.inventory, resource, quantity);
-      this.dispatch({ type: "INVENTORY_REPLACED", inventory: result.inventory });
-      if (result.remainder < quantity) this.sfx.play("pickup");
-      return result.remainder;
-    });
-  }
-
   private dropSelectedSlot(): void {
     const runtime = this.runtime;
     if (runtime === null || this.state.phase !== "playing") return;
@@ -447,13 +561,20 @@ export class SinglePlayerController {
       runtime.adapter.map.surfaceY,
       { maxY: LOCAL_MAX_HEIGHT - 2 },
     );
+    // 虚空坠落扣 1 星；致死则满血重生
+    this.dispatch({ type: "PLAYER_DAMAGED", amount: 2 });
+    if (isDead(this.state.playerHealth)) {
+      this.dispatch({ type: "PLAYER_HEALED" });
+      this.showNotice("你死了 · 满血重降");
+    } else {
+      this.showNotice("坠落出界 · 随机高空重降");
+    }
     runtime.respawnRandomFromSky(drop);
     // 同步 frame 位置，避免本帧仍用旧坐标做撤离/拾取判定
     frame.playerPosition.set(drop[0], drop[1], drop[2]);
     this.lastVoidRespawnAt = now;
     this.input?.cancelMining();
     this.cancelMining();
-    this.showNotice("坠落出界 · 随机高空重降");
   }
 
   private playExtractionSfx(prevElapsed: number): void {
@@ -466,9 +587,12 @@ export class SinglePlayerController {
       this.lastExtractBucket = -1;
       return;
     }
-    // 撤离 3 秒内约每秒一响
+    // 撤离倒计时内约每秒一响
     const bucket = Math.floor(elapsed / 1_000);
-    if (bucket !== this.lastExtractBucket && elapsed < 3_000) {
+    if (
+      bucket !== this.lastExtractBucket &&
+      elapsed < LOCAL_EXTRACTION_REQUIRED_MS
+    ) {
       this.lastExtractBucket = bucket;
       if (prevElapsed > 0 || bucket === 0) this.sfx.play("extractTick");
     }
@@ -499,6 +623,10 @@ export class SinglePlayerController {
     this.state = createInitialLocalGameState();
     this.claimed = new Set();
     this.durability.clearAll();
+    this.mannequinHealth = fullHealth();
+    this.mannequinRespawnAt = 0;
+    this.attackCooldownUntil = 0;
+    this.wasPrimaryHeld = false;
     this.targetName = null;
     this.insideExtraction = false;
     this.lastExtractBucket = -1;

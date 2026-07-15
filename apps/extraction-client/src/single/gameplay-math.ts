@@ -8,16 +8,28 @@ export const LOCAL_VOID_Y = -2;
 /** 随机重降：相对地表抬升高度 */
 export const LOCAL_SKY_DROP_HEIGHT = 28;
 
+/**
+ * 撤离区竖直容差（相对 zone.center.y = 广场地面）。
+ * 玩家 position 是眼睛高度（约地表 +1.6）；跳跃峰值约再 +2～3，
+ * 旧阈值 ±4 会在起跳时把人判出圈、进度清零。
+ */
+export const EXTRACTION_Y_BELOW = 2;
+/** 向上足够覆盖连跳/落点，仍排除飞到极高空或其它层 */
+export const EXTRACTION_Y_ABOVE = 18;
+
+/**
+ * 是否在撤离圆柱内（水平圆 + 宽松竖直）。
+ * 水平出圈才中断计时；圈内跳跃不中断。
+ */
 export function isInsideExtraction(
   position: Vector3,
   zone: LocalExtractionZone,
 ): boolean {
   const dx = position.x - zone.center[0];
   const dz = position.z - zone.center[2];
-  return (
-    dx * dx + dz * dz <= zone.radius * zone.radius &&
-    Math.abs(position.y - zone.center[1]) < 4
-  );
+  if (dx * dx + dz * dz > zone.radius * zone.radius) return false;
+  const dy = position.y - zone.center[1];
+  return dy >= -EXTRACTION_Y_BELOW && dy <= EXTRACTION_Y_ABOVE;
 }
 
 /** 掉出地图下方虚空，或水平远离地图后坠落 */

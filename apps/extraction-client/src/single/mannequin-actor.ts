@@ -17,6 +17,17 @@ export interface MannequinActor {
   dispose(): void;
   /** 第三人称右臂手持物；可选（MC biped 实现，Voxelize Character 可无） */
   setHeldItem?(item: Object3D | null): void;
+  /**
+   * 受击击退冲量（世界坐标；mass≈1 时等同初速度）。
+   * 可选：无实现则忽略击退。
+   */
+  applyKnockback?(impulse: readonly [number, number, number]): void;
+  /** 仍在击退位移中（demo 应暂停巡逻 set） */
+  isKnockedBack?(): boolean;
+  /** 清零击退速度（击倒 / 复活） */
+  clearKnockback?(): void;
+  /** 击退中更新贴地眼高（随地形） */
+  setKnockbackGroundEyeY?(eyeY: number): void;
 }
 
 /** 把 Voxelize Character 包成 MannequinActor */

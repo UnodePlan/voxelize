@@ -1,6 +1,8 @@
+import { applyDamage, clampHealth, fullHealth } from "./combat";
+
 export const LOCAL_INVENTORY_SLOTS = 12;
 export const LOCAL_STACK_LIMIT = 64;
-export const LOCAL_EXTRACTION_REQUIRED_MS = 3_000;
+export const LOCAL_EXTRACTION_REQUIRED_MS = 5_000;
 /** 快捷栏前 3 格固定工具：0 空手 / 1 镐 / 2 剑；资源只进入后续槽 */
 export const LOCAL_TOOL_HOTBAR_SLOTS = 3;
 
@@ -96,6 +98,11 @@ export interface LocalGameState {
   phase: LocalGamePhase;
   result: LocalResult | null;
   selectedSlot: number;
+  /**
+   * 玩家生命（半心为单位，满血 20 = 10 星）。
+   * 见 combat.ts
+   */
+  playerHealth: number;
 }
 
 export type LocalGameAction =
@@ -131,6 +138,8 @@ export type LocalGameAction =
   | { type: "SLOT_SELECTED"; slot: number }
   | { type: "INVENTORY_SWAP"; from: number; to: number }
   | { type: "NOTICE_SET"; notice: string | null }
+  | { type: "PLAYER_DAMAGED"; amount: number }
+  | { type: "PLAYER_HEALED"; health?: number }
   | { type: "FAILED"; message: string };
 
 export function createInitialLocalGameState(): LocalGameState {
@@ -147,6 +156,7 @@ export function createInitialLocalGameState(): LocalGameState {
     phase: "loading",
     result: null,
     selectedSlot: 0,
+    playerHealth: fullHealth(),
   };
 }
 
@@ -268,6 +278,20 @@ export function reduceLocalGameState(
     }
     case "NOTICE_SET":
       return { ...state, notice: action.notice };
+    case "PLAYER_DAMAGED":
+      if (state.phase !== "playing") return state;
+      return {
+        ...state,
+        playerHealth: applyDamage(state.playerHealth, action.amount),
+      };
+    case "PLAYER_HEALED":
+      return {
+        ...state,
+        playerHealth:
+          typeof action.health === "number"
+            ? clampHealth(action.health)
+            : fullHealth(),
+      };
     case "FAILED":
       return {
         ...state,

@@ -8,14 +8,22 @@ import {
 } from "./gameplay-math";
 
 describe("local extraction zone", () => {
-  const zone = { center: [0.5, 25, 24.5] as const, radius: 2.1 };
+  const zone = { center: [0.5, 25, 24.5] as const, radius: 4.8 };
 
   it("accepts the player center inside the beacon cylinder", () => {
     expect(isInsideExtraction(new Vector3(0.5, 26.6, 24.5), zone)).toBe(true);
-    expect(isInsideExtraction(new Vector3(3, 26.6, 24.5), zone)).toBe(false);
+    expect(isInsideExtraction(new Vector3(3, 26.6, 24.5), zone)).toBe(true);
+    expect(isInsideExtraction(new Vector3(6, 26.6, 24.5), zone)).toBe(false);
   });
 
-  it("rejects positions on another vertical layer", () => {
+  it("keeps counting while jumping inside the cylinder", () => {
+    // 站立眼高 ~地表+1.6；跳跃再抬 ~3 → 仍在圈内
+    expect(isInsideExtraction(new Vector3(0.5, 26.6, 24.5), zone)).toBe(true);
+    expect(isInsideExtraction(new Vector3(0.5, 29.5, 24.5), zone)).toBe(true);
+    expect(isInsideExtraction(new Vector3(0.5, 35, 24.5), zone)).toBe(true);
+  });
+
+  it("rejects positions far below the plaza (other layer / void)", () => {
     expect(isInsideExtraction(new Vector3(0.5, 18, 24.5), zone)).toBe(false);
   });
 });

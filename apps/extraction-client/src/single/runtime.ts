@@ -21,6 +21,7 @@ import { disposeObjectTree } from "../game/object-disposal";
 import { LocalAnimalSystem, planBiomeAnimals } from "./animals";
 import { createExtractionBeacon } from "./beacon";
 import { BlockBreakFx } from "./block-break-fx";
+import { humanoidAabb, raycastAabb } from "./combat";
 import {
   createEmptyMcSceneActors,
   disposeMcSceneActors,
@@ -338,6 +339,111 @@ export class LocalWorldRuntime {
 
   getDirection(): Vector3 {
     return this.camera.getWorldDirection(new Vector3()).normalize();
+  }
+
+  /**
+   * 视线是否命中出生点 Steve 假人（用于近战优先于挖方块）。
+   * 已击倒隐藏时不可命中。
+   * @returns 命中距离；未命中 null
+   */
+  raycastMannequin(maxDistance: number): number | null {
+    const actor = this.mcActors.mannequin;
+    const demo = this.mcActors.mannequinDemo;
+    if (actor === null || !actor.root.visible) return null;
+    if (demo !== null && !demo.isAlive) return null;
+    const eye = this.controls.object.position;
+    const dir = this.getDirection();
+    const pos = actor.root.position;
+    const aabb = humanoidAabb([pos.x, pos.y, pos.z], actor.eyeHeight);
+    return raycastAabb(
+      [eye.x, eye.y, eye.z],
+      [dir.x, dir.y, dir.z],
+      aabb,
+      maxDistance,
+    );
+  }
+
+  /** 假人受击挥臂反馈 */
+  playMannequinHurtFeedback(): void {
+    this.mcActors.mannequin?.playArmSwingAnimation();
+  }
+
+  /**
+   * 假人受击击退（运动学速度；demo 会暂停巡逻直到停下）。
+   * @returns 是否已应用（假人存在且支持 knockback）
+   */
+  applyMannequinKnockback(
+    impulse: readonly [number, number, number],
+  ): boolean {
+    const actor = this.mcActors.mannequin;
+    const demo = this.mcActors.mannequinDemo;
+    if (actor === null || actor.applyKnockback === undefined) return false;
+    if (demo !== null && !demo.isAlive) return false;
+    actor.applyKnockback(impulse);
+    return true;
+  }
+
+  /**
+   * 击倒假人：隐藏并清空手持。
+   * @returns 死亡时持有的工具（供掉落）；无假人或无持有则 null
+   */
+  killMannequin(): "sword" | "pickaxe" | null {
+    const demo = this.mcActors.mannequinDemo;
+    if (demo === null) {
+      const actor = this.mcActors.mannequin;
+      if (actor !== null) {
+        actor.root.visible = false;
+        actor.setHeldItem?.(null);
+        actor.clearKnockback?.();
+      }
+      return null;
+    }
+    return demo.kill();
+  }
+
+  /** 假人眼睛世界坐标；无则 null */
+  getMannequinEyePosition(): [number, number, number] | null {
+    const demo = this.mcActors.mannequinDemo;
+    if (demo !== null) return demo.getEyePosition();
+    const actor = this.mcActors.mannequin;
+    if (actor === null) return null;
+    const p = actor.root.position;
+    return [p.x, p.y, p.z];
+  }
+
+  /**
+   * 在击杀点附近复活（巡逻线以附近点为中心）。
+   * @param near 击杀时眼睛 xz 附近
+   */
+  respawnMannequinNear(
+    near: readonly [number, number],
+    pathHalfLength = 2.5,
+  ): void {
+    const demo = this.mcActors.mannequinDemo;
+    if (demo === null) {
+      const actor = this.mcActors.mannequin;
+      if (actor !== null) actor.root.visible = true;
+      return;
+    }
+    // 击杀点附近 2–4 格随机方位
+    const angle = Math.random() * Math.PI * 2;
+    const dist = 2 + Math.random() * 2;
+    const x = near[0] + Math.cos(angle) * dist;
+    const z = near[1] + Math.sin(angle) * dist;
+    demo.respawnNear(x, z, pathHalfLength);
+  }
+
+  /**
+   * 玩家受击击退：直接加 RigidBody 冲量（mass≈1 时与假人初速度同量级）。
+   * 供后续对战 / 环境伤害复用。
+   */
+  applyPlayerKnockback(impulse: readonly [number, number, number]): void {
+    this.controls.body.applyImpulse([impulse[0], impulse[1], impulse[2]]);
+  }
+
+  /** 第一人称挥臂（攻击） */
+  playAttackSwing(): void {
+    this.viewmodel.arm.doSwing();
   }
 
   /**

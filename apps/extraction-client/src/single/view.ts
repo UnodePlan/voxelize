@@ -1,3 +1,4 @@
+import { heartsFromHealth, type HeartIcon } from "./combat";
 import { InventoryDragController } from "./inventory-drag";
 import type {
   LocalGameState,
@@ -5,6 +6,7 @@ import type {
   LocalResourceKey,
 } from "./state";
 import {
+  LOCAL_EXTRACTION_REQUIRED_MS,
   LOCAL_INVENTORY_SLOTS,
   LOCAL_RESOURCE_KEYS,
   LOCAL_RESOURCE_LABELS,
@@ -55,6 +57,7 @@ export class LocalGameView {
   private readonly result: HTMLElement;
   private readonly resultTime: HTMLElement;
   private readonly resultList: HTMLElement;
+  private readonly healthBar: HTMLElement;
   private readonly hotbarSlots: HTMLElement[];
   private readonly panelSlots: HTMLElement[];
   private readonly inventoryPanel: HTMLElement;
@@ -86,6 +89,7 @@ export class LocalGameView {
     this.result = required(root, ".single-result");
     this.resultTime = required(root, ".single-result-time");
     this.resultList = required(root, ".single-result-resources");
+    this.healthBar = required(root, ".single-health");
     this.hotbarSlots = Array.from(
       root.querySelectorAll<HTMLElement>(".single-hotbar .single-slot"),
     );
@@ -136,6 +140,7 @@ export class LocalGameView {
     this.target.textContent = frame.targetName ?? "";
     this.renderHint(state);
     this.renderExtraction(state, frame.insideExtraction);
+    this.renderHealth(state);
     this.renderHotbar(state);
     this.renderInventoryPanel(state);
     this.notice.hidden = state.notice === null;
@@ -169,15 +174,33 @@ export class LocalGameView {
         ? "<strong>点击继续</strong>"
         : [
             "<strong>进入矿坑</strong>",
-            "<span>WASD 移动　空格跳跃　左键挖掘（镐更快破石/矿）</span>",
-            "<span>1 空手　2 铁镐　3 铁剑　Q 丢弃　E 背包　H 帮助</span>",
+            "<span>WASD 移动　空格跳跃　左键挖方块 / 攻击假人</span>",
+            "<span>1 空手(半心)　2 铁镐　3 铁剑(一心)　Q 丢弃　E 背包</span>",
           ].join("");
+  }
+
+  private renderHealth(state: LocalGameState): void {
+    const show = state.phase === "playing" || state.phase === "extracted";
+    this.healthBar.hidden = !show;
+    if (!show) return;
+    const icons = heartsFromHealth(state.playerHealth);
+    // 仅在心数变化时重绘，避免每帧改 DOM
+    const signature = icons.join(",");
+    if (this.healthBar.dataset.sig === signature) return;
+    this.healthBar.dataset.sig = signature;
+    this.healthBar.innerHTML = icons
+      .map((icon) => heartMarkup(icon))
+      .join("");
+    this.healthBar.setAttribute(
+      "aria-label",
+      `生命 ${(state.playerHealth / 2).toFixed(state.playerHealth % 2 === 0 ? 0 : 1)} / 10`,
+    );
   }
 
   private renderExtraction(state: LocalGameState, inside: boolean): void {
     this.extraction.hidden =
       !inside || state.phase !== "playing" || state.inventoryOpen;
-    this.extractionFill.style.width = `${Math.min(1, state.extractionElapsedMs / 3_000) * 100}%`;
+    this.extractionFill.style.width = `${Math.min(1, state.extractionElapsedMs / LOCAL_EXTRACTION_REQUIRED_MS) * 100}%`;
   }
 
   private renderHotbar(state: LocalGameState): void {
@@ -292,6 +315,7 @@ function template(): string {
       <div class="single-extraction-progress" hidden>
         <span>保持停留 · 撤离</span><i><b class="single-extraction-fill"></b></i>
       </div>
+      <div class="single-health" hidden aria-label="生命值"></div>
       <div class="single-hotbar" aria-label="快捷栏">
         ${hotbarSlots}
       </div>
@@ -356,4 +380,8 @@ function required<T extends Element>(root: ParentNode, selector: string): T {
 function slotKey(index: number): string {
   if (index < 9) return String(index + 1);
   return index === 9 ? "0" : index === 10 ? "-" : "+";
+}
+
+function heartMarkup(icon: HeartIcon): string {
+  return `<i class="single-heart" data-heart="${icon}" aria-hidden="true"></i>`;
 }

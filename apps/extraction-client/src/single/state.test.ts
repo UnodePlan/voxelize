@@ -26,6 +26,18 @@ describe("local single-player state", () => {
     expect(state.inventory.every((slot) => slot === null)).toBe(true);
     expect(state.hint).toBe("controls");
     expect(state.inventoryOpen).toBe(false);
+    // 满血 10 星 = 20 半心
+    expect(state.playerHealth).toBe(20);
+  });
+
+  it("damages and heals player health in half-heart units", () => {
+    let state = readyState();
+    state = reduceLocalGameState(state, { type: "PLAYER_DAMAGED", amount: 1 });
+    expect(state.playerHealth).toBe(19);
+    state = reduceLocalGameState(state, { type: "PLAYER_DAMAGED", amount: 2 });
+    expect(state.playerHealth).toBe(17);
+    state = reduceLocalGameState(state, { type: "PLAYER_HEALED" });
+    expect(state.playerHealth).toBe(20);
   });
 
   it("toggles Lab-style inventory with E and closes on Escape action", () => {
@@ -222,7 +234,7 @@ describe("local single-player state", () => {
     expect(state.extractionElapsedMs).toBe(0);
   });
 
-  it("extracts an empty backpack after three continuous seconds", () => {
+  it("extracts an empty backpack after five continuous seconds", () => {
     let state = readyState();
     state = reduceLocalGameState(state, {
       type: "FRAME",

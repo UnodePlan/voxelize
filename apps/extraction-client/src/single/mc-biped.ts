@@ -90,6 +90,14 @@ export class McBipedMannequin implements MannequinActor {
   /** 第一人称自身模式：身体前移 + 低头才显示躯干/腿 */
   private firstPersonSelf = false;
 
+  /**
+   * 运动学击退速度（格/秒）。demo 暂停 set 时由本类积分位移。
+   * mass≈1 时与 RigidBody 冲量同量级。
+   */
+  private readonly kbVel = new Vector3();
+  /** 击退期间贴地的眼睛高度（脚底 + eyeHeight） */
+  private kbGroundEyeY = 0;
+
   readonly eyeHeight = EYE_FROM_FEET;
   username = "Steve";
 
@@ -262,6 +270,37 @@ export class McBipedMannequin implements MannequinActor {
   }
 
   /**
+   * 受击击退：叠加速度，记录贴地眼高；demo 侧见 isKnockedBack 暂停巡逻。
+   * 零向量仅用于兼容调用，实际清零请用 clearKnockback。
+   */
+  applyKnockback(impulse: readonly [number, number, number]): void {
+    const ix = impulse[0];
+    const iy = impulse[1];
+    const iz = impulse[2];
+    if (Math.abs(ix) + Math.abs(iy) + Math.abs(iz) < 1e-8) return;
+    this.kbVel.x += ix;
+    this.kbVel.y += iy;
+    this.kbVel.z += iz;
+    // 以当前眼高为地面参考，避免击飞后穿地
+    this.kbGroundEyeY = this.root.position.y;
+    // 立即同步 target，避免下一帧 lerp 把人拽回
+    this.targetPos.copy(this.root.position);
+    this.moving = true;
+  }
+
+  isKnockedBack(): boolean {
+    return this.kbVel.lengthSq() > 0.04; // ~0.2 格/秒
+  }
+
+  clearKnockback(): void {
+    this.kbVel.set(0, 0, 0);
+  }
+
+  setKnockbackGroundEyeY(eyeY: number): void {
+    if (Number.isFinite(eyeY)) this.kbGroundEyeY = eyeY;
+  }
+
+  /**
    * 挂到右臂末端的第三人称手持物。传入 null 清空。
    * 不负责 dispose 旧 mesh（由调用方持有生命周期）。
    */
@@ -273,17 +312,41 @@ export class McBipedMannequin implements MannequinActor {
   }
 
   update(): void {
-    // 位姿（第一人称 syncEyeFrame 已硬贴；第三人称仍插值）
-    this.root.position.lerp(this.targetPos, 0.4);
+    const dt = 1 / 60;
+    this.age += dt;
+
+    if (this.isKnockedBack()) {
+      // 运动学积分：重力 + 贴地摩擦；不走 target lerp
+      this.root.position.x += this.kbVel.x * dt;
+      this.root.position.y += this.kbVel.y * dt;
+      this.root.position.z += this.kbVel.z * dt;
+      this.kbVel.y -= 22 * dt;
+      if (this.root.position.y <= this.kbGroundEyeY) {
+        this.root.position.y = this.kbGroundEyeY;
+        if (this.kbVel.y < 0) this.kbVel.y = 0;
+        // 贴地水平阻尼（类似摩擦）
+        this.kbVel.x *= 0.82;
+        this.kbVel.z *= 0.82;
+      } else {
+        this.kbVel.x *= 0.98;
+        this.kbVel.z *= 0.98;
+      }
+      if (this.kbVel.lengthSq() < 0.04) {
+        this.kbVel.set(0, 0, 0);
+      }
+      this.targetPos.copy(this.root.position);
+      this.moving = this.kbVel.lengthSq() > 0.04;
+    } else {
+      // 位姿（第一人称 syncEyeFrame 已硬贴；第三人称仍插值）
+      this.root.position.lerp(this.targetPos, 0.4);
+    }
+
     // 最短角插值
     let dy = this.targetYaw - this.currentYaw;
     while (dy > Math.PI) dy -= Math.PI * 2;
     while (dy < -Math.PI) dy += Math.PI * 2;
     this.currentYaw += dy * 0.25;
     this.root.rotation.y = this.currentYaw;
-
-    const dt = 1 / 60;
-    this.age += dt;
 
     // limbSwing / amount（原版 setRotationAngles）
     const targetAmount = this.moving ? 1 : 0;

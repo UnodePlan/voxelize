@@ -42,6 +42,28 @@ describe("McBipedMannequin", () => {
     mannequin.dispose();
   });
 
+  it("applyKnockback displaces along impulse and damps to rest", () => {
+    const mannequin = new McBipedMannequin(dummySkinTexture(), false);
+    mannequin.set([0, 1.75, 0], [0, 0, -1]);
+    mannequin.snapToTarget();
+    expect(mannequin.isKnockedBack()).toBe(false);
+    mannequin.applyKnockback([5, 2.5, 0]);
+    expect(mannequin.isKnockedBack()).toBe(true);
+    const x0 = mannequin.root.position.x;
+    for (let i = 0; i < 8; i += 1) {
+      mannequin.update();
+    }
+    expect(mannequin.root.position.x).toBeGreaterThan(x0 + 0.2);
+    // 贴地：眼高不低于击退时地面
+    expect(mannequin.root.position.y).toBeGreaterThanOrEqual(1.75 - 1e-3);
+    // 足够帧后停下
+    for (let i = 0; i < 120; i += 1) {
+      mannequin.update();
+    }
+    expect(mannequin.isKnockedBack()).toBe(false);
+    mannequin.dispose();
+  });
+
   it("playArmSwingAnimation completes a dig cycle", () => {
     const mannequin = new McBipedMannequin(dummySkinTexture(), false);
     mannequin.set([0, 1.75, 0], [0, 0, 1]);

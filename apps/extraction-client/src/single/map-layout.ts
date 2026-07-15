@@ -29,4 +29,7 @@ export const LOCAL_RESOURCE_QUOTAS = {
 
 /** 出生营 / 撤离广场周围不刷矿，避免开局踩矿或挡撤离 */
 export const LOCAL_RESOURCE_SPAWN_CLEAR_RADIUS = 5;
-export const LOCAL_RESOURCE_EXTRACT_CLEAR_RADIUS = 4;
+/** 撤离判定半径（格）；广场与光柱视觉对齐 */
+export const LOCAL_EXTRACTION_RADIUS = 4.8;
+/** 撤离广场清矿半径（略大于判定区） */
+export const LOCAL_RESOURCE_EXTRACT_CLEAR_RADIUS = 7;
