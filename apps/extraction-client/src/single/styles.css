@@ -236,6 +236,28 @@ body.single-player-mode #app {
   background-image: url("../assets/single/blocks/dirt.png");
 }
 
+.single-slot[data-resource="grass"] .single-slot-icon,
+.single-slot-icon[data-icon="grass"] {
+  background-image: url("../assets/single/blocks/grass_top.png");
+}
+
+.single-slot[data-resource="stone"] .single-slot-icon,
+.single-slot-icon[data-icon="stone"] {
+  background-image: url("../assets/single/blocks/stone.png");
+}
+
+.single-slot[data-resource="planks"] .single-slot-icon,
+.single-slot-icon[data-icon="planks"] {
+  background-image: url("../assets/single/blocks/oak_planks.png");
+}
+
+/* 树叶：复用草顶像素图 + 略偏绿滤镜作区分 */
+.single-slot[data-resource="leaves"] .single-slot-icon,
+.single-slot-icon[data-icon="leaves"] {
+  background-image: url("../assets/single/blocks/grass_top.png");
+  filter: hue-rotate(-18deg) saturate(1.15) brightness(0.92);
+}
+
 .single-slot[data-resource="gold"] .single-slot-icon,
 .single-slot-icon[data-icon="gold"] {
   background-image: url("../assets/single/blocks/gold_ore.png");
@@ -244,18 +266,6 @@ body.single-player-mode #app {
 .single-slot[data-resource="diamond"] .single-slot-icon,
 .single-slot-icon[data-icon="diamond"] {
   background-image: url("../assets/single/blocks/diamond_ore.png");
-}
-
-.single-slot-icon[data-icon="grass"] {
-  background-image: url("../assets/single/blocks/grass_top.png");
-}
-
-.single-slot-icon[data-icon="stone"] {
-  background-image: url("../assets/single/blocks/stone.png");
-}
-
-.single-slot-icon[data-icon="planks"] {
-  background-image: url("../assets/single/blocks/oak_planks.png");
 }
 
 .single-slot-icon[data-icon="pickaxe"],

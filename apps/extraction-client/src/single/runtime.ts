@@ -7,6 +7,7 @@ import {
 import {
   AmbientLight,
   Color,
+  DirectionalLight,
   NoToneMapping,
   PerspectiveCamera,
   SRGBColorSpace,
@@ -20,6 +21,14 @@ import { disposeObjectTree } from "../game/object-disposal";
 import { LocalAnimalSystem, planBiomeAnimals } from "./animals";
 import { createExtractionBeacon } from "./beacon";
 import { BlockBreakFx } from "./block-break-fx";
+import {
+  createEmptyMcSceneActors,
+  disposeMcSceneActors,
+  spawnMcSceneActors,
+  updateMcSceneActors,
+  type McSceneActors,
+} from "./mc-scene-actors";
+import { configureLocalAtmosphere } from "./sky-paint";
 import { LocalViewmodel, type LocalHeldTool } from "./viewmodel";
 import { LocalWorldAdapter } from "./world-adapter";
 
@@ -97,6 +106,8 @@ export class LocalWorldRuntime {
   private readonly breakFx: BlockBreakFx;
   private readonly ambientLight: AmbientLight;
   private animals: LocalAnimalSystem | null = null;
+  /** 出生点假人 + 第一人称自身身体 */
+  private mcActors: McSceneActors = createEmptyMcSceneActors();
   private initialized = false;
   private ready = false;
   private disposed = false;
@@ -155,6 +166,10 @@ export class LocalWorldRuntime {
       this.adapter.map.style.ambientIntensity,
     );
     this.world.add(this.ambientLight);
+    // 体素人模需要方向光才有立体感
+    const sun = new DirectionalLight(0xfff2e0, 0.85);
+    sun.position.set(40, 80, 20);
+    this.world.add(sun);
 
     // 独立手臂相机：固定在原点朝 -Z，不跟随玩家世界位姿（examples + lab 同构）
     this.armCamera = new PerspectiveCamera(90, 1, 0.05, 10);
@@ -167,8 +182,9 @@ export class LocalWorldRuntime {
     };
     this.disconnectArm = this.viewmodel.arm.connect(this.inputs, "in-game");
 
-    this.configureAtmosphere(this.adapter.map.style);
+    configureLocalAtmosphere(this.world, this.adapter.map.style);
     this.animals = this.createAnimals();
+    void this.spawnMcActors();
 
     this.resizeObserver = new ResizeObserver(this.resize);
     this.resizeObserver.observe(canvas);
@@ -233,6 +249,13 @@ export class LocalWorldRuntime {
     // Lab AudioProvider：running && atRestY === -1 && !swimming
     const onGround = this.ready && this.controls.body.atRestY === -1;
     const sprinting = this.ready && this.controls.state.sprinting;
+
+    // 假人巡逻 + 第一人称自身（眼位/低头门控）
+    updateMcSceneActors(this.mcActors, deltaMs, {
+      runDemo: this.ready,
+      selfFrame: { position, lookDir: this.direction, moving },
+    });
+
     this.world.updateShaderLighting(this.camera, position);
 
     // create.town / examples 双 pass：世界 → clearDepth → 手臂场景
@@ -275,12 +298,24 @@ export class LocalWorldRuntime {
 
   /**
    * MC 裂纹进度：progress 0–1 映射 destroy_stage 0–9；null 隐藏。
+   * 单目标兼容 API；多块常驻裂纹请用 setBreakCracks。
    */
   setBreakCrack(
     progress: number | null,
     voxel: readonly [number, number, number] | null,
   ): void {
     this.breakFx.setCrack(progress, voxel);
+  }
+
+  /** 同步全部已损伤方块裂纹（不依赖准星，可多块同时显示） */
+  setBreakCracks(
+    entries: ReadonlyArray<{
+      key: string;
+      progress: number;
+      voxel: readonly [number, number, number];
+    }>,
+  ): void {
+    this.breakFx.setCracks(entries);
   }
 
   /** 方块打碎碎片喷发 */
@@ -349,6 +384,10 @@ export class LocalWorldRuntime {
     if (document.pointerLockElement === this.canvas) document.exitPointerLock();
     disposeObjectTree(this.interact, true);
     disposeObjectTree(this.beacon, true);
+    disposeMcSceneActors(this.mcActors, (root) => {
+      this.world.remove(root);
+    });
+    this.mcActors = createEmptyMcSceneActors();
     this.animals?.dispose();
     this.animals = null;
     this.breakFx.dispose();
@@ -392,55 +431,24 @@ export class LocalWorldRuntime {
     );
   }
 
-  private configureAtmosphere(style: {
-    backgroundColor: string;
-    cloudsVisible: boolean;
-    drawSun: boolean;
-    drawStars: boolean;
-    sky: {
-      name: string;
-      start: number;
-      color: { top: string; middle: string; bottom: string };
-      skyOffset: number;
-      voidOffset: number;
-    };
-  }): void {
-    this.world.sky.visible = true;
-    this.world.clouds.visible = style.cloudsVisible;
-    // 单段锁定当前风格时段，避免跨多 phase 混色
-    this.world.sky.setShadingPhases([
-      {
-        name: style.sky.name,
-        start: 0,
-        color: { ...style.sky.color },
-        skyOffset: style.sky.skyOffset,
-        voidOffset: style.sky.voidOffset,
+  private async spawnMcActors(): Promise<void> {
+    const eyeFromFeet =
+      this.controls.options.bodyHeight * this.controls.options.eyeHeight;
+    const actors = await spawnMcSceneActors({
+      isDisposed: () => this.disposed,
+      addToWorld: (root) => {
+        this.world.add(root);
       },
-      {
-        name: `${style.sky.name}-hold`,
-        start: 1,
-        color: { ...style.sky.color },
-        skyOffset: style.sky.skyOffset,
-        voidOffset: style.sky.voidOffset,
-      },
-    ]);
-    // 颜色只靠外层 dodecahedron 渐变（setShadingPhases）。
-    // 内层 CanvasBox 若铺整面不透明色，会变成「巨大紫色/红色贴纸」盖住渐变
-    // （黄昏 top=#3D2A5C、血月底/顶反差都是这个问题）。
-    // 内层只允许：透明底 + 星点，和/或底面太阳；绝不整面 fill 实色。
-    this.world.sky.paint("all", clearSkyFace);
-    if (style.drawStars) {
-      this.world.sky.paint("top", paintStarsTransparent());
-      this.world.sky.paint("sides", paintStarsTransparent());
-      this.world.sky.paint("bottom", paintStarsTransparent());
-    }
-    if (style.drawSun) {
-      this.world.sky.paint("bottom", (context, canvas) => {
-        // 保留已有星点（若有），再画太阳辉光
-        paintCreateTownStyleSun(context, canvas);
+      surfaceY: this.adapter.map.surfaceY,
+      eyeFromFeet,
+    });
+    if (this.disposed) {
+      disposeMcSceneActors(actors, (root) => {
+        this.world.remove(root);
       });
+      return;
     }
-    this.world.background = new Color(style.backgroundColor);
+    this.mcActors = actors;
   }
 
   private emptyFrame(deltaMs: number): LocalRuntimeFrame {
@@ -455,88 +463,4 @@ export class LocalWorldRuntime {
       target: null,
     };
   }
-}
-
-/** 清空天空盒面为全透明，露出外层渐变 */
-function clearSkyFace(
-  context: CanvasRenderingContext2D,
-  canvas: HTMLCanvasElement,
-): void {
-  context.save();
-  context.setTransform(1, 0, 0, 1, 0, 0);
-  context.clearRect(0, 0, canvas.width, canvas.height);
-  context.restore();
-}
-
-/**
- * 透明底画星：只画点，不铺实色底，渐变天空透过 CanvasBox 可见。
- */
-function paintStarsTransparent(
-  starCount = 140,
-): (context: CanvasRenderingContext2D, canvas: HTMLCanvasElement) => void {
-  return (context, canvas) => {
-    context.save();
-    context.setTransform(1, 0, 0, 1, 0, 0);
-    // 不 clear：调用方已 paint("all", clearSkyFace)；此处叠加即可
-    const colors = [
-      "#FFFFFF",
-      "#FFFFFF",
-      "#FFE8E0",
-      "#FFD0C8",
-      "#E8E8FF",
-      "#FF8585",
-    ];
-    for (let i = 0; i < starCount; i += 1) {
-      context.globalAlpha = 0.45 + Math.random() * 0.55;
-      context.beginPath();
-      context.arc(
-        Math.random() * canvas.width,
-        Math.random() * canvas.height,
-        Math.random() * 0.7 + 0.15,
-        0,
-        Math.PI * 2,
-      );
-      context.fillStyle = colors[Math.floor(Math.random() * colors.length)];
-      context.fill();
-    }
-    context.restore();
-  };
-}
-
-/** 按 lab 解包逻辑重绘太阳：低分 canvas + 径向辉光 + 实心核（原创实现）。 */
-function paintCreateTownStyleSun(
-  context: CanvasRenderingContext2D,
-  canvas: HTMLCanvasElement,
-): void {
-  context.save();
-  context.imageSmoothingEnabled = false;
-  const low = document.createElement("canvas");
-  low.width = Math.max(32, Math.floor(canvas.width / 4));
-  low.height = Math.max(32, Math.floor(canvas.height / 4));
-  const lowContext = low.getContext("2d");
-  if (lowContext === null) {
-    context.restore();
-    return;
-  }
-  lowContext.imageSmoothingEnabled = false;
-  const cx = low.width / 2;
-  const cy = low.height / 2;
-  const glow = lowContext.createRadialGradient(cx, cy, 6.25, cx, cy, 31.25);
-  glow.addColorStop(0, "rgba(255, 250, 200, 0.4)");
-  glow.addColorStop(0.4, "rgba(255, 240, 150, 0.2)");
-  glow.addColorStop(1, "rgba(255, 230, 100, 0)");
-  lowContext.beginPath();
-  lowContext.arc(cx, cy, 31.25, 0, Math.PI * 2);
-  lowContext.fillStyle = glow;
-  lowContext.fill();
-  const core = lowContext.createRadialGradient(cx, cy, 0, cx, cy, 12.5);
-  core.addColorStop(0, "rgb(255, 255, 245)");
-  core.addColorStop(0.7, "rgb(255, 250, 220)");
-  core.addColorStop(1, "rgb(255, 230, 140)");
-  lowContext.beginPath();
-  lowContext.arc(cx, cy, 12.5, 0, Math.PI * 2);
-  lowContext.fillStyle = core;
-  lowContext.fill();
-  context.drawImage(low, 0, 0, canvas.width, canvas.height);
-  context.restore();
 }

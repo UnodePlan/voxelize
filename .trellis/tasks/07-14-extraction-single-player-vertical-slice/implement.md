@@ -49,7 +49,7 @@ pnpm --filter @voxelize/extraction-client typecheck
 - [x] 禁用飞行、幽灵、方块放置和无敌人的近战结果。
 - [x] 设置固定 FOV、玩家体型、速度、重力、傍晚 Sky、雾和光照初值。
 - [x] 完成初始化 loading/error/retry 状态，以及 dispose 的 listener/RAF/worker/World 清理。
-- [ ] 连续重开至少三次，验证只有一个有效运行时。
+- [ ] 连续重开至少三次，验证只有一个有效运行时。（浏览器自动化：单次进入可 ready；连续 3 次快速重载 60s 内未稳定 ready，需手工再验）
 
 验证：
 
@@ -103,6 +103,9 @@ pnpm --filter @voxelize/extraction-client test -- src/single/state src/single/co
 - [x] 实现无生产顶栏的专用 shell、准星、目标标签、ItemSlots 风格热栏、经过时间、提示和结果层。
 - [x] 按 Lab 解包参数调校天空、雾、光照、Arm 双 pass。
 - [x] 系统等宽字体 fallback（字体搬运可选）。
+- [x] 第一人称镐/剑 viewmodel（槽 1/2）与 MC 挖掘时长联动。
+- [x] MC ModelBiped 假人（出生点巡逻走/挖）+ 第一人称自身身体（低头可见）。
+- [x] 假人第三人称手持：走路铁剑、挖掘铁镐（`mc-held-item.ts`）。
 
 视觉门：同视口并排检查时，世界占比、第一人称近景、纹理密度、手持物、准星和热栏必须达到 PRD AC11；材质允许搬运，不要求原创。
 

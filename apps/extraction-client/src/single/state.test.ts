@@ -179,6 +179,31 @@ describe("local single-player state", () => {
     });
   });
 
+  it("resumes mining from persisted elapsedMs and accepts absolute ticks", () => {
+    const target = [1, 2, 3] as const;
+    let state = readyState();
+    state = reduceLocalGameState(state, {
+      type: "MINING_STARTED",
+      target,
+      resource: "stone",
+      displayName: "岩石",
+      requiredMs: 2_000,
+      elapsedMs: 800,
+    });
+    expect(state.mining?.elapsedMs).toBe(800);
+
+    state = reduceLocalGameState(state, {
+      type: "MINING_ADVANCED",
+      targetKey: voxelKey(target),
+      deltaMs: 50,
+      elapsedMs: 1_250,
+    });
+    expect(state.mining?.elapsedMs).toBe(1_250);
+
+    state = reduceLocalGameState(state, { type: "MINING_CANCELLED" });
+    expect(state.mining).toBeNull();
+  });
+
   it("resets extraction progress when leaving the beacon", () => {
     let state = readyState();
     state = reduceLocalGameState(state, {
@@ -206,9 +231,15 @@ describe("local single-player state", () => {
     });
 
     expect(state.phase).toBe("extracted");
-    expect(state.result).toEqual({
-      elapsedMs: LOCAL_EXTRACTION_REQUIRED_MS,
-      resources: { dirt: 0, gold: 0, diamond: 0 },
+    expect(state.result?.elapsedMs).toBe(LOCAL_EXTRACTION_REQUIRED_MS);
+    expect(state.result?.resources).toMatchObject({
+      dirt: 0,
+      gold: 0,
+      diamond: 0,
+      stone: 0,
+      planks: 0,
+      leaves: 0,
+      grass: 0,
     });
 
     const frozen = reduceLocalGameState(state, {
@@ -224,12 +255,29 @@ describe("local single-player state", () => {
     inventory[3] = { resource: "dirt", quantity: 4 };
     inventory[4] = { resource: "gold", quantity: 1 };
     inventory[5] = { resource: "diamond", quantity: 2 };
+    inventory[6] = { resource: "stone", quantity: 9 };
+    inventory[7] = { resource: "planks", quantity: 3 };
 
-    expect(inventoryResourceCounts(inventory)).toEqual({
+    expect(inventoryResourceCounts(inventory)).toMatchObject({
       dirt: 4,
       gold: 1,
       diamond: 2,
+      stone: 9,
+      planks: 3,
+      grass: 0,
+      leaves: 0,
     });
+  });
+
+  it("stacks structural drops like stone and planks", () => {
+    const inventory = emptyInventory();
+    const a = addResource(inventory, "stone", 10);
+    const b = addResource(a.inventory, "planks", 2);
+    const c = addResource(b.inventory, "leaves", 1);
+    expect(c.remainder).toBe(0);
+    expect(c.inventory[3]).toEqual({ resource: "stone", quantity: 10 });
+    expect(c.inventory[4]).toEqual({ resource: "planks", quantity: 2 });
+    expect(c.inventory[5]).toEqual({ resource: "leaves", quantity: 1 });
   });
 });
 

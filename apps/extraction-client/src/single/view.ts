@@ -4,7 +4,11 @@ import type {
   LocalInventoryTab,
   LocalResourceKey,
 } from "./state";
-import { LOCAL_INVENTORY_SLOTS } from "./state";
+import {
+  LOCAL_INVENTORY_SLOTS,
+  LOCAL_RESOURCE_KEYS,
+  LOCAL_RESOURCE_LABELS,
+} from "./state";
 
 export interface LocalViewFrame {
   insideExtraction: boolean;
@@ -21,29 +25,20 @@ export interface LocalViewActions {
   onRestart(): void;
 }
 
-/** All Blocks 页展示的图鉴（只读浏览，与 Lab 标签对齐）。 */
+/** All Blocks 页：可采集资源 + 固定工具图鉴 */
 const BLOCK_CATALOG: ReadonlyArray<{
   id: string;
   label: string;
-  icon:
-    | "dirt"
-    | "gold"
-    | "diamond"
-    | "grass"
-    | "stone"
-    | "planks"
-    | "pickaxe"
-    | "sword"
-    | "hand";
+  icon: LocalResourceKey | "pickaxe" | "sword" | "hand";
 }> = [
-  { id: "dirt", label: "泥土", icon: "dirt" },
-  { id: "gold", label: "黄金矿", icon: "gold" },
-  { id: "diamond", label: "钻石矿", icon: "diamond" },
-  { id: "grass", label: "草地", icon: "grass" },
-  { id: "stone", label: "岩石", icon: "stone" },
-  { id: "planks", label: "木板", icon: "planks" },
+  ...LOCAL_RESOURCE_KEYS.map((id) => ({
+    id,
+    label: LOCAL_RESOURCE_LABELS[id],
+    icon: id,
+  })),
   { id: "pickaxe", label: "铁镐", icon: "pickaxe" },
   { id: "sword", label: "铁剑", icon: "sword" },
+  { id: "hand", label: "空手", icon: "hand" },
 ];
 
 export class LocalGameView {
@@ -59,7 +54,7 @@ export class LocalGameView {
   private readonly notice: HTMLElement;
   private readonly result: HTMLElement;
   private readonly resultTime: HTMLElement;
-  private readonly resultResources: Record<LocalResourceKey, HTMLElement>;
+  private readonly resultList: HTMLElement;
   private readonly hotbarSlots: HTMLElement[];
   private readonly panelSlots: HTMLElement[];
   private readonly inventoryPanel: HTMLElement;
@@ -90,11 +85,7 @@ export class LocalGameView {
     this.notice = required(root, ".single-notice");
     this.result = required(root, ".single-result");
     this.resultTime = required(root, ".single-result-time");
-    this.resultResources = {
-      dirt: required(root, '[data-result-resource="dirt"]'),
-      gold: required(root, '[data-result-resource="gold"]'),
-      diamond: required(root, '[data-result-resource="diamond"]'),
-    };
+    this.resultList = required(root, ".single-result-resources");
     this.hotbarSlots = Array.from(
       root.querySelectorAll<HTMLElement>(".single-hotbar .single-slot"),
     );
@@ -178,7 +169,7 @@ export class LocalGameView {
         ? "<strong>点击继续</strong>"
         : [
             "<strong>进入矿坑</strong>",
-            "<span>WASD 移动　空格跳跃　左键挖掘（石/矿需镐才掉落）</span>",
+            "<span>WASD 移动　空格跳跃　左键挖掘（镐更快破石/矿）</span>",
             "<span>1 空手　2 铁镐　3 铁剑　Q 丢弃　E 背包　H 帮助</span>",
           ].join("");
   }
@@ -215,11 +206,25 @@ export class LocalGameView {
     this.result.hidden = state.phase !== "extracted" || result === null;
     if (result === null) return;
     this.resultTime.textContent = formatElapsed(result.elapsedMs);
-    for (const resource of ["dirt", "gold", "diamond"] as const) {
-      this.resultResources[resource].textContent = String(
-        result.resources[resource],
-      );
+    // 只列出本局拿到过的种类；全空则提示空包撤离
+    const rows = LOCAL_RESOURCE_KEYS.filter(
+      (key) => (result.resources[key] ?? 0) > 0,
+    );
+    if (rows.length === 0) {
+      this.resultList.innerHTML =
+        "<div class=\"single-result-empty\">空背包撤离 · 未采集资源</div>";
+      return;
     }
+    this.resultList.innerHTML = rows
+      .map(
+        (key) => `
+      <div class="single-result-row" data-resource="${key}">
+        <i class="single-slot-icon" data-icon="${key}" aria-hidden="true"></i>
+        <dt>${LOCAL_RESOURCE_LABELS[key]}</dt>
+        <dd>${result.resources[key]}</dd>
+      </div>`,
+      )
+      .join("");
   }
 }
 
@@ -323,11 +328,7 @@ function template(): string {
         <span class="single-result-kicker">EXTRACTION COMPLETE</span>
         <h1 id="single-result-title">已撤离</h1>
         <p>用时 <strong class="single-result-time">00:00</strong></p>
-        <dl>
-          <div><dt>泥土</dt><dd data-result-resource="dirt">0</dd></div>
-          <div><dt>黄金</dt><dd data-result-resource="gold">0</dd></div>
-          <div><dt>钻石</dt><dd data-result-resource="diamond">0</dd></div>
-        </dl>
+        <dl class="single-result-resources"></dl>
         <small>本地单机记录，不保存</small>
         <button class="single-restart" type="button">再次进入</button>
       </section>

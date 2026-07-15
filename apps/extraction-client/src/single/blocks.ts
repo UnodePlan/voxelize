@@ -40,28 +40,29 @@ export const LOCAL_TEXTURE_GROUPS = {
 /**
  * 可破坏方块的挖掘档案（hardness 取自 MC 1.21.4 / minecraft-data）。
  * 未列出的 id（air/基岩/信标）不可挖。
+ * 所有可挖方块均有 drop：破坏后掉落并进背包（工具只影响速度）。
  */
 export interface LocalBlockMiningProfile extends VanillaMiningInput {
   displayName: string;
-  /** 正确收获时进背包的资源；结构块为 null */
-  drop: LocalResourceKey | null;
+  /** 破坏后进背包/世界掉落的资源 */
+  drop: LocalResourceKey;
   preferredTool: LocalPreferredTool;
 }
 
 /**
- * 单机挖掘表：严格原版 hardness + requiresCorrectToolForDrops。
- * 耗时见 mining.ts 的 destroySpeed / 30|100 公式。
+ * 单机挖掘表：原版 hardness 控制耗时；
+ * 掉落不要求正确工具（单机采集闭环：挖到就能捡）。
  */
 export const LOCAL_BLOCK_MINING: Readonly<
   Record<number, LocalBlockMiningProfile>
 > = {
-  // grass_block hardness 0.6，mineable/shovel，手可掉落
+  // grass_block hardness 0.6
   [LOCAL_BLOCK_IDS.grass]: {
     displayName: "草地",
     hardness: 0.6,
     preferredTool: "shovel",
     requiresCorrectToolForDrops: false,
-    drop: "dirt",
+    drop: "grass",
   },
   // dirt 0.5
   [LOCAL_BLOCK_IDS.dirt]: {
@@ -71,57 +72,57 @@ export const LOCAL_BLOCK_MINING: Readonly<
     requiresCorrectToolForDrops: false,
     drop: "dirt",
   },
-  // oak_planks 2.0，mineable/axe，不要求正确工具掉落
+  // oak_planks 2.0
   [LOCAL_BLOCK_IDS.weatheredTimber]: {
     displayName: "旧木梁",
     hardness: 2.0,
     preferredTool: "axe",
     requiresCorrectToolForDrops: false,
-    drop: null,
+    drop: "planks",
   },
-  // stone 1.5，需镐才掉落（结构块无掉落）
+  // stone 1.5
   [LOCAL_BLOCK_IDS.paleStone]: {
     displayName: "风化石台",
     hardness: 1.5,
     preferredTool: "pickaxe",
-    requiresCorrectToolForDrops: true,
-    drop: null,
+    requiresCorrectToolForDrops: false,
+    drop: "stone",
   },
-  // cobblestone 2.0 作为采石岩壁
+  // cobblestone 2.0
   [LOCAL_BLOCK_IDS.quarryStone]: {
     displayName: "采石场岩壁",
     hardness: 2.0,
     preferredTool: "pickaxe",
-    requiresCorrectToolForDrops: true,
-    drop: null,
+    requiresCorrectToolForDrops: false,
+    drop: "stone",
   },
-  // gold_ore 3.0，需铁镐+
+  // gold_ore 3.0
   [LOCAL_BLOCK_IDS.gold]: {
     displayName: "黄金矿",
     hardness: 3.0,
     preferredTool: "pickaxe",
-    requiresCorrectToolForDrops: true,
+    requiresCorrectToolForDrops: false,
     drop: "gold",
   },
-  // diamond_ore 3.0，需铁镐+
+  // diamond_ore 3.0
   [LOCAL_BLOCK_IDS.diamond]: {
     displayName: "钻石矿",
     hardness: 3.0,
     preferredTool: "pickaxe",
-    requiresCorrectToolForDrops: true,
+    requiresCorrectToolForDrops: false,
     drop: "diamond",
   },
-  // oak_leaves 0.2，手可破、无掉落（简化）
+  // oak_leaves 0.2
   [LOCAL_BLOCK_IDS.leaves]: {
     displayName: "树叶",
     hardness: 0.2,
     preferredTool: "axe",
     requiresCorrectToolForDrops: false,
-    drop: null,
+    drop: "leaves",
   },
 };
 
-/** 兼容旧引用：仅含「存在掉落定义」的资源方块；时长=空手原版 ms */
+/** 兼容旧引用：全部可挖方块；时长=空手；resource=掉落键 */
 export const LOCAL_MINEABLE_BLOCKS: Readonly<
   Record<
     number,
@@ -132,16 +133,14 @@ export const LOCAL_MINEABLE_BLOCKS: Readonly<
     }
   >
 > = Object.fromEntries(
-  Object.entries(LOCAL_BLOCK_MINING)
-    .filter(([, profile]) => profile.drop !== null)
-    .map(([id, profile]) => [
-      Number(id),
-      {
-        displayName: profile.displayName,
-        miningDurationMs: miningDurationMs(profile, "empty"),
-        resource: profile.drop as LocalResourceKey,
-      },
-    ]),
+  Object.entries(LOCAL_BLOCK_MINING).map(([id, profile]) => [
+    Number(id),
+    {
+      displayName: profile.displayName,
+      miningDurationMs: miningDurationMs(profile, "empty"),
+      resource: profile.drop,
+    },
+  ]),
 ) as Readonly<
   Record<
     number,
@@ -326,11 +325,19 @@ export function createLocalBlocks(): Record<string, LocalSerializedBlock> {
   };
 }
 
+/**
+ * 地图配额统计：只计生产三资源（泥土/金/钻）。
+ * 结构掉落（石/木/叶）不计入 resourceCounts 配额字段。
+ */
 export function resourceCountsFromIds(ids: readonly number[]): ResourceCounts {
   const counts: ResourceCounts = { dirt: 0, gold: 0, diamond: 0 };
   for (const id of ids) {
     const drop = LOCAL_BLOCK_MINING[id]?.drop;
-    if (drop !== null && drop !== undefined) counts[drop] += 1;
+    if (drop === "dirt" || drop === "gold" || drop === "diamond") {
+      counts[drop] += 1;
+    }
+    // 草地也算泥土层内容量（地图泥土配额）
+    if (drop === "grass") counts.dirt += 1;
   }
   return counts;
 }

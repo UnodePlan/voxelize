@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { LOCAL_BLOCK_IDS, LOCAL_MINEABLE_BLOCKS } from "./blocks";
 import {
+  formatMapStyleLabel,
   LOCAL_BASE_HEIGHT,
   LOCAL_CHUNK_COUNT,
   LOCAL_CHUNK_SIZE,
@@ -14,9 +15,11 @@ import {
   createLocalQuarryMap,
   getLocalMapVoxel,
   localMapChecksum,
+  pickBorderMode,
 } from "./map";
 import { LOCAL_RESOURCE_QUOTAS } from "./map-layout";
 import { LOCAL_MAP_STYLES, pickMapStyle } from "./map-style";
+import { isBlockMineable } from "./blocks";
 
 describe("local random grassland map", () => {
   it("is deterministic for the same seed and varies across seeds", () => {
@@ -24,10 +27,11 @@ describe("local random grassland map", () => {
     const b = createLocalQuarryMap(LOCAL_TERRAIN_SEED);
     const c = createLocalQuarryMap(LOCAL_TERRAIN_SEED ^ 0xdead_beef);
 
-    expect(LOCAL_MAP_SIZE).toBe(60);
-    expect(LOCAL_WORLD_MAX - LOCAL_WORLD_MIN + 1).toBe(60);
+    expect(LOCAL_MAP_SIZE).toBe(128);
+    expect(LOCAL_WORLD_MAX - LOCAL_WORLD_MIN + 1).toBe(128);
     expect(a.chunks).toHaveLength(LOCAL_CHUNK_COUNT);
     expect(a.seed).toBe(LOCAL_TERRAIN_SEED);
+    expect(a.borderMode).toBe(pickBorderMode(LOCAL_TERRAIN_SEED));
     expect(localMapChecksum(a)).toBe(localMapChecksum(b));
     expect(localMapChecksum(a)).not.toBe(localMapChecksum(c));
     expect(
@@ -37,17 +41,49 @@ describe("local random grassland map", () => {
           LOCAL_CHUNK_SIZE * LOCAL_MAX_HEIGHT * LOCAL_CHUNK_SIZE,
       ),
     ).toBe(true);
+    expect(formatMapStyleLabel(a)).toContain(a.style.label);
+    expect(formatMapStyleLabel(a)).toMatch(/基岩界|虚空界/);
+  });
 
-    // 边界无墙：边上方是空气（旁边露天空）
-    const edgeX = LOCAL_WORLD_MIN;
-    const edgeTop = a.surfaceY(edgeX, 0);
-    expect(getLocalMapVoxel(a, edgeX, edgeTop + 1, 0)).toBe(
+  it("bedrock border: walls and floor are unmineable bedrock", () => {
+    const map = createLocalQuarryMap(LOCAL_TERRAIN_SEED, "bedrock");
+    expect(map.borderMode).toBe("bedrock");
+    // 四周墙
+    expect(getLocalMapVoxel(map, LOCAL_WORLD_MIN, 12, 0)).toBe(
+      LOCAL_BLOCK_IDS.bedrock,
+    );
+    expect(getLocalMapVoxel(map, LOCAL_WORLD_MAX, 12, 0)).toBe(
+      LOCAL_BLOCK_IDS.bedrock,
+    );
+    expect(getLocalMapVoxel(map, 0, 12, LOCAL_WORLD_MIN)).toBe(
+      LOCAL_BLOCK_IDS.bedrock,
+    );
+    // 底部基岩不可挖
+    expect(getLocalMapVoxel(map, 10, 0, 10)).toBe(LOCAL_BLOCK_IDS.bedrock);
+    expect(isBlockMineable(LOCAL_BLOCK_IDS.bedrock)).toBe(false);
+    // 墙外未生成
+    expect(getLocalMapVoxel(map, LOCAL_WORLD_MIN - 1, 12, 0)).toBe(
       LOCAL_BLOCK_IDS.air,
     );
-    expect(getLocalMapVoxel(a, LOCAL_WORLD_MIN - 1, edgeTop, 0)).toBe(
+  });
+
+  it("void border: no walls, diggable floor, open sky at edges", () => {
+    const map = createLocalQuarryMap(LOCAL_TERRAIN_SEED, "void");
+    expect(map.borderMode).toBe("void");
+    // 边界格是地形（非整柱基岩墙）
+    const edgeTop = map.surfaceY(LOCAL_WORLD_MIN, 0);
+    const edgeId = getLocalMapVoxel(map, LOCAL_WORLD_MIN, edgeTop, 0);
+    expect(edgeId).not.toBe(LOCAL_BLOCK_IDS.air);
+    // 边上方是空气（露虚空）
+    expect(getLocalMapVoxel(map, LOCAL_WORLD_MIN, edgeTop + 2, 0)).toBe(
       LOCAL_BLOCK_IDS.air,
     );
-    expect(getLocalMapVoxel(a, LOCAL_WORLD_MAX + 1, edgeTop, 0)).toBe(
+    // 底部可挖穿（普通岩石，非基岩）
+    const floorId = getLocalMapVoxel(map, 10, 0, 10);
+    expect(floorId).not.toBe(LOCAL_BLOCK_IDS.bedrock);
+    expect(isBlockMineable(floorId)).toBe(true);
+    // 墙外仍是空气
+    expect(getLocalMapVoxel(map, LOCAL_WORLD_MIN - 1, 12, 0)).toBe(
       LOCAL_BLOCK_IDS.air,
     );
   });
@@ -55,8 +91,14 @@ describe("local random grassland map", () => {
   it("has designed height variation and solid surface tops", () => {
     const map = createLocalQuarryMap(LOCAL_TERRAIN_SEED);
     const heights = new Set<number>();
-    for (let x = LOCAL_WORLD_MIN; x <= LOCAL_WORLD_MAX; x += 4) {
-      for (let z = LOCAL_WORLD_MIN; z <= LOCAL_WORLD_MAX; z += 4) {
+    // 采样内圈，避开边界墙
+    const margin = 4;
+    for (let x = LOCAL_WORLD_MIN + margin; x <= LOCAL_WORLD_MAX - margin; x += 4) {
+      for (
+        let z = LOCAL_WORLD_MIN + margin;
+        z <= LOCAL_WORLD_MAX - margin;
+        z += 4
+      ) {
         heights.add(map.surfaceY(x, z));
       }
     }
@@ -82,6 +124,42 @@ describe("local random grassland map", () => {
     expect(getLocalMapVoxel(map, 0, map.surfaceY(0, 0), 0)).toBe(
       LOCAL_BLOCK_IDS.paleStone,
     );
+  });
+
+  it("keeps continuous solid ground near spawn (no instant void island)", () => {
+    const map = createLocalQuarryMap(LOCAL_TERRAIN_SEED);
+    const [sx, , sz] = map.spawnFloor;
+    // 出生点周围 24 格采样：地表必须是实体，避免开局大片空气
+    let solid = 0;
+    let total = 0;
+    for (let dx = -24; dx <= 24; dx += 2) {
+      for (let dz = -24; dz <= 24; dz += 2) {
+        const x = sx + dx;
+        const z = sz + dz;
+        if (
+          x <= LOCAL_WORLD_MIN + 2 ||
+          x >= LOCAL_WORLD_MAX - 2 ||
+          z <= LOCAL_WORLD_MIN + 2 ||
+          z >= LOCAL_WORLD_MAX - 2
+        ) {
+          continue;
+        }
+        total += 1;
+        const y = map.surfaceY(x, z);
+        const id = getLocalMapVoxel(map, x, y, z);
+        if (id !== LOCAL_BLOCK_IDS.air) solid += 1;
+      }
+    }
+    expect(total).toBeGreaterThan(100);
+    expect(solid / total).toBeGreaterThan(0.98);
+    // 地图足够大：出生点到最近边界 > 40（60 地图时约 20，会一眼看到虚空）
+    const toEdge = Math.min(
+      sx - LOCAL_WORLD_MIN,
+      LOCAL_WORLD_MAX - sx,
+      sz - LOCAL_WORLD_MIN,
+      LOCAL_WORLD_MAX - sz,
+    );
+    expect(toEdge).toBeGreaterThan(40);
   });
 
   it("supports spawn headroom and seeded resource quotas", () => {

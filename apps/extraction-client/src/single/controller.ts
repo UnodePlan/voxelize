@@ -7,6 +7,7 @@ import {
   LOCAL_BLOCK_DISPLAY_NAMES,
   LOCAL_BLOCK_IDS,
 } from "./blocks";
+import { LocalBlockDurability } from "./block-durability";
 import {
   hasFallenOutOfTerrain,
   isInsideExtraction,
@@ -16,6 +17,7 @@ import {
 import { LocalInputController, cycleInventorySlot } from "./input";
 import { LocalLootSystem } from "./loot";
 import {
+  formatMapStyleLabel,
   LOCAL_MAX_HEIGHT,
   LOCAL_WORLD_MAX,
   LOCAL_WORLD_MIN,
@@ -46,6 +48,8 @@ export class SinglePlayerController {
   private runtime: LocalWorldRuntime | null = null;
   private input: LocalInputController | null = null;
   private loot: LocalLootSystem | null = null;
+  /** 世界方块耐久：松开/换人续挖不重置 */
+  private readonly durability = new LocalBlockDurability();
   private animationFrame = 0;
   private sessionGeneration = 0;
   private targetName: string | null = null;
@@ -217,12 +221,13 @@ export class SinglePlayerController {
         this.playStepSfx(frame, now);
       } else {
         this.input?.cancelMining();
-        this.cancelMining();
+        this.stopActiveMining();
       }
     }
+    // 挥臂仅在主动按住挖掘时；裂纹按世界耐久显示（松开也保留）
     const digProgress = miningProgress(this.state);
     runtime.setMiningProgress(digProgress);
-    runtime.setBreakCrack(digProgress, this.state.mining?.target ?? null);
+    this.syncBreakCrack(runtime, frame);
     this.render();
   }
 
@@ -243,12 +248,14 @@ export class SinglePlayerController {
       key === null ||
       this.claimed.has(key)
     ) {
-      this.cancelMining();
+      // 松开/失焦：只结束本段挥挖，不清除世界耐久
+      this.stopActiveMining();
       return;
     }
 
     const requiredMs = miningDurationMs(profile, tool);
     const drop = harvestDrop(profile.drop, tool, profile);
+    const priorDamage = this.durability.get(key, target.id);
     if (
       this.state.mining?.targetKey !== key ||
       this.state.mining.requiredMs !== requiredMs
@@ -259,25 +266,55 @@ export class SinglePlayerController {
         resource: drop,
         displayName: profile.displayName,
         requiredMs,
+        // 续挖：从世界耐久恢复进度（换工具只改速度）
+        elapsedMs: priorDamage * requiredMs,
       });
       this.sfx.play("dig", { rate: digRateFor(drop, tool) });
       this.lastDigAt = now;
     }
+
+    // 按当前工具速度累加 0–1 耐久
+    const amount =
+      requiredMs > 0 ? Math.max(0, frame.deltaMs) / requiredMs : 1;
+    const damage = this.durability.apply(key, target.id, amount);
     this.dispatch({
       type: "MINING_ADVANCED",
       deltaMs: frame.deltaMs,
       targetKey: key,
+      elapsedMs: damage * requiredMs,
     });
     if (now - this.lastDigAt > digIntervalMs(tool)) {
       this.sfx.play("dig", { rate: digRateFor(drop, tool) });
       this.lastDigAt = now;
     }
-    if (
-      this.state.mining !== null &&
-      this.state.mining.elapsedMs >= this.state.mining.requiredMs
-    ) {
+    if (damage >= 1) {
       this.completeMining(runtime, target, drop, now);
     }
+  }
+
+  /**
+   * 裂纹：所有已损伤方块常驻显示，不依赖准星指向。
+   * 方块 id 已变或已 claim 的条目跳过。
+   */
+  private syncBreakCrack(
+    runtime: LocalWorldRuntime,
+    _frame: LocalRuntimeFrame,
+  ): void {
+    const entries = this.durability.snapshot().flatMap((snap) => {
+      if (this.claimed.has(snap.key) || !(snap.damage > 0)) return [];
+      // 世界方块已变（被别的逻辑替换）则不画裂纹
+      if (runtime.world.getVoxelAt(...snap.voxel) !== snap.blockId) {
+        return [];
+      }
+      return [
+        {
+          key: snap.key,
+          progress: snap.damage,
+          voxel: snap.voxel,
+        },
+      ];
+    });
+    runtime.setBreakCracks(entries);
   }
 
   private completeMining(
@@ -291,10 +328,12 @@ export class SinglePlayerController {
       this.claimed.has(key) ||
       runtime.world.getVoxelAt(...target.voxel) !== target.id
     ) {
-      this.cancelMining();
+      this.durability.clear(key);
+      this.stopActiveMining();
       return;
     }
     this.claimed.add(key);
+    this.durability.clear(key);
     try {
       runtime.adapter.applyServerVoxelUpdate(
         runtime.world,
@@ -303,10 +342,10 @@ export class SinglePlayerController {
       );
     } catch {
       this.claimed.delete(key);
-      this.cancelMining();
+      this.stopActiveMining();
       return;
     }
-    runtime.setBreakCrack(null, null);
+    // 完整裂纹列表由 syncBreakCrack 每帧刷新；此处只播破碎特效
     runtime.playBlockBreakBurst(
       target.voxel,
       LOCAL_BLOCK_DEBRIS_COLORS[target.id] ?? "#888888",
@@ -325,7 +364,7 @@ export class SinglePlayerController {
       );
       this.sfx.play("drop");
     }
-    this.cancelMining();
+    this.stopActiveMining();
   }
 
   private collectLoot(position: Vector3, now: number, deltaMs: number): void {
@@ -435,8 +474,14 @@ export class SinglePlayerController {
     }
   }
 
-  private cancelMining(): void {
+  /** 结束当前挥挖会话（不清除世界方块耐久） */
+  private stopActiveMining(): void {
     if (this.state.mining !== null) this.dispatch({ type: "MINING_CANCELLED" });
+  }
+
+  /** @deprecated 兼容旧调用名 → stopActiveMining */
+  private cancelMining(): void {
+    this.stopActiveMining();
   }
 
   private showNotice(message: string): void {
@@ -453,6 +498,7 @@ export class SinglePlayerController {
     this.teardownSession();
     this.state = createInitialLocalGameState();
     this.claimed = new Set();
+    this.durability.clearAll();
     this.targetName = null;
     this.insideExtraction = false;
     this.lastExtractBucket = -1;
@@ -480,7 +526,9 @@ export class SinglePlayerController {
     this.view.render(this.state, {
       insideExtraction: this.insideExtraction,
       targetName: this.targetName,
-      styleLabel: this.runtime?.adapter.map.style.label ?? null,
+      styleLabel: this.runtime
+        ? formatMapStyleLabel(this.runtime.adapter.map)
+        : null,
     });
   }
 }

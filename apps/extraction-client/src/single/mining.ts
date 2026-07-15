@@ -112,24 +112,25 @@ export function miningDurationMs(
   const speed = destroySpeed(tool, profile.preferredTool);
   const harvest = canHarvestWith(tool, profile);
   const divisor = harvest ? 30 : 100;
-  const progressPerTick = speed / hardness / divisor;
-  if (progressPerTick >= 1) return 0;
-
-  const ticks = Math.ceil(1 / progressPerTick);
+  // 进度/tick = speed / hardness / divisor；≥1 则瞬间
+  // 用 hardness*divisor/speed 取整，避免 1/(1/1.5/30) 浮点 → 45.000…01 → ceil 46
+  if (speed / hardness / divisor >= 1) return 0;
+  const ticks = Math.ceil((hardness * divisor) / speed);
   return Math.round((ticks / 20) * 1000);
 }
 
-/** 破坏完成后是否掉落（原版：不能收获则无掉落）。 */
+/**
+ * 破坏完成后的掉落。
+ * 单机：只要档案有 drop 就掉落（工具只改速度，不拦掉落）。
+ */
 export function harvestDrop(
   drop: LocalResourceKey | null,
-  tool: LocalHeldTool,
-  profile: Pick<
+  _tool: LocalHeldTool,
+  _profile: Pick<
     VanillaMiningInput,
     "preferredTool" | "requiresCorrectToolForDrops"
   >,
 ): LocalResourceKey | null {
-  if (drop === null) return null;
-  if (!canHarvestWith(tool, profile)) return null;
   return drop;
 }
 
@@ -139,7 +140,9 @@ export function digRateFor(
   tool: LocalHeldTool,
 ): number {
   let rate = tool === "pickaxe" ? 1 : tool === "sword" ? 1.08 : 0.92;
-  if (drop === "dirt") rate *= 1.12;
+  if (drop === "dirt" || drop === "grass") rate *= 1.12;
+  else if (drop === "stone") rate *= 0.98;
+  else if (drop === "planks" || drop === "leaves") rate *= 1.05;
   else if (drop === "gold") rate *= 0.95;
   else if (drop === "diamond") rate *= 0.82;
   return rate;

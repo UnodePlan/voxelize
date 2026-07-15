@@ -16,6 +16,13 @@ import { disposeObjectTree } from "../game/object-disposal";
 /** 原版 destroy_stage 共 10 级（0–9） */
 export const BREAK_CRACK_STAGES = 10;
 
+export interface BreakCrackEntry {
+  /** 与 voxelKey 一致，用于增删 overlay */
+  key: string;
+  progress: number;
+  voxel: readonly [number, number, number];
+}
+
 interface DebrisPiece {
   ageMs: number;
   lifeMs: number;
@@ -25,64 +32,74 @@ interface DebrisPiece {
   vz: number;
 }
 
+interface CrackOverlay {
+  mesh: Mesh;
+  stage: number;
+}
+
 /**
  * MC 风格挖掘反馈：
- * - 目标方块上的裂纹 overlay（随进度 0–9 级）
+ * - 所有已损伤方块的裂纹 overlay（常驻，不依赖准星）
  * - 破坏时弹出的短暂碎片
  */
 export class BlockBreakFx {
   private readonly root = new Group();
-  private readonly crackMesh: Mesh;
   private readonly crackMaterials: MeshBasicMaterial[];
+  private readonly crackOverlays = new Map<string, CrackOverlay>();
   private readonly debris: DebrisPiece[] = [];
   private readonly sharedBox = new BoxGeometry(1.002, 1.002, 1.002);
   private readonly debrisBox = new BoxGeometry(0.18, 0.18, 0.18);
-  private activeStage = -1;
   private disposed = false;
 
   constructor(world: Object3D) {
     this.root.name = "single-block-break-fx";
     world.add(this.root);
-
     this.crackMaterials = createCrackStageMaterials();
-    this.crackMesh = new Mesh(this.sharedBox, this.crackMaterials[0]);
-    this.crackMesh.visible = false;
-    this.crackMesh.renderOrder = 8;
-    this.crackMesh.frustumCulled = false;
-    // 略抬出表面，避免 z-fight
-    this.crackMesh.scale.setScalar(1.01);
-    this.root.add(this.crackMesh);
   }
 
   /**
-   * @param progress 0–1 挖掘进度；null 隐藏裂纹
-   * @param voxel 目标方块角点
+   * 同步世界中全部损伤裂纹（可多块同时显示）。
+   * 传入空数组则全部隐藏。
+   */
+  setCracks(entries: ReadonlyArray<BreakCrackEntry>): void {
+    if (this.disposed) return;
+    const keep = new Set<string>();
+    for (const entry of entries) {
+      if (
+        !Number.isFinite(entry.progress) ||
+        entry.progress <= 0 ||
+        entry.key.trim() === ""
+      ) {
+        continue;
+      }
+      keep.add(entry.key);
+      this.upsertCrack(entry);
+    }
+    for (const [key, overlay] of this.crackOverlays) {
+      if (keep.has(key)) continue;
+      this.root.remove(overlay.mesh);
+      this.crackOverlays.delete(key);
+    }
+  }
+
+  /**
+   * 兼容旧单目标 API：只显示一块，或清空。
    */
   setCrack(
     progress: number | null,
     voxel: readonly [number, number, number] | null,
   ): void {
-    if (this.disposed) return;
     if (
       progress === null ||
       voxel === null ||
       !Number.isFinite(progress) ||
       progress <= 0
     ) {
-      this.crackMesh.visible = false;
-      this.activeStage = -1;
+      this.setCracks([]);
       return;
     }
-    const stage = Math.min(
-      BREAK_CRACK_STAGES - 1,
-      Math.floor(progress * BREAK_CRACK_STAGES),
-    );
-    if (stage !== this.activeStage) {
-      this.crackMesh.material = this.crackMaterials[stage];
-      this.activeStage = stage;
-    }
-    this.crackMesh.position.set(voxel[0] + 0.5, voxel[1] + 0.5, voxel[2] + 0.5);
-    this.crackMesh.visible = true;
+    const key = `${voxel[0]},${voxel[1]},${voxel[2]}`;
+    this.setCracks([{ key, progress, voxel }]);
   }
 
   /** 方块打碎时的短生命周期碎片 */
@@ -156,6 +173,7 @@ export class BlockBreakFx {
     if (this.disposed) return;
     this.disposed = true;
     this.debris.length = 0;
+    this.crackOverlays.clear();
     for (const material of this.crackMaterials) {
       material.map?.dispose();
       material.dispose();
@@ -163,6 +181,33 @@ export class BlockBreakFx {
     this.sharedBox.dispose();
     this.debrisBox.dispose();
     disposeObjectTree(this.root, true);
+  }
+
+  private upsertCrack(entry: BreakCrackEntry): void {
+    const stage = Math.min(
+      BREAK_CRACK_STAGES - 1,
+      Math.floor(entry.progress * BREAK_CRACK_STAGES),
+    );
+    let overlay = this.crackOverlays.get(entry.key);
+    if (overlay === undefined) {
+      const mesh = new Mesh(this.sharedBox, this.crackMaterials[stage]);
+      mesh.name = `break-crack:${entry.key}`;
+      mesh.renderOrder = 8;
+      mesh.frustumCulled = false;
+      mesh.scale.setScalar(1.01);
+      this.root.add(mesh);
+      overlay = { mesh, stage };
+      this.crackOverlays.set(entry.key, overlay);
+    } else if (overlay.stage !== stage) {
+      overlay.mesh.material = this.crackMaterials[stage];
+      overlay.stage = stage;
+    }
+    overlay.mesh.position.set(
+      entry.voxel[0] + 0.5,
+      entry.voxel[1] + 0.5,
+      entry.voxel[2] + 0.5,
+    );
+    overlay.mesh.visible = true;
   }
 }
 
@@ -197,7 +242,6 @@ function createCrackStageTextures(): Texture[] {
     ctx.imageSmoothingEnabled = false;
     ctx.clearRect(0, 0, size, size);
 
-    // 裂纹条数与阶段递增；深色半透明，叠在方块表面
     const lines = 2 + stage;
     ctx.strokeStyle = `rgba(20, 18, 16, ${0.35 + stage * 0.06})`;
     ctx.lineWidth = 1;
@@ -218,7 +262,6 @@ function createCrackStageTextures(): Texture[] {
       }
       ctx.stroke();
     }
-    // 高阶段加几条交叉裂口
     if (stage >= 4) {
       ctx.fillStyle = `rgba(0, 0, 0, ${0.08 + (stage - 4) * 0.04})`;
       for (let i = 0; i < stage - 2; i += 1) {

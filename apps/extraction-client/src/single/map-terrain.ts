@@ -361,9 +361,9 @@ function applyEdgeFalloff(
   opts: HeightFieldOptions,
 ): number {
   const edge = edgeFalloff01(x, z, opts.worldMin, opts.worldMax);
-  // 荒漠边缘沙崩更陡；雪原边缘更缓
+  // 仅轻微压边，避免地图边缘「断崖掉进虚空」；边界靠基岩墙收口
   const strength =
-    biome === "desert" ? 10 : biome === "snow" ? 5 : biome === "wasteland" ? 9 : 7;
+    biome === "desert" ? 3 : biome === "snow" ? 2 : biome === "wasteland" ? 3.5 : 2.5;
   return h - edge * edge * strength;
 }
 
@@ -373,12 +373,14 @@ function edgeFalloff01(
   worldMin: number,
   worldMax: number,
 ): number {
-  const nx = (x - worldMin) / Math.max(1, worldMax - worldMin);
-  const nz = (z - worldMin) / Math.max(1, worldMax - worldMin);
-  const dx = Math.min(nx, 1 - nx) * 2;
-  const dz = Math.min(nz, 1 - nz) * 2;
-  const centerish = Math.min(dx, dz);
-  return Math.max(0, 1 - centerish / 0.35);
+  const span = Math.max(1, worldMax - worldMin);
+  // 只在最外约 8% 边带衰减，大地图中心保持完整起伏
+  const margin = Math.max(6, span * 0.08);
+  const dx = Math.min(x - worldMin, worldMax - x);
+  const dz = Math.min(z - worldMin, worldMax - z);
+  const d = Math.min(dx, dz);
+  if (d >= margin) return 0;
+  return 1 - d / margin;
 }
 
 function riverMask(x: number, z: number, seed: number): number {

@@ -49,19 +49,25 @@ describe("local block registry", () => {
     expect(isBlockMineable(LOCAL_BLOCK_IDS.bedrock)).toBe(false);
     expect(isBlockMineable(LOCAL_BLOCK_IDS.extractionMarker)).toBe(false);
 
-    // 兼容旧表：仅资源掉落方块
+    // 全部可挖方块均有掉落资源
     expect(Object.keys(LOCAL_MINEABLE_BLOCKS).map(Number).sort()).toEqual(
-      [
-        LOCAL_BLOCK_IDS.dirt,
-        LOCAL_BLOCK_IDS.grass,
-        LOCAL_BLOCK_IDS.gold,
-        LOCAL_BLOCK_IDS.diamond,
-      ].sort(),
+      mineableIds,
     );
-    // 兼容表：泥土空手原版 0.75s
     expect(LOCAL_MINEABLE_BLOCKS[LOCAL_BLOCK_IDS.dirt]).toMatchObject({
       resource: "dirt",
       miningDurationMs: 750,
+    });
+    expect(LOCAL_MINEABLE_BLOCKS[LOCAL_BLOCK_IDS.quarryStone]).toMatchObject({
+      resource: "stone",
+    });
+    expect(LOCAL_MINEABLE_BLOCKS[LOCAL_BLOCK_IDS.weatheredTimber]).toMatchObject(
+      { resource: "planks" },
+    );
+    expect(LOCAL_MINEABLE_BLOCKS[LOCAL_BLOCK_IDS.leaves]).toMatchObject({
+      resource: "leaves",
+    });
+    expect(LOCAL_MINEABLE_BLOCKS[LOCAL_BLOCK_IDS.grass]).toMatchObject({
+      resource: "grass",
     });
   });
 

@@ -1,10 +1,54 @@
-import type { ResourceCounts } from "../api/models";
-
 export const LOCAL_INVENTORY_SLOTS = 12;
 export const LOCAL_STACK_LIMIT = 64;
 export const LOCAL_EXTRACTION_REQUIRED_MS = 3_000;
 /** 快捷栏前 3 格固定工具：0 空手 / 1 镐 / 2 剑；资源只进入后续槽 */
 export const LOCAL_TOOL_HOTBAR_SLOTS = 3;
+
+/**
+ * 单机可进背包的全部资源（与生产 ResourceCounts 解耦）。
+ * 每种可破坏方块应对应一项，并有 HUD/掉落图标。
+ */
+export const LOCAL_RESOURCE_KEYS = [
+  "dirt",
+  "grass",
+  "stone",
+  "planks",
+  "leaves",
+  "gold",
+  "diamond",
+] as const;
+
+export type LocalResourceKey = (typeof LOCAL_RESOURCE_KEYS)[number];
+
+export type LocalResourceCounts = Record<LocalResourceKey, number>;
+
+/** 结果/图鉴展示名 */
+export const LOCAL_RESOURCE_LABELS: Readonly<Record<LocalResourceKey, string>> =
+  {
+    dirt: "泥土",
+    grass: "草地",
+    stone: "岩石",
+    planks: "木板",
+    leaves: "树叶",
+    gold: "黄金矿",
+    diamond: "钻石矿",
+  };
+
+export function emptyLocalResourceCounts(): LocalResourceCounts {
+  return {
+    dirt: 0,
+    grass: 0,
+    stone: 0,
+    planks: 0,
+    leaves: 0,
+    gold: 0,
+    diamond: 0,
+  };
+}
+
+export function isLocalResourceKey(value: string): value is LocalResourceKey {
+  return (LOCAL_RESOURCE_KEYS as readonly string[]).includes(value);
+}
 
 export function isToolHotbarSlot(slot: number): boolean {
   return (
@@ -12,7 +56,6 @@ export function isToolHotbarSlot(slot: number): boolean {
   );
 }
 
-export type LocalResourceKey = keyof ResourceCounts;
 export type LocalVoxel = readonly [number, number, number];
 export type LocalGamePhase = "loading" | "playing" | "extracted" | "error";
 export type LocalHintMode = "controls" | "resume" | "hidden";
@@ -26,7 +69,7 @@ export interface LocalInventorySlot {
 export interface LocalMiningState {
   elapsedMs: number;
   requiredMs: number;
-  /** 破坏后进背包的资源；结构块为 null */
+  /** 破坏后进背包的资源；不可收获时为 null */
   resource: LocalResourceKey | null;
   /** HUD 显示名 */
   displayName: string;
@@ -36,7 +79,7 @@ export interface LocalMiningState {
 
 export interface LocalResult {
   elapsedMs: number;
-  resources: ResourceCounts;
+  resources: LocalResourceCounts;
 }
 
 export interface LocalGameState {
@@ -70,8 +113,16 @@ export type LocalGameAction =
       resource: LocalResourceKey | null;
       displayName: string;
       requiredMs: number;
+      /** 续挖时从上一次耐久恢复的已用时（默认 0） */
+      elapsedMs?: number;
     }
-  | { type: "MINING_ADVANCED"; deltaMs: number; targetKey: string }
+  | {
+      type: "MINING_ADVANCED";
+      deltaMs: number;
+      targetKey: string;
+      /** 若给出则用绝对值覆盖（来自世界耐久表） */
+      elapsedMs?: number;
+    }
   | { type: "MINING_CANCELLED" }
   | {
       type: "INVENTORY_REPLACED";
@@ -143,17 +194,25 @@ export function reduceLocalGameState(
         action.displayName.trim() === ""
       )
         return state;
-      return {
-        ...state,
-        mining: {
-          elapsedMs: 0,
-          requiredMs: action.requiredMs,
-          resource: action.resource,
-          displayName: action.displayName,
-          target: action.target,
-          targetKey: voxelKey(action.target),
-        },
-      };
+      {
+        const resumed =
+          typeof action.elapsedMs === "number" &&
+          Number.isFinite(action.elapsedMs) &&
+          action.elapsedMs > 0
+            ? Math.min(action.requiredMs, action.elapsedMs)
+            : 0;
+        return {
+          ...state,
+          mining: {
+            elapsedMs: resumed,
+            requiredMs: action.requiredMs,
+            resource: action.resource,
+            displayName: action.displayName,
+            target: action.target,
+            targetKey: voxelKey(action.target),
+          },
+        };
+      }
     case "MINING_ADVANCED": {
       const mining = state.mining;
       if (
@@ -164,14 +223,18 @@ export function reduceLocalGameState(
       ) {
         return state;
       }
+      const nextElapsed =
+        typeof action.elapsedMs === "number" && Number.isFinite(action.elapsedMs)
+          ? Math.min(mining.requiredMs, Math.max(0, action.elapsedMs))
+          : Math.min(
+              mining.requiredMs,
+              mining.elapsedMs + validDelta(action.deltaMs),
+            );
       return {
         ...state,
         mining: {
           ...mining,
-          elapsedMs: Math.min(
-            mining.requiredMs,
-            mining.elapsedMs + validDelta(action.deltaMs),
-          ),
+          elapsedMs: nextElapsed,
         },
       };
     }
@@ -309,15 +372,12 @@ export function swapInventorySlots(
 
 export function inventoryResourceCounts(
   inventory: ReadonlyArray<LocalInventorySlot | null>,
-): ResourceCounts {
+): LocalResourceCounts {
   assertInventory(inventory);
-  return inventory.reduce<ResourceCounts>(
-    (counts, slot) => {
-      if (slot !== null) counts[slot.resource] += slot.quantity;
-      return counts;
-    },
-    { dirt: 0, gold: 0, diamond: 0 },
-  );
+  return inventory.reduce<LocalResourceCounts>((counts, slot) => {
+    if (slot !== null) counts[slot.resource] += slot.quantity;
+    return counts;
+  }, emptyLocalResourceCounts());
 }
 
 export function voxelKey(voxel: LocalVoxel): string {

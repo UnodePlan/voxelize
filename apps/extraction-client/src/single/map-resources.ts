@@ -7,8 +7,10 @@ import {
   LOCAL_SPAWN_XZ,
 } from "./map-layout";
 import {
+  LOCAL_BORDER_WALL_THICKNESS,
   LOCAL_WORLD_MAX,
   LOCAL_WORLD_MIN,
+  type LocalBorderMode,
   type LocalQuarryMap,
 } from "./map";
 import type { LocalVoxel } from "./state";
@@ -41,6 +43,7 @@ export function placeSeededResources(
   seed: number,
   setVoxel: SetVoxelFn,
   isInWorld: (x: number, z: number) => boolean,
+  borderMode: LocalBorderMode = "bedrock",
 ): { voxels: LocalVoxel[]; ids: number[] } {
   const occupied = new Set<string>();
   const voxels: LocalVoxel[] = [];
@@ -69,14 +72,22 @@ export function placeSeededResources(
       },
     ];
 
+  // 基岩界避开墙带；虚空界只需留 1 格边距
+  const margin =
+    borderMode === "bedrock" ? LOCAL_BORDER_WALL_THICKNESS + 2 : 1;
+  const xMin = LOCAL_WORLD_MIN + margin;
+  const xMax = LOCAL_WORLD_MAX - margin;
+  const zMin = LOCAL_WORLD_MIN + margin;
+  const zMax = LOCAL_WORLD_MAX - margin;
+
   for (const entry of plan) {
     let placed = 0;
     let attempts = 0;
     const maxAttempts = entry.count * 80;
     while (placed < entry.count && attempts < maxAttempts) {
       attempts += 1;
-      const x = randomInt(rng, LOCAL_WORLD_MIN + 1, LOCAL_WORLD_MAX - 1);
-      const z = randomInt(rng, LOCAL_WORLD_MIN + 1, LOCAL_WORLD_MAX - 1);
+      const x = randomInt(rng, xMin, xMax);
+      const z = randomInt(rng, zMin, zMax);
       if (!isInWorld(x, z)) continue;
       if (isProtectedPlayArea(x, z)) continue;
       const key = `${x},${z}`;

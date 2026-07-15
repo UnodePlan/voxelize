@@ -16,11 +16,38 @@ import type { LocalVoxel } from "./state";
 export const LOCAL_CHUNK_SIZE = 16;
 export const LOCAL_MAX_HEIGHT = 48;
 export const LOCAL_SUB_CHUNKS = 3;
-/** 可玩平面边长（方块）；边界外无墙，直接露天空 */
-export const LOCAL_MAP_SIZE = 60;
-/** 世界 x/z 闭区间，以 0 为中心：[-30, 29] */
+/**
+ * 可玩平面边长（方块）。
+ * 60 过小：renderRadius≈6 chunk 时开局高空/平视会直接看到地图外虚空黄雾，像「贴图透明」。
+ * 128 ≈ 出生点到边 ≥50 格，配合边界基岩墙可盖住远景空洞。
+ */
+export const LOCAL_MAP_SIZE = 128;
+/** 世界 x/z 闭区间，以 0 为中心：[-64, 63] */
 export const LOCAL_WORLD_MIN = -Math.floor(LOCAL_MAP_SIZE / 2);
 export const LOCAL_WORLD_MAX = LOCAL_WORLD_MIN + LOCAL_MAP_SIZE - 1;
+/** 边界基岩墙厚度（格，仅 bedrock 边界模式） */
+export const LOCAL_BORDER_WALL_THICKNESS = 2;
+
+/**
+ * 地图周边模式（与主题/biome 正交，每局由种子二选一）：
+ * - bedrock：四周高墙 + 底部基岩，不可挖穿
+ * - void：无墙无底基岩，可挖穿地表掉虚空并随机高空重生
+ */
+export type LocalBorderMode = "bedrock" | "void";
+
+export const LOCAL_BORDER_MODE_LABELS: Readonly<
+  Record<LocalBorderMode, string>
+> = {
+  bedrock: "基岩界",
+  void: "虚空界",
+};
+
+/** 由种子稳定挑选周边模式（与风格索引解耦） */
+export function pickBorderMode(seed: number): LocalBorderMode {
+  // 用高位比特，避免与 pickMapStyle 的 % length 强相关
+  return ((seed >>> 17) & 1) === 0 ? "bedrock" : "void";
+}
+
 export const LOCAL_MIN_CHUNK = [
   Math.floor(LOCAL_WORLD_MIN / LOCAL_CHUNK_SIZE),
   Math.floor(LOCAL_WORLD_MIN / LOCAL_CHUNK_SIZE),
@@ -60,10 +87,12 @@ export interface LocalQuarryMap {
   resourceCounts: ResourceCounts;
   resourceVoxels: ReadonlyArray<LocalVoxel>;
   route: ReadonlyArray<LocalVoxel>;
-  /** 本局生成种子（地形 + 矿点 + 风格） */
+  /** 本局生成种子（地形 + 矿点 + 风格 + 边界） */
   seed: number;
   /** 本局地图风格（生物群系 + 时段） */
   style: LocalMapStyle;
+  /** 本局周边：基岩界 / 虚空界 */
+  borderMode: LocalBorderMode;
   spawn: readonly [number, number, number];
   spawnFloor: LocalVoxel;
   /** 查询地表高度（与生成一致） */
@@ -73,12 +102,15 @@ export interface LocalQuarryMap {
 /**
  * 生成单机采石草甸。
  * @param seed 省略则每局随机；测试请传入固定值以保证可复现。
+ * @param borderMode 省略则由种子挑选；测试可强制 bedrock/void。
  */
 export function createLocalQuarryMap(
   seed: number = createMapSeed(),
+  borderMode?: LocalBorderMode,
 ): LocalQuarryMap {
   const mapSeed = seed >>> 0 || LOCAL_TERRAIN_SEED;
   const style = pickMapStyle(mapSeed);
+  const border = borderMode ?? pickBorderMode(mapSeed);
   const heightAt = createBiomeHeightFunction(mapSeed, style.biome, {
     baseHeight: LOCAL_BASE_HEIGHT,
     maxHeight: LOCAL_MAX_HEIGHT,
@@ -90,7 +122,7 @@ export function createLocalQuarryMap(
   const chunks = createEmptyChunks();
   const chunkIndex = indexChunks(chunks);
 
-  fillDesignedTerrain(chunks, heightAt, mapSeed, style.biome);
+  fillDesignedTerrain(chunks, heightAt, mapSeed, style.biome, border);
   decorateTerrain(chunkIndex, heightAt, mapSeed, style.biome);
 
   // 撤离广场 / 出生小营：玩法可读性优先（锚点固定，高度随种子变）
@@ -106,7 +138,13 @@ export function createLocalQuarryMap(
     mapSeed,
     setVoxel,
     isInWorld,
+    border,
   );
+
+  // 基岩界：最后铺四周高墙，不可挖穿
+  if (border === "bedrock") {
+    stampBorderWall(chunkIndex);
+  }
 
   fillInitialLight(chunks);
 
@@ -125,6 +163,7 @@ export function createLocalQuarryMap(
     chunks,
     seed: mapSeed,
     style,
+    borderMode: border,
     spawn: [sx + 0.5, skyEyeY, sz + 0.5],
     spawnFloor,
     initialDirection: [0, 0, -1],
@@ -137,6 +176,11 @@ export function createLocalQuarryMap(
     resourceCounts: resourceCountsFromIds(placed.ids),
     surfaceY: heightAt,
   };
+}
+
+/** HUD 展示：主题 · 时段 · 基岩界/虚空界 */
+export function formatMapStyleLabel(map: LocalQuarryMap): string {
+  return `${map.style.label} · ${LOCAL_BORDER_MODE_LABELS[map.borderMode]}`;
 }
 
 export function getLocalMapVoxel(
@@ -175,6 +219,7 @@ function fillDesignedTerrain(
   heightAt: (x: number, z: number) => number,
   seed: number,
   biome: LocalBiomeId,
+  borderMode: LocalBorderMode,
 ): void {
   // 表土厚度：荒漠/雪原更厚，荒原更薄露岩
   const soilDepth =
@@ -183,6 +228,11 @@ function fillDesignedTerrain(
       : biome === "wasteland"
         ? Math.max(1, DIRT_DEPTH - 1)
         : DIRT_DEPTH;
+  // 基岩界：y=0 不可挖穿；虚空界：底部也是普通岩石，可挖穿掉落
+  const floorId =
+    borderMode === "bedrock"
+      ? LOCAL_BLOCK_IDS.bedrock
+      : LOCAL_BLOCK_IDS.quarryStone;
 
   for (const chunk of chunks) {
     for (let lx = 0; lx < LOCAL_CHUNK_SIZE; lx += 1) {
@@ -196,7 +246,7 @@ function fillDesignedTerrain(
         for (let y = 0; y <= topY; y += 1) {
           let id: number;
           if (y === 0) {
-            id = LOCAL_BLOCK_IDS.bedrock;
+            id = floorId;
           } else if (y === topY) {
             id = topId;
           } else if (y >= topY - soilDepth) {
@@ -756,6 +806,39 @@ function stampRoute(
       if (Math.abs(ny - pathY) <= 1) {
         setColumnTop(chunks, nx, nz, ny, LOCAL_BLOCK_IDS.paleStone, heightAt);
       }
+    }
+  }
+}
+
+/**
+ * 世界边界基岩墙：挡住 renderRadius 外的虚空黄雾。
+ * 厚度 LOCAL_BORDER_WALL_THICKNESS，高度到 maxHeight 附近，避免开局像「贴图透明」。
+ */
+function stampBorderWall(chunks: Map<string, ChunkProtocol>): void {
+  const thickness = LOCAL_BORDER_WALL_THICKNESS;
+  const wallTop = LOCAL_MAX_HEIGHT - 2;
+  const edges: Array<readonly [number, number]> = [];
+  for (let t = 0; t < thickness; t += 1) {
+    const xLo = LOCAL_WORLD_MIN + t;
+    const xHi = LOCAL_WORLD_MAX - t;
+    const zLo = LOCAL_WORLD_MIN + t;
+    const zHi = LOCAL_WORLD_MAX - t;
+    for (let x = LOCAL_WORLD_MIN; x <= LOCAL_WORLD_MAX; x += 1) {
+      edges.push([x, zLo], [x, zHi]);
+    }
+    for (let z = LOCAL_WORLD_MIN; z <= LOCAL_WORLD_MAX; z += 1) {
+      edges.push([xLo, z], [xHi, z]);
+    }
+  }
+  // 去重
+  const seen = new Set<string>();
+  for (const [x, z] of edges) {
+    const key = `${x},${z}`;
+    if (seen.has(key) || !isInWorld(x, z)) continue;
+    seen.add(key);
+    // 整柱基岩到顶，平视/俯视都看不到墙外虚空
+    for (let y = 0; y <= wallTop; y += 1) {
+      setVoxel(chunks, x, y, z, LOCAL_BLOCK_IDS.bedrock);
     }
   }
 }

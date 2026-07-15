@@ -71,7 +71,7 @@ export class LocalWorldAdapter {
     } finally {
       textures.forEach(({ source }) => source.dispose());
     }
-    // 300×300 有 400 个 chunk：只预载出生点附近，其余按 World 请求增量供给
+    // 地图约 128×128（~8×8 chunk）：预载出生点邻域，其余按 World 请求增量供给
     world.onMessage({
       type: "LOAD",
       chunks: chunksNear(this.map, this.spawnChunk(), LOCAL_SPAWN_CHUNK_RADIUS),

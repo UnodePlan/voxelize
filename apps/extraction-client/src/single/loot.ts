@@ -14,10 +14,16 @@ import {
 import diamondOreUrl from "../assets/single/blocks/diamond_ore.png";
 import dirtUrl from "../assets/single/blocks/dirt.png";
 import goldOreUrl from "../assets/single/blocks/gold_ore.png";
+import grassTopUrl from "../assets/single/blocks/grass_top.png";
+import planksUrl from "../assets/single/blocks/oak_planks.png";
+import stoneUrl from "../assets/single/blocks/stone.png";
 
 import { disposeObjectTree } from "../game/object-disposal";
 
-import type { LocalResourceKey } from "./state";
+import {
+  LOCAL_RESOURCE_KEYS,
+  type LocalResourceKey,
+} from "./state";
 
 interface LocalLootEntry {
   availableAt: number;
@@ -30,14 +36,23 @@ interface LocalLootEntry {
   settled: boolean;
 }
 
+/** 树叶无独立 16px 图时复用草顶作为背包/掉落标识 */
 const RESOURCE_TEXTURE_URL: Record<LocalResourceKey, string> = {
   dirt: dirtUrl,
+  grass: grassTopUrl,
+  stone: stoneUrl,
+  planks: planksUrl,
+  leaves: grassTopUrl,
   gold: goldOreUrl,
   diamond: diamondOreUrl,
 };
 
 const RESOURCE_FALLBACK_COLOR: Record<LocalResourceKey, string> = {
   dirt: "#79523d",
+  grass: "#5d8a3a",
+  stone: "#8a8a8a",
+  planks: "#9a7348",
+  leaves: "#3d8c3a",
   gold: "#e0b43b",
   diamond: "#3dd2cc",
 };
@@ -53,8 +68,8 @@ export class LocalLootSystem {
   constructor(world: Object3D) {
     this.root.name = "single-local-loot";
     world.add(this.root);
-    // 预载资源贴图
-    for (const key of Object.keys(RESOURCE_TEXTURE_URL) as LocalResourceKey[]) {
+    // 预载全部资源贴图
+    for (const key of LOCAL_RESOURCE_KEYS) {
       void this.ensureTexture(key);
     }
   }
