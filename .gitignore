@@ -36,3 +36,7 @@ yarn-error.log
 **/test-results/
 **/playwright-report/
 **/blob-report/
+
+# Playwright MCP / 本地浏览器验收临时产物
+.playwright-mcp/
+/single-*.png
