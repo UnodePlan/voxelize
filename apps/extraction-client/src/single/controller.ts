@@ -50,6 +50,8 @@ export class SinglePlayerController {
   /** 世界方块耐久：松开/换人续挖不重置 */
   private readonly durability = new LocalBlockDurability();
   private animationFrame = 0;
+  /** rAF 被后台标签/自动化节流时的备份驱动（就绪后可停） */
+  private backupTimer = 0;
   private sessionGeneration = 0;
   private targetName: string | null = null;
   private insideExtraction = false;
@@ -148,15 +150,22 @@ export class SinglePlayerController {
   }
 
   start(): void {
-    if (this.animationFrame !== 0) return;
+    if (this.animationFrame !== 0 || this.backupTimer !== 0) return;
     void this.createSession();
     this.animationFrame = requestAnimationFrame(this.animate);
+    // 后台页/自动化环境 rAF 可能几乎不跑，导致永远 loading、热栏被藏
+    this.backupTimer = window.setInterval(() => {
+      this.tickFrame(performance.now());
+    }, 50);
   }
 
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
     cancelAnimationFrame(this.animationFrame);
+    this.animationFrame = 0;
+    window.clearInterval(this.backupTimer);
+    this.backupTimer = 0;
     window.clearTimeout(this.noticeTimeout);
     window.removeEventListener("pointerdown", this.unlockAudio);
     window.removeEventListener("keydown", this.unlockAudio);
@@ -227,10 +236,26 @@ export class SinglePlayerController {
   }
 
   private readonly animate = (now: number): void => {
+    // 先挂下一帧，避免 update 抛错时 rAF 链永久断开
+    if (!this.disposed) {
+      this.animationFrame = requestAnimationFrame(this.animate);
+    }
+    this.tickFrame(now);
+  };
+
+  private tickFrame(now: number): void {
     if (this.disposed) return;
     const runtime = this.runtime;
-    if (runtime !== null) this.handleFrame(runtime, runtime.update(now), now);
-    this.animationFrame = requestAnimationFrame(this.animate);
+    if (runtime === null) return;
+    try {
+      this.handleFrame(runtime, runtime.update(now), now);
+    } catch (error) {
+      console.error("[single] 帧循环异常", error);
+      this.dispatch({
+        type: "FAILED",
+        message: "本地世界更新失败，请刷新重试",
+      });
+    }
   };
 
   private handleFrame(

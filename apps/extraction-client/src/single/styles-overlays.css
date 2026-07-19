@@ -385,12 +385,17 @@
   font-size: 11px;
 }
 
+/* loading 仍显示热栏（略淡），避免「物品栏消失」误判；extracted/error 再隐藏 */
 .single-shell[data-phase="loading"] .single-crosshair,
-.single-shell[data-phase="loading"] .single-hotbar,
 .single-shell[data-phase="extracted"] .single-crosshair,
 .single-shell[data-phase="extracted"] .single-hotbar,
 .single-shell[data-phase="error"] .single-crosshair {
   display: none;
+}
+
+.single-shell[data-phase="loading"] .single-hotbar {
+  opacity: 0.55;
+  filter: saturate(0.7);
 }
 
 @keyframes single-pulse {

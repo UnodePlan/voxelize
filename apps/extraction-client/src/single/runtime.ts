@@ -288,10 +288,10 @@ export class LocalWorldRuntime {
 
     const targetVoxel =
       this.ready && this.interactive ? this.interact.target : null;
-    const potentialVoxel =
-      this.ready && this.interactive
-        ? this.interact.potential?.voxel ?? null
-        : null;
+    // potential 可能是坐标元组或带 .voxel 的对象（随 Core 版本）
+    const potentialRaw =
+      this.ready && this.interactive ? this.interact.potential : null;
+    const potentialVoxel = readPotentialVoxel(potentialRaw);
     return {
       deltaMs,
       moving,
@@ -307,10 +307,7 @@ export class LocalWorldRuntime {
               id: this.world.getVoxelAt(...targetVoxel),
               voxel: [...targetVoxel],
             },
-      potential:
-        potentialVoxel === null
-          ? null
-          : ([...potentialVoxel] as [number, number, number]),
+      potential: potentialVoxel,
     };
   }
 
@@ -621,4 +618,38 @@ export class LocalWorldRuntime {
       potential: null,
     };
   }
+}
+
+/**
+ * VoxelInteract.potential 在不同版本可能是 Coords3 或 { voxel: Coords3 }。
+ * 错误读取会抛错打断 rAF，导致永远 loading、快捷栏被 CSS 隐藏。
+ */
+function readPotentialVoxel(
+  potential: unknown,
+): [number, number, number] | null {
+  if (potential === null || potential === undefined) return null;
+  if (Array.isArray(potential) && potential.length >= 3) {
+    const [x, y, z] = potential;
+    if (
+      typeof x === "number" &&
+      typeof y === "number" &&
+      typeof z === "number"
+    ) {
+      return [x, y, z];
+    }
+  }
+  if (typeof potential === "object" && potential !== null && "voxel" in potential) {
+    const voxel = (potential as { voxel: unknown }).voxel;
+    if (Array.isArray(voxel) && voxel.length >= 3) {
+      const [x, y, z] = voxel;
+      if (
+        typeof x === "number" &&
+        typeof y === "number" &&
+        typeof z === "number"
+      ) {
+        return [x, y, z];
+      }
+    }
+  }
+  return null;
 }

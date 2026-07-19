@@ -13,9 +13,13 @@ import {
 } from "./map";
 import { createLocalTextureSources } from "./textures";
 
-/** 首次 LOAD 与就绪判定：出生点周围 chunk 半径（与 runtime renderRadius 对齐） */
-const LOCAL_SPAWN_CHUNK_RADIUS = 6;
-/** 进入可玩所需的出生点邻域（小于 renderRadius，更快 ready） */
+/**
+ * 首次 LOAD：出生点周围 chunk 半径。
+ * 过大（如 6 → 13×13 chunk）会在主线程/Worker 塞爆网格队列，
+ * rAF 卡死 → phase 永远 loading → 快捷栏被 CSS 隐藏。
+ */
+const LOCAL_SPAWN_CHUNK_RADIUS = 2;
+/** 进入可玩所需的出生点邻域（与首包一致，加载完即可开玩） */
 const LOCAL_READY_CHUNK_RADIUS = 2;
 
 interface LocalWorldPort {
