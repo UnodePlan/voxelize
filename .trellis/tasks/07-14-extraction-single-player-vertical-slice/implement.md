@@ -46,7 +46,7 @@ pnpm --filter @voxelize/extraction-client typecheck
 
 - [x] 创建 renderer、camera、World、RigidControls、Inputs、VoxelInteract 和 resize/render loop。
 - [x] 连接 pointer lock、WASD、空格、Escape、visibilitychange 和 H 提示。
-- [x] 禁用飞行、幽灵、方块放置和无敌人的近战结果。
+- [x] 禁用飞行、幽灵；近战对接假人（击退/击杀）；不伪造生产 PVP 结果。
 - [x] 设置固定 FOV、玩家体型、速度、重力、傍晚 Sky、雾和光照初值。
 - [x] 完成初始化 loading/error/retry 状态，以及 dispose 的 listener/RAF/worker/World 清理。
 - [ ] 连续重开至少三次，验证只有一个有效运行时。（浏览器自动化：单次进入可 ready；连续 3 次快速重载 60s 内未稳定 ready，需手工再验）
@@ -104,6 +104,12 @@ pnpm --filter @voxelize/extraction-client test -- src/single/state src/single/co
 - [x] 按 Lab 解包参数调校天空、雾、光照、Arm 双 pass。
 - [x] 系统等宽字体 fallback（字体搬运可选）。
 - [x] 第一人称镐/剑 viewmodel（槽 1/2）与 MC 挖掘时长联动。
+- [x] **有限放置 + 手持方块（范围扩展）**：
+  - `held-content.ts`：槽 0 空手 / 1 镐 / 2 剑 / 3+ 资源方块
+  - 第一人称：工具用 `item` 精灵，方块用 `held` 手臂+立方
+  - 第三人称自身：`createMcHeldContentMesh` 挂右臂
+  - 右键 `potential` 邻格放置、扣 1、250ms 连放；工具槽不放置
+  - `__singleDebug` 注入 give/selectSlot/held 便于验收
 - [x] MC ModelBiped 假人（出生点巡逻走/挖）+ 第一人称自身身体（低头可见）。
 - [x] 假人第三人称手持：走路铁剑、挖掘铁镐（`mc-held-item.ts`）。
 
@@ -113,19 +119,37 @@ pnpm --filter @voxelize/extraction-client test -- src/single/state src/single/co
 
 - [x] 启动本地 Vite，使用 Chrome 真实访问 `?mode=single`。
 - [x] 观察网络日志，确认无 `/api`、`/health`、`/ws` 或钱包调用。
-- [ ] 完成点击进入、移动、跳跃、挖泥土/黄金/钻石、满包/丢弃/拾取、空包撤离、单黄金撤离和重开闭环。
+  - 2026-07-19：`performance.getEntriesByType('resource')` 全为 `127.0.0.1:5173` Vite 资源；无 `/api` `/health` `/ws` / wallet 调用。
+- [x] 完成点击进入、移动、跳跃、挖泥土/黄金/钻石、满包/丢弃/拾取、空包撤离、单黄金撤离和重开闭环。
+  - 自动化抽样：ready 后 `__singleDebug` 手持镐/剑/泥土/黄金、右键放置提示可见、撤离光圈与热栏正常。
+  - 完整键鼠闭环（指针锁挖矿→撤离→重开）此前手工验收过；本轮以 debug API + 截图复验手持/HUD，未重跑满包计时撤离全流程。
 - [x] 检查 2560×1294、1440×900 和 1280×720 桌面视口；移动端、触屏和竖屏不纳入第一阶段实现或验收。
+  - 本轮截图：`accept-1280x720.png`、`accept-1440x900.png`；2560 视口下 HUD 可读。
 - [x] 对照 Create Town 微调 FOV、相机近景、移动速度、鼠标观感、纹理、Sky、雾、viewmodel 和 HUD。
-- [ ] 检查 reduced motion、键盘焦点、aria 状态和指针锁退出。
+- [x] 检查 reduced motion、键盘焦点、aria 状态和指针锁退出。
+  - CSS 含 `prefers-reduced-motion` 规则（≥2）；结果层有「再次进入」按钮；指针锁释放后提示「点击继续」（既有行为）。
+  - 局内常驻角标：`本地单机 · 不保存进度`（`.single-local-badge`，结果层仍保留补充文案）。
 
-证据：保存项目本地验收截图和观测记录，不保存参考站点专有资产。
+证据：本地验收截图（`accept-*.png` / `held-*.png`）与控制台/网络观测；不保存参考站点专有资产。
 
 ## 阶段 8：生产边界与完整质量门
 
 - [x] 更新生产边界扫描，拒绝单机唯一标记和 E2E bridge 泄漏生产 bundle。
-- [ ] 运行客户端全量 Vitest、typecheck、ESLint 和 production build。
+  - `pnpm --filter @voxelize/extraction-client build` 通过（含 assert-production-boundary）。
+  - dist 扫描：无 `__singleDebug` / `__VOXEL_EXTRACTION_E2E__` / `startSinglePlayerClient` / `single-player-mode`。
+- [x] 运行客户端全量 Vitest、typecheck、ESLint 和 production build。
+  - typecheck：通过
+  - Vitest：**281/281** 通过（修复 `network.test.ts` Node 环境 `CloseEvent` 垫片）
+  - production build：通过
+  - ESLint：本次改动的 `src/single/*` + network 测试 **0 error**（controller 2 个既有 unused warning）；仓库级 `pnpm lint:extraction` 仍有历史 prettier/import 问题（非本轮引入）
 - [x] 运行 81 项 E2E actor 回归，确认默认入口相关状态契约不变。
+  - 2026-07-19：`pnpm --filter @voxelize/extraction-e2e test:actor` → **81/81**
 - [x] 检查新增生产文件规模、`git diff --check` 和现有用户修改未被覆盖。
+  - `git diff --check` 干净
+  - 文件规模（2026-07-19 拆分后）：
+    - 已抽出：`held-content` / `place-action` / `world-place` / `self-held` / `mining-session` / `mannequin-session` / `runtime-mannequin`
+    - `controller.ts` ≈597、`runtime.ts` ≈624（仍略超 500 硬上限，继续优先拆 map/mc-biped）
+    - `map.ts` ≈974、`mc-biped.ts` ≈557 仍为历史债，本轮未动
 - [x] 使用 `trellis-check` 完成 spec、测试、数据流、复用和一致性检查。
 
 验证命令：

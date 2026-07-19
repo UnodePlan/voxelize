@@ -163,6 +163,28 @@ export function isBlockMineable(blockId: number): boolean {
   return profile !== null && profile.hardness >= 0;
 }
 
+/**
+ * 背包资源 → 可放置方块 id（对齐挖掘掉落反向）。
+ * 石头掉落统一放成风化石台（更像建筑石板）。
+ */
+export const LOCAL_RESOURCE_PLACE_BLOCK: Readonly<
+  Record<LocalResourceKey, number>
+> = {
+  dirt: LOCAL_BLOCK_IDS.dirt,
+  grass: LOCAL_BLOCK_IDS.grass,
+  stone: LOCAL_BLOCK_IDS.paleStone,
+  planks: LOCAL_BLOCK_IDS.weatheredTimber,
+  leaves: LOCAL_BLOCK_IDS.leaves,
+  gold: LOCAL_BLOCK_IDS.gold,
+  diamond: LOCAL_BLOCK_IDS.diamond,
+};
+
+export function placeBlockIdForResource(
+  resource: LocalResourceKey,
+): number | null {
+  return LOCAL_RESOURCE_PLACE_BLOCK[resource] ?? null;
+}
+
 export const LOCAL_BLOCK_DISPLAY_NAMES: Readonly<Record<number, string>> = {
   [LOCAL_BLOCK_IDS.quarryStone]: "采石场岩壁",
   [LOCAL_BLOCK_IDS.paleStone]: "风化石台",
@@ -365,9 +387,7 @@ function makeSolidBlock(
 function makeMultiFaceBlock(
   id: number,
   name: string,
-  faceGroups: Readonly<
-    Record<string, { group: string; index: number }>
-  >,
+  faceGroups: Readonly<Record<string, { group: string; index: number }>>,
   options: Partial<LocalSerializedBlock> = {},
 ): LocalSerializedBlock {
   const faces = LOCAL_FACE_TEMPLATES.map((face) => {

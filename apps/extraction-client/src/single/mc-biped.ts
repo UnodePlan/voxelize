@@ -89,7 +89,6 @@ export class McBipedMannequin implements MannequinActor {
   private moving = false;
   /** 第一人称自身模式：身体前移 + 低头才显示躯干/腿 */
   private firstPersonSelf = false;
-
   /**
    * 运动学击退速度（格/秒）。demo 暂停 set 时由本类积分位移。
    * mass≈1 时与 RigidBody 冲量同量级。
@@ -203,7 +202,8 @@ export class McBipedMannequin implements MannequinActor {
       Math.hypot(
         position[0] - this.root.position.x,
         position[2] - this.root.position.z,
-      ) + Math.abs(position[1] - this.root.position.y) * 0.1;
+      ) +
+      Math.abs(position[1] - this.root.position.y) * 0.1;
     this.moving = dist > 0.0008;
   }
 
@@ -237,11 +237,7 @@ export class McBipedMannequin implements MannequinActor {
    * 每帧紧贴眼位与水平朝向（无插值，避免自身身体漂移）。
    * @param lookDir 世界空间视线方向（可含 pitch；水平用于 yaw，y 用于低头门控）
    */
-  syncEyeFrame(
-    position: Vector3,
-    lookDir: Vector3,
-    moving: boolean,
-  ): void {
+  syncEyeFrame(position: Vector3, lookDir: Vector3, moving: boolean): void {
     this.root.position.copy(position);
     this.targetPos.copy(position);
     const dx = lookDir.x;
@@ -255,14 +251,23 @@ export class McBipedMannequin implements MannequinActor {
 
     if (this.firstPersonSelf) {
       const lookDown = lookDir.y < FP_LOOK_DOWN_Y;
-      // 极低头藏躯干顶面；臂始终关（viewmodel 负责手）
+      // 极低头藏躯干顶面
       const showTorso = lookDown && lookDir.y >= FP_HIDE_TORSO_Y;
       this.leftLeg.visible = lookDown;
       this.rightLeg.visible = lookDown;
       this.body.visible = showTorso;
+      // 第一人称手持由 viewmodel 负责；低头自视时不露身体手臂，
+      // 避免与 FP 手臂叠成「奇怪双臂」（浏览器截图已确认）
       this.leftArm.visible = false;
       this.rightArm.visible = false;
     }
+  }
+
+  /**
+   * 兼容 runtime 调用；FP 自身手臂始终隐藏（viewmodel 负责手持）。
+   */
+  setHoldingItem(_holding: boolean): void {
+    if (this.firstPersonSelf) this.rightArm.visible = false;
   }
 
   playArmSwingAnimation(): void {
@@ -309,6 +314,7 @@ export class McBipedMannequin implements MannequinActor {
       this.heldSlot.remove(this.heldSlot.children[0]!);
     }
     if (item !== null) this.heldSlot.add(item);
+    this.setHoldingItem(item !== null);
   }
 
   update(): void {
@@ -383,7 +389,7 @@ export class McBipedMannequin implements MannequinActor {
     if (this.digProgress >= 0) {
       this.digProgress = Math.min(1, this.digProgress + dt * 2.8);
       let sp = this.digProgress;
-      let bodyY = Math.sin(Math.sqrt(sp) * Math.PI * 2) * 0.2;
+      const bodyY = Math.sin(Math.sqrt(sp) * Math.PI * 2) * 0.2;
       this.body.rotation.y = bodyY;
 
       sp = 1 - this.digProgress;
@@ -392,9 +398,7 @@ export class McBipedMannequin implements MannequinActor {
       const swing = Math.sin(sp * Math.PI);
       const headPitch = 0;
       const extra =
-        Math.sin(this.digProgress * Math.PI) *
-        -(headPitch - 0.7) *
-        0.75;
+        Math.sin(this.digProgress * Math.PI) * -(headPitch - 0.7) * 0.75;
       rightArmX = rightArmX - (swing * 1.2 + extra);
       rightArmY += bodyY * 2;
       rightArmZ += Math.sin(this.digProgress * Math.PI) * -0.4;
@@ -432,10 +436,7 @@ export function yawFromLookXZ(dx: number, dz: number): number {
   return Math.atan2(-dx, -dz);
 }
 
-function makeSkinMaterial(
-  map: Texture,
-  overlay: boolean,
-): MeshLambertMaterial {
+function makeSkinMaterial(map: Texture, overlay: boolean): MeshLambertMaterial {
   return new MeshLambertMaterial({
     map,
     side: overlay ? DoubleSide : FrontSide,
@@ -515,12 +516,7 @@ function setSkinUVs(
   ];
 
   const top = toFace(u + depth, v, u + width + depth, v + depth);
-  const bottom = toFace(
-    u + width + depth,
-    v,
-    u + width * 2 + depth,
-    v + depth,
-  );
+  const bottom = toFace(u + width + depth, v, u + width * 2 + depth, v + depth);
   const left = toFace(u, v + depth, u + depth, v + depth + height);
   const front = toFace(
     u + depth,

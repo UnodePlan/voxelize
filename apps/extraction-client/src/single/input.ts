@@ -14,6 +14,8 @@ export interface LocalInputActions {
 
 export class LocalInputController {
   private miningHeld = false;
+  /** 右键放置（对齐 Voxelize demo / 原版） */
+  private placeHeld = false;
 
   constructor(
     private readonly canvas: HTMLCanvasElement,
@@ -31,12 +33,21 @@ export class LocalInputController {
     return this.miningHeld;
   }
 
+  get secondaryHeld(): boolean {
+    return this.placeHeld;
+  }
+
   cancelMining(): void {
     this.miningHeld = false;
   }
 
+  cancelPlace(): void {
+    this.placeHeld = false;
+  }
+
   dispose(): void {
     this.cancelMining();
+    this.cancelPlace();
     this.canvas.removeEventListener("mousedown", this.handleMouseDown);
     this.canvas.removeEventListener("contextmenu", this.preventContextMenu);
     this.canvas.removeEventListener("wheel", this.handleWheel);
@@ -47,17 +58,23 @@ export class LocalInputController {
 
   private readonly handleMouseDown = (event: MouseEvent): void => {
     if (
-      event.button === 0 &&
-      this.actions.isGameplayActive() &&
-      !this.actions.isInventoryOpen() &&
-      this.actions.isPointerLocked()
+      !this.actions.isGameplayActive() ||
+      this.actions.isInventoryOpen() ||
+      !this.actions.isPointerLocked()
     ) {
+      return;
+    }
+    if (event.button === 0) {
       this.miningHeld = true;
+    } else if (event.button === 2) {
+      // 右键：放置（contextmenu 已 preventDefault）
+      this.placeHeld = true;
     }
   };
 
   private readonly handleMouseUp = (event: MouseEvent): void => {
     if (event.button === 0) this.cancelMining();
+    if (event.button === 2) this.cancelPlace();
   };
 
   private readonly handleKeyDown = (event: KeyboardEvent): void => {
@@ -69,6 +86,7 @@ export class LocalInputController {
         event.preventDefault();
         this.actions.closeInventory();
         this.cancelMining();
+        this.cancelPlace();
       }
       return;
     }
@@ -78,6 +96,7 @@ export class LocalInputController {
       event.preventDefault();
       this.actions.toggleInventory();
       this.cancelMining();
+      this.cancelPlace();
       return;
     }
 
@@ -114,7 +133,10 @@ export class LocalInputController {
   };
 
   private readonly handleVisibility = (): void => {
-    if (document.hidden) this.cancelMining();
+    if (document.hidden) {
+      this.cancelMining();
+      this.cancelPlace();
+    }
   };
 
   private readonly preventContextMenu = (event: Event): void =>

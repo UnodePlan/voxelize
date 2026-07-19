@@ -102,17 +102,23 @@ flowchart LR
 - 第一阶段的平台基线是带键盘和鼠标的 Chromium 桌面浏览器，横向视口不小于 1280×720；不设计触控输入、虚拟摇杆或竖屏布局。
 - 使用 `PerspectiveCamera`，桌面初始 FOV 约 80°，以 Create Town 的宽阔近景感为视觉基准，通过浏览器并排检查微调。
 - 眼高、体型、速度、重力和跳跃从生产 `VoxelWorldSession` 参数提取共享常量，避免单机与多人操作完全分裂。
-- 使用 `RigidControls`、`Inputs` 和 `VoxelInteract`；禁止飞行、幽灵和方块放置。
-- 指针锁后启用移动与挖掘；解锁、隐藏页面、结果或 dispose 时立即清空移动并取消挖掘。
-- viewmodel 为相机子节点，不参与世界碰撞；包含低多边形/像素化手臂和镐，使用轻微步行动作与挖掘挥动。
+- 使用 `RigidControls`、`Inputs` 和 `VoxelInteract`；禁止飞行与幽灵。
+- 指针锁后启用移动、挖掘、有限放置与近战；解锁、隐藏页面、结果或 dispose 时立即清空移动并取消挖掘/放置。
+- viewmodel 为独立 armScene 双 pass，不参与世界碰撞：
+  - 空手：官方 CanvasBox 手臂
+  - 镐/剑：16×16 平面精灵 + `customType: "item"`
+  - 资源方块：手臂 + 方块组 + `customType: "held"`
+- 第三人称自身身体右臂同步 `heldContent`（工具平面 / 方块小立方）。
 - 动作只使用 transform，遵守减少动态效果设置；不使用 bounce 或大幅屏幕晃动。
 
-## 挖掘、背包与掉落
+## 挖掘、背包、放置与掉落
 
-- 可挖资源仅为泥土、黄金和钻石，基础时长沿用生产规则：0.5s、1.5s、3s。
+- 可挖资源仅为泥土、黄金和钻石，基础时长沿用生产规则：0.5s、1.5s、3s（工具可加速）。
 - 每帧以 `VoxelInteract.target` 校验目标；松开左键、换目标、超距、解锁或进入结果均清零。
 - 完成时先 claim 坐标，再修改 World，再写背包；任一步失败均不重复产出。
 - 背包保持 12 格、同类优先、单格 64。状态逻辑使用纯函数并做资源守恒测试。
+- **有限放置**：右键 + 资源槽 → `potential` 邻格；`placeBlockIdForResource` 映射方块 id；`canPlaceBlock`（空格、高度、AABB）通过后 `applyServerVoxelUpdate` 写入并 `consumeInventorySlot` 扣 1。
+- 工具槽右键不放置；不实现 Builder 幽灵预览、自由建造库存或放置撤销栈。
 - 满包产出和 Q 整槽丢弃生成本地掉落实体；掉落使用 World block mesh 的 0.42 缩放视觉，轻微旋转。
 - 掉落按固定半径自动拾取；手动丢弃者短暂排除，避免同帧立刻捡回。
 - 结果只汇总当前背包内泥土、黄金和钻石数量，不计算价值、分数或永久入账。

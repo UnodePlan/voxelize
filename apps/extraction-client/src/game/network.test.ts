@@ -10,6 +10,20 @@ import { createIntent, GameNetwork, websocketUrl } from "./network";
 
 const manifest = decodeExtractionManifest(manifestJson);
 
+/** Node/Vitest 环境无 DOM CloseEvent；与浏览器语义对齐的最小垫片 */
+class TestCloseEvent {
+  readonly type: string;
+  readonly code: number;
+  constructor(type: string, init: { code?: number } = {}) {
+    this.type = type;
+    this.code = init.code ?? 1000;
+  }
+}
+if (typeof globalThis.CloseEvent === "undefined") {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (globalThis as any).CloseEvent = TestCloseEvent;
+}
+
 describe("game network boundary", () => {
   afterEach(() => {
     vi.useRealTimers();

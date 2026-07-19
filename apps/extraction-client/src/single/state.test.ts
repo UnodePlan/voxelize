@@ -6,6 +6,7 @@ import {
   LOCAL_STACK_LIMIT,
   LOCAL_TOOL_HOTBAR_SLOTS,
   addResource,
+  consumeInventorySlot,
   createInitialLocalGameState,
   dropInventorySlot,
   inventoryResourceCounts,
@@ -60,6 +61,19 @@ describe("local single-player state", () => {
     expect(isToolHotbarSlot(3)).toBe(false);
   });
 
+  it("consumes one item from a resource slot for placement", () => {
+    const inventory = emptyInventory();
+    inventory[3] = { resource: "dirt", quantity: 2 };
+    const once = consumeInventorySlot(inventory, 3);
+    expect(once.resource).toBe("dirt");
+    expect(once.inventory[3]).toEqual({ resource: "dirt", quantity: 1 });
+    const twice = consumeInventorySlot(once.inventory, 3);
+    expect(twice.resource).toBe("dirt");
+    expect(twice.inventory[3]).toBeNull();
+    // 工具槽不可消耗
+    expect(consumeInventorySlot(inventory, 1).resource).toBeNull();
+  });
+
   it("stacks the same resource before using a stable empty resource slot", () => {
     const inventory = emptyInventory();
     inventory[3] = { resource: "gold", quantity: LOCAL_STACK_LIMIT - 1 };
@@ -100,13 +114,15 @@ describe("local single-player state", () => {
   });
 
   it("returns overflow without silently destroying a full backpack resource", () => {
-    const inventory = Array.from({ length: LOCAL_INVENTORY_SLOTS }, (_, index) =>
-      isToolHotbarSlot(index)
-        ? null
-        : {
-            resource: "dirt" as const,
-            quantity: LOCAL_STACK_LIMIT,
-          },
+    const inventory = Array.from(
+      { length: LOCAL_INVENTORY_SLOTS },
+      (_, index) =>
+        isToolHotbarSlot(index)
+          ? null
+          : {
+              resource: "dirt" as const,
+              quantity: LOCAL_STACK_LIMIT,
+            },
     );
 
     const result = addResource(inventory, "diamond", 4);

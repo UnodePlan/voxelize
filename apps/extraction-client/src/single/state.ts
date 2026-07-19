@@ -53,9 +53,7 @@ export function isLocalResourceKey(value: string): value is LocalResourceKey {
 }
 
 export function isToolHotbarSlot(slot: number): boolean {
-  return (
-    Number.isInteger(slot) && slot >= 0 && slot < LOCAL_TOOL_HOTBAR_SLOTS
-  );
+  return Number.isInteger(slot) && slot >= 0 && slot < LOCAL_TOOL_HOTBAR_SLOTS;
 }
 
 export type LocalVoxel = readonly [number, number, number];
@@ -234,7 +232,8 @@ export function reduceLocalGameState(
         return state;
       }
       const nextElapsed =
-        typeof action.elapsedMs === "number" && Number.isFinite(action.elapsedMs)
+        typeof action.elapsedMs === "number" &&
+        Number.isFinite(action.elapsedMs)
           ? Math.min(mining.requiredMs, Math.max(0, action.elapsedMs))
           : Math.min(
               mining.requiredMs,
@@ -364,6 +363,38 @@ export function dropInventorySlot(
   const next = [...inventory];
   next[slot] = null;
   return { dropped: { ...dropped }, inventory: next };
+}
+
+/**
+ * 从指定槽扣 1 个资源（放置用）。工具槽 / 空槽失败。
+ */
+export function consumeInventorySlot(
+  inventory: ReadonlyArray<LocalInventorySlot | null>,
+  slot: number,
+): {
+  inventory: ReadonlyArray<LocalInventorySlot | null>;
+  resource: LocalResourceKey | null;
+} {
+  assertInventory(inventory);
+  if (
+    !Number.isInteger(slot) ||
+    slot < 0 ||
+    slot >= inventory.length ||
+    isToolHotbarSlot(slot)
+  ) {
+    return { inventory, resource: null };
+  }
+  const current = inventory[slot];
+  if (current === null || current.quantity <= 0) {
+    return { inventory, resource: null };
+  }
+  const next = [...inventory];
+  if (current.quantity <= 1) {
+    next[slot] = null;
+  } else {
+    next[slot] = { resource: current.resource, quantity: current.quantity - 1 };
+  }
+  return { inventory: next, resource: current.resource };
 }
 
 /** 拖拽整理：交换两个槽；同源、非法索引或工具槽则原样返回。 */

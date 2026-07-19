@@ -1,7 +1,10 @@
-import { Mesh, MeshBasicMaterial, PlaneGeometry } from "three";
+import { BoxGeometry, Mesh, MeshBasicMaterial, PlaneGeometry } from "three";
 import { describe, expect, it } from "vitest";
 
-import { applyThirdPersonHeldPose } from "./mc-held-item";
+import {
+  applyThirdPersonBlockPose,
+  applyThirdPersonHeldPose,
+} from "./mc-held-item";
 
 function dummyItemMesh(): Mesh {
   return new Mesh(new PlaneGeometry(8, 8), new MeshBasicMaterial());
@@ -27,5 +30,17 @@ describe("applyThirdPersonHeldPose", () => {
     expect(Math.abs(sword.position.x)).toBeLessThan(2);
     expect(Math.abs(sword.position.y)).toBeLessThan(3);
     expect(Math.abs(sword.position.z)).toBeLessThan(3);
+  });
+});
+
+describe("applyThirdPersonBlockPose", () => {
+  it("places the block cube near the hand tip in pixel space", () => {
+    const block = new Mesh(new BoxGeometry(5, 5, 5), new MeshBasicMaterial());
+    applyThirdPersonBlockPose(block);
+    expect(block.rotation.order).toBe("YXZ");
+    // 指尖方向 y 偏负，靠近 heldSlot
+    expect(block.position.y).toBeLessThan(-5);
+    expect(Math.abs(block.position.x)).toBeLessThan(3);
+    expect(Math.abs(block.position.z)).toBeLessThan(4);
   });
 });

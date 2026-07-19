@@ -1,9 +1,4 @@
-import {
-  Inputs,
-  RigidControls,
-  VoxelInteract,
-  World,
-} from "@voxelize/core";
+import { Inputs, RigidControls, VoxelInteract, World } from "@voxelize/core";
 import {
   AmbientLight,
   Color,
@@ -21,7 +16,7 @@ import { disposeObjectTree } from "../game/object-disposal";
 import { LocalAnimalSystem, planBiomeAnimals } from "./animals";
 import { createExtractionBeacon } from "./beacon";
 import { BlockBreakFx } from "./block-break-fx";
-import { humanoidAabb, raycastAabb } from "./combat";
+import type { LocalHeldContent } from "./held-content";
 import {
   createEmptyMcSceneActors,
   disposeMcSceneActors,
@@ -29,9 +24,20 @@ import {
   updateMcSceneActors,
   type McSceneActors,
 } from "./mc-scene-actors";
+import {
+  applyMannequinKnockbackImpulse,
+  applyPlayerKnockbackImpulse,
+  killMannequinActor,
+  mannequinEyePosition,
+  playMannequinHurt,
+  raycastMannequinActor,
+  respawnMannequinNearPoint,
+} from "./runtime-mannequin";
+import { SelfHeldVisual } from "./self-held";
 import { configureLocalAtmosphere } from "./sky-paint";
 import { LocalViewmodel, type LocalHeldTool } from "./viewmodel";
 import { LocalWorldAdapter } from "./world-adapter";
+import { canPlaceLocalBlock, placeLocalBlock } from "./world-place";
 
 export interface LocalRuntimeFrame {
   deltaMs: number;
@@ -48,6 +54,11 @@ export interface LocalRuntimeFrame {
   playerPosition: Vector3;
   ready: boolean;
   target: { id: number; voxel: [number, number, number] } | null;
+  /**
+   * 准星邻格放置位（VoxelInteract.potential）。
+   * 对齐 examples 右键放置。
+   */
+  potential: [number, number, number] | null;
 }
 
 export interface LocalRuntimeActions {
@@ -109,6 +120,8 @@ export class LocalWorldRuntime {
   private animals: LocalAnimalSystem | null = null;
   /** 出生点假人 + 第一人称自身身体 */
   private mcActors: McSceneActors = createEmptyMcSceneActors();
+  /** 自身第三人称手持（与假人 demo mesh 分离） */
+  private readonly selfHeld = new SelfHeldVisual();
   private initialized = false;
   private ready = false;
   private disposed = false;
@@ -264,17 +277,21 @@ export class LocalWorldRuntime {
     this.renderer.render(this.world, this.camera);
     this.renderer.autoClear = false;
     this.renderer.clearDepth();
-    // armCamera 只复制投影参数，位姿保持原点（与 examples/create.town 一致）
-    this.armCamera.fov = this.camera.fov;
-    this.armCamera.near = this.camera.near;
-    this.armCamera.far = this.camera.far;
+    // armCamera：只同步 aspect；near/far/fov 固定，避免主相机 far=3000 等干扰手持裁剪
     this.armCamera.aspect = this.camera.aspect;
+    this.armCamera.fov = 90;
+    this.armCamera.near = 0.05;
+    this.armCamera.far = 10;
     this.armCamera.updateProjectionMatrix();
     this.renderer.render(this.viewmodel.scene, this.armCamera);
     this.renderer.autoClear = true;
 
     const targetVoxel =
       this.ready && this.interactive ? this.interact.target : null;
+    const potentialVoxel =
+      this.ready && this.interactive
+        ? this.interact.potential?.voxel ?? null
+        : null;
     return {
       deltaMs,
       moving,
@@ -290,6 +307,10 @@ export class LocalWorldRuntime {
               id: this.world.getVoxelAt(...targetVoxel),
               voxel: [...targetVoxel],
             },
+      potential:
+        potentialVoxel === null
+          ? null
+          : ([...potentialVoxel] as [number, number, number]),
     };
   }
 
@@ -328,122 +349,144 @@ export class LocalWorldRuntime {
     this.breakFx.burst(voxel, color, now);
   }
 
-  /** 同步第一人称握持（空手手臂 / 镐 / 剑） */
+  /**
+   * 同步握持：第一人称 viewmodel + 第三人称自身右臂。
+   * 支持空手 / 镐剑 / 背包方块。
+   */
+  setHeldContent(content: LocalHeldContent, animate = true): void {
+    this.viewmodel.setHeldContent(content, animate);
+    void this.selfHeld.sync(content, this.mcActors.selfBody, () =>
+      this.viewmodel.heldContent,
+    );
+  }
+
+  /** @deprecated 兼容仅工具三态 */
   setHeldTool(tool: LocalHeldTool, animate = true): void {
-    this.viewmodel.setHeldTool(tool, animate);
+    if (tool === "empty") {
+      this.setHeldContent({ kind: "empty" }, animate);
+    } else {
+      this.setHeldContent({ kind: "tool", tool }, animate);
+    }
   }
 
   get heldTool(): LocalHeldTool {
     return this.viewmodel.heldTool;
   }
 
+  get heldContent(): LocalHeldContent {
+    return this.viewmodel.heldContent;
+  }
+
+  /**
+   * 调试：第一人称 Arm 子树（是否有右手/方块）+ 世界坐标。
+   */
+  debugArmHeld(): {
+    held: LocalHeldContent;
+    childCount: number;
+    children: Array<{
+      name: string;
+      type: string;
+      childCount: number;
+      worldPos: [number, number, number];
+      visible: boolean;
+    }>;
+  } {
+    const arm = this.viewmodel.arm;
+    const children: Array<{
+      name: string;
+      type: string;
+      childCount: number;
+      worldPos: [number, number, number];
+      visible: boolean;
+    }> = [];
+    arm.updateMatrixWorld(true);
+    arm.traverse((obj) => {
+      if (obj === arm) return;
+      const p = new Vector3();
+      obj.getWorldPosition(p);
+      children.push({
+        name: obj.name || obj.type,
+        type: obj.type,
+        childCount: obj.children.length,
+        worldPos: [p.x, p.y, p.z],
+        visible: obj.visible,
+      });
+    });
+    return {
+      held: this.viewmodel.heldContent,
+      childCount: arm.children.length,
+      children: children.slice(0, 24),
+    };
+  }
+
   getDirection(): Vector3 {
     return this.camera.getWorldDirection(new Vector3()).normalize();
   }
 
-  /**
-   * 视线是否命中出生点 Steve 假人（用于近战优先于挖方块）。
-   * 已击倒隐藏时不可命中。
-   * @returns 命中距离；未命中 null
-   */
   raycastMannequin(maxDistance: number): number | null {
-    const actor = this.mcActors.mannequin;
-    const demo = this.mcActors.mannequinDemo;
-    if (actor === null || !actor.root.visible) return null;
-    if (demo !== null && !demo.isAlive) return null;
-    const eye = this.controls.object.position;
-    const dir = this.getDirection();
-    const pos = actor.root.position;
-    const aabb = humanoidAabb([pos.x, pos.y, pos.z], actor.eyeHeight);
-    return raycastAabb(
-      [eye.x, eye.y, eye.z],
-      [dir.x, dir.y, dir.z],
-      aabb,
+    return raycastMannequinActor(
+      this.mcActors,
+      this.controls.object.position,
+      this.getDirection(),
       maxDistance,
     );
   }
 
-  /** 假人受击挥臂反馈 */
   playMannequinHurtFeedback(): void {
-    this.mcActors.mannequin?.playArmSwingAnimation();
+    playMannequinHurt(this.mcActors);
   }
 
-  /**
-   * 假人受击击退（运动学速度；demo 会暂停巡逻直到停下）。
-   * @returns 是否已应用（假人存在且支持 knockback）
-   */
-  applyMannequinKnockback(
-    impulse: readonly [number, number, number],
-  ): boolean {
-    const actor = this.mcActors.mannequin;
-    const demo = this.mcActors.mannequinDemo;
-    if (actor === null || actor.applyKnockback === undefined) return false;
-    if (demo !== null && !demo.isAlive) return false;
-    actor.applyKnockback(impulse);
-    return true;
+  applyMannequinKnockback(impulse: readonly [number, number, number]): boolean {
+    return applyMannequinKnockbackImpulse(this.mcActors, impulse);
   }
 
-  /**
-   * 击倒假人：隐藏并清空手持。
-   * @returns 死亡时持有的工具（供掉落）；无假人或无持有则 null
-   */
   killMannequin(): "sword" | "pickaxe" | null {
-    const demo = this.mcActors.mannequinDemo;
-    if (demo === null) {
-      const actor = this.mcActors.mannequin;
-      if (actor !== null) {
-        actor.root.visible = false;
-        actor.setHeldItem?.(null);
-        actor.clearKnockback?.();
-      }
-      return null;
-    }
-    return demo.kill();
+    return killMannequinActor(this.mcActors);
   }
 
-  /** 假人眼睛世界坐标；无则 null */
   getMannequinEyePosition(): [number, number, number] | null {
-    const demo = this.mcActors.mannequinDemo;
-    if (demo !== null) return demo.getEyePosition();
-    const actor = this.mcActors.mannequin;
-    if (actor === null) return null;
-    const p = actor.root.position;
-    return [p.x, p.y, p.z];
+    return mannequinEyePosition(this.mcActors);
   }
 
-  /**
-   * 在击杀点附近复活（巡逻线以附近点为中心）。
-   * @param near 击杀时眼睛 xz 附近
-   */
   respawnMannequinNear(
     near: readonly [number, number],
     pathHalfLength = 2.5,
   ): void {
-    const demo = this.mcActors.mannequinDemo;
-    if (demo === null) {
-      const actor = this.mcActors.mannequin;
-      if (actor !== null) actor.root.visible = true;
-      return;
-    }
-    // 击杀点附近 2–4 格随机方位
-    const angle = Math.random() * Math.PI * 2;
-    const dist = 2 + Math.random() * 2;
-    const x = near[0] + Math.cos(angle) * dist;
-    const z = near[1] + Math.sin(angle) * dist;
-    demo.respawnNear(x, z, pathHalfLength);
+    respawnMannequinNearPoint(this.mcActors, near, pathHalfLength);
   }
 
-  /**
-   * 玩家受击击退：直接加 RigidBody 冲量（mass≈1 时与假人初速度同量级）。
-   * 供后续对战 / 环境伤害复用。
-   */
   applyPlayerKnockback(impulse: readonly [number, number, number]): void {
-    this.controls.body.applyImpulse([impulse[0], impulse[1], impulse[2]]);
+    applyPlayerKnockbackImpulse(this.controls, impulse);
   }
 
-  /** 第一人称挥臂（攻击） */
   playAttackSwing(): void {
     this.viewmodel.arm.doSwing();
+  }
+
+  /** 是否可在 potential 邻格放置（见 world-place） */
+  canPlaceBlock(
+    voxel: readonly [number, number, number],
+    blockId: number,
+  ): boolean {
+    return canPlaceLocalBlock(this.placeContext(), voxel, blockId);
+  }
+
+  /** 本地放置方块（server 源立即生效） */
+  placeBlock(
+    voxel: readonly [number, number, number],
+    blockId: number,
+  ): boolean {
+    return placeLocalBlock(this.placeContext(), voxel, blockId);
+  }
+
+  private placeContext() {
+    return {
+      ready: this.ready,
+      disposed: this.disposed,
+      world: this.world,
+      controls: this.controls,
+      adapter: this.adapter,
+    };
   }
 
   /**
@@ -494,6 +537,7 @@ export class LocalWorldRuntime {
       this.world.remove(root);
     });
     this.mcActors = createEmptyMcSceneActors();
+    this.selfHeld.dispose();
     this.animals?.dispose();
     this.animals = null;
     this.breakFx.dispose();
@@ -555,6 +599,13 @@ export class LocalWorldRuntime {
       return;
     }
     this.mcActors = actors;
+    // 身体异步就绪后补挂当前手持（可能已选中资源槽）
+    this.selfHeld.invalidateAttachment();
+    void this.selfHeld.sync(
+      this.viewmodel.heldContent,
+      this.mcActors.selfBody,
+      () => this.viewmodel.heldContent,
+    );
   }
 
   private emptyFrame(deltaMs: number): LocalRuntimeFrame {
@@ -567,6 +618,7 @@ export class LocalWorldRuntime {
       playerPosition: this.controls.object.position.clone(),
       ready: false,
       target: null,
+      potential: null,
     };
   }
 }

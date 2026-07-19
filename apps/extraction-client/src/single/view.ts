@@ -174,7 +174,7 @@ export class LocalGameView {
         ? "<strong>点击继续</strong>"
         : [
             "<strong>进入矿坑</strong>",
-            "<span>WASD 移动　空格跳跃　左键挖方块 / 攻击假人</span>",
+            "<span>WASD 移动　空格跳跃　左键挖/攻击　右键放置</span>",
             "<span>1 空手(半心)　2 铁镐　3 铁剑(一心)　Q 丢弃　E 背包</span>",
           ].join("");
   }
@@ -188,9 +188,7 @@ export class LocalGameView {
     const signature = icons.join(",");
     if (this.healthBar.dataset.sig === signature) return;
     this.healthBar.dataset.sig = signature;
-    this.healthBar.innerHTML = icons
-      .map((icon) => heartMarkup(icon))
-      .join("");
+    this.healthBar.innerHTML = icons.map((icon) => heartMarkup(icon)).join("");
     this.healthBar.setAttribute(
       "aria-label",
       `生命 ${(state.playerHealth / 2).toFixed(state.playerHealth % 2 === 0 ? 0 : 1)} / 10`,
@@ -235,7 +233,7 @@ export class LocalGameView {
     );
     if (rows.length === 0) {
       this.resultList.innerHTML =
-        "<div class=\"single-result-empty\">空背包撤离 · 未采集资源</div>";
+        '<div class="single-result-empty">空背包撤离 · 未采集资源</div>';
       return;
     }
     this.resultList.innerHTML = rows
@@ -308,6 +306,7 @@ function template(): string {
     <main class="single-shell" data-phase="loading" data-inventory="closed">
       <canvas class="single-canvas" aria-label="单机体素采石场"></canvas>
       <div class="single-vignette" aria-hidden="true"></div>
+      <div class="single-local-badge" role="status">本地单机 · 不保存进度</div>
       <div class="single-elapsed" aria-label="本局经过时间">00:00</div>
       <div class="single-style" hidden aria-label="地图风格"></div>
       <div class="single-target" hidden></div>

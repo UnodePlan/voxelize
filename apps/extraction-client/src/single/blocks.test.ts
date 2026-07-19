@@ -6,6 +6,7 @@ import {
   LOCAL_MINEABLE_BLOCKS,
   createLocalBlocks,
   isBlockMineable,
+  placeBlockIdForResource,
 } from "./blocks";
 
 describe("local block registry", () => {
@@ -30,6 +31,18 @@ describe("local block registry", () => {
     expect(blocks["Quarry Stone"].aabbs).toEqual([
       { minX: 0, minY: 0, minZ: 0, maxX: 1, maxY: 1, maxZ: 1 },
     ]);
+  });
+
+  it("maps inventory resources to placeable block ids", () => {
+    expect(placeBlockIdForResource("dirt")).toBe(LOCAL_BLOCK_IDS.dirt);
+    expect(placeBlockIdForResource("grass")).toBe(LOCAL_BLOCK_IDS.grass);
+    expect(placeBlockIdForResource("stone")).toBe(LOCAL_BLOCK_IDS.paleStone);
+    expect(placeBlockIdForResource("planks")).toBe(
+      LOCAL_BLOCK_IDS.weatheredTimber,
+    );
+    expect(placeBlockIdForResource("leaves")).toBe(LOCAL_BLOCK_IDS.leaves);
+    expect(placeBlockIdForResource("gold")).toBe(LOCAL_BLOCK_IDS.gold);
+    expect(placeBlockIdForResource("diamond")).toBe(LOCAL_BLOCK_IDS.diamond);
   });
 
   it("allows mining registered terrain blocks but keeps bedrock and beacon solid", () => {
@@ -60,9 +73,9 @@ describe("local block registry", () => {
     expect(LOCAL_MINEABLE_BLOCKS[LOCAL_BLOCK_IDS.quarryStone]).toMatchObject({
       resource: "stone",
     });
-    expect(LOCAL_MINEABLE_BLOCKS[LOCAL_BLOCK_IDS.weatheredTimber]).toMatchObject(
-      { resource: "planks" },
-    );
+    expect(
+      LOCAL_MINEABLE_BLOCKS[LOCAL_BLOCK_IDS.weatheredTimber],
+    ).toMatchObject({ resource: "planks" });
     expect(LOCAL_MINEABLE_BLOCKS[LOCAL_BLOCK_IDS.leaves]).toMatchObject({
       resource: "leaves",
     });

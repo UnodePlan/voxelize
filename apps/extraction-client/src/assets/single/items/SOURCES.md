@@ -14,14 +14,16 @@ Extracted from `https://create.town/lab` Next.js static media:
 
 ## First-person equip (lab-aligned)
 
-| Hotbar slot (1-based keys) | Held | Arm API |
+| Hotbar slot (0-based) | Held | Arm API |
 |---|---|---|
-| 1 | empty hand | `setArmObject(undefined)` → CanvasBox arm |
-| 2 | iron pickaxe | plane sprite + `customType: "item"` |
-| 3 | iron sword | same as pickaxe, different texture |
-| 4+ | resources only | empty hand in FP |
+| 0 | empty hand | `setArmObject(undefined)` → CanvasBox arm |
+| 1 | iron pickaxe | plane sprite + `customType: "item"` |
+| 2 | iron sword | same as pickaxe, different texture |
+| 3+ with qty | resource block | arm+block group + `customType: "held"` |
 
 Inventory rule: slots 0–2 never store resources (`LOCAL_TOOL_HOTBAR_SLOTS` in `state.ts`).  
 Runtime:
+- 手持内容：`heldContentFromSlot`（`held-content.ts`）
 - 第一人称：`LocalViewmodel`（`viewmodel.ts`）
-- 第三人称假人：`createMcHeldItemMesh`（`mc-held-item.ts`）挂到 `McBipedMannequin` 右臂
+- 第三人称自身/假人：`createMcHeldContentMesh`（`mc-held-item.ts`）
+- 有限放置：右键 + 资源槽 → `potential` 邻格（见 controller `tryPlace`）

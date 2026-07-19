@@ -1,28 +1,16 @@
 import { Vector3 } from "three";
 
 import { LocalSfx } from "./audio";
-import {
-  getBlockMiningProfile,
-  LOCAL_BLOCK_DEBRIS_COLORS,
-  LOCAL_BLOCK_DISPLAY_NAMES,
-  LOCAL_BLOCK_IDS,
-} from "./blocks";
 import { LocalBlockDurability } from "./block-durability";
-import {
-  applyDamage,
-  attackDamageHalfHearts,
-  fullHealth,
-  isDead,
-  knockbackImpulse,
-  LOCAL_ATTACK_COOLDOWN_MS,
-  LOCAL_ATTACK_RANGE,
-} from "./combat";
+import { LOCAL_BLOCK_DISPLAY_NAMES } from "./blocks";
+import { fullHealth, isDead } from "./combat";
 import {
   hasFallenOutOfTerrain,
   isInsideExtraction,
   miningProgress,
   pickRandomSkyDrop,
 } from "./gameplay-math";
+import { heldContentFromSlot } from "./held-content";
 import { LocalInputController, cycleInventorySlot } from "./input";
 import { LocalLootSystem } from "./loot";
 import {
@@ -32,11 +20,14 @@ import {
   LOCAL_WORLD_MIN,
 } from "./map";
 import {
-  digIntervalMs,
-  digRateFor,
-  harvestDrop,
-  miningDurationMs,
-} from "./mining";
+  tickMannequinRespawn,
+  tryMannequinAttack,
+} from "./mannequin-session";
+import {
+  advanceMiningSession,
+  syncBreakCrackEntries,
+} from "./mining-session";
+import { attemptPlace, placeVoxelKey } from "./place-action";
 import { LocalWorldRuntime, type LocalRuntimeFrame } from "./runtime";
 import {
   addResource,
@@ -44,12 +35,10 @@ import {
   dropInventorySlot,
   LOCAL_EXTRACTION_REQUIRED_MS,
   reduceLocalGameState,
-  voxelKey,
   type LocalGameAction,
   type LocalResourceKey,
 } from "./state";
 import { LocalGameView } from "./view";
-import { heldToolFromSlot } from "./viewmodel";
 
 export class SinglePlayerController {
   private readonly view: LocalGameView;
@@ -70,13 +59,17 @@ export class SinglePlayerController {
   private lastDigAt = 0;
   private lastExtractBucket = -1;
   private wasExtracted = false;
-  /** 假人生命（半心）；与玩家独立 */
-  private mannequinHealth = fullHealth();
-  private mannequinRespawnAt = 0;
-  /** 击杀时 xz，复活落在附近 */
-  private mannequinDeathXZ: [number, number] | null = null;
-  private attackCooldownUntil = 0;
+  /** 假人近战会话（生命 / 复活 / 冷却） */
+  private mannequin = {
+    health: fullHealth(),
+    respawnAt: 0,
+    deathXZ: null as [number, number] | null,
+    attackCooldownUntil: 0,
+  };
   private wasPrimaryHeld = false;
+  private wasSecondaryHeld = false;
+  /** 右键连放冷却（对齐 demo 连点节奏） */
+  private placeCooldownUntil = 0;
   /** 虚空重生冷却，避免同帧连跳 */
   private lastVoidRespawnAt = 0;
 
@@ -115,6 +108,43 @@ export class SinglePlayerController {
     // 任意指针/键盘手势后解锁音频上下文
     window.addEventListener("pointerdown", this.unlockAudio, { once: true });
     window.addEventListener("keydown", this.unlockAudio, { once: true });
+  }
+
+  /**
+   * 浏览器调试用：注入资源、选槽、检查第一人称手持场景树。
+   * 挂到 window.__singleDebug（见 main.ts）。
+   */
+  debugGive(resource: LocalResourceKey, quantity = 8): void {
+    const result = addResource(this.state.inventory, resource, quantity);
+    this.dispatch({ type: "INVENTORY_REPLACED", inventory: result.inventory });
+    // 自动选中第一个该资源槽
+    const idx = result.inventory.findIndex(
+      (s) => s?.resource === resource && s.quantity > 0,
+    );
+    if (idx >= 0) {
+      this.dispatch({ type: "SLOT_SELECTED", slot: idx });
+    }
+    this.syncHeldTool(false);
+  }
+
+  debugSelectSlot(slot: number): void {
+    this.dispatch({ type: "SLOT_SELECTED", slot });
+    this.syncHeldTool(false);
+  }
+
+  debugHeldSnapshot(): {
+    selectedSlot: number;
+    content: ReturnType<typeof heldContentFromSlot>;
+    arm: ReturnType<LocalWorldRuntime["debugArmHeld"]> | null;
+  } {
+    return {
+      selectedSlot: this.state.selectedSlot,
+      content: heldContentFromSlot(
+        this.state.selectedSlot,
+        this.state.inventory,
+      ),
+      arm: this.runtime?.debugArmHeld() ?? null,
+    };
   }
 
   start(): void {
@@ -235,6 +265,8 @@ export class SinglePlayerController {
       } else if (!this.state.inventoryOpen) {
         this.collectLoot(frame.playerPosition, now, frame.deltaMs);
         this.tickMannequinRespawn(now);
+        // 右键放置与左键挖掘/攻击并行（不同鼠标键）
+        this.tryPlace(runtime, frame, now);
         const attacked = this.tryAttack(runtime, now);
         if (!attacked) {
           this.advanceMining(runtime, frame, now);
@@ -244,102 +276,93 @@ export class SinglePlayerController {
         this.playStepSfx(frame, now);
       } else {
         this.input?.cancelMining();
+        this.input?.cancelPlace();
         this.stopActiveMining();
       }
     }
     this.wasPrimaryHeld = this.input?.primaryHeld === true;
+    this.wasSecondaryHeld = this.input?.secondaryHeld === true;
     // 挥臂仅在主动按住挖掘时；裂纹按世界耐久显示（松开也保留）
     const digProgress = miningProgress(this.state);
     runtime.setMiningProgress(digProgress);
-    this.syncBreakCrack(runtime, frame);
+    this.syncBreakCrack(runtime);
     this.render();
   }
 
   /**
-   * 近战：准星命中假人时优先攻击（不挖方块）。
-   * 上升沿或冷却结束后按住可再砍；伤害见 combat.ts。
+   * 右键放置：委托 place-action（邻格 / 扣 1 / 冷却）。
    */
-  private tryAttack(runtime: LocalWorldRuntime, now: number): boolean {
-    if (!runtime.isLocked || this.input?.primaryHeld !== true) return false;
-    if (this.mannequinHealth <= 0) return false;
-
-    const hitDist = runtime.raycastMannequin(LOCAL_ATTACK_RANGE);
-    if (hitDist === null) return false;
-
-    const rising = !this.wasPrimaryHeld;
-    const cooled = now >= this.attackCooldownUntil;
-    // 点按立刻砍；按住则等冷却结束再砍（类似原版连点节奏）
-    if (!rising && !cooled) return true; // 仍算「对准实体」，抑制挖矿
-    if (!cooled) return true;
-
-    const tool = heldToolFromSlot(this.state.selectedSlot);
-    const damage = attackDamageHalfHearts(tool);
-    this.mannequinHealth = applyDamage(this.mannequinHealth, damage);
-    this.attackCooldownUntil = now + LOCAL_ATTACK_COOLDOWN_MS;
+  private tryPlace(
+    runtime: LocalWorldRuntime,
+    frame: LocalRuntimeFrame,
+    now: number,
+  ): void {
+    const result = attemptPlace({
+      pointerLocked: runtime.isLocked,
+      secondaryHeld: this.input?.secondaryHeld === true,
+      wasSecondaryHeld: this.wasSecondaryHeld,
+      now,
+      placeCooldownUntil: this.placeCooldownUntil,
+      selectedSlot: this.state.selectedSlot,
+      inventory: this.state.inventory,
+      potential: frame.potential,
+      canPlace: (voxel, blockId) => runtime.canPlaceBlock(voxel, blockId),
+      place: (voxel, blockId) => runtime.placeBlock(voxel, blockId),
+    });
+    if (result.kind !== "placed") return;
+    this.dispatch({
+      type: "INVENTORY_REPLACED",
+      inventory: result.inventory,
+    });
+    const key = placeVoxelKey(result.voxel);
+    this.durability.clear(key);
+    this.claimed.delete(key);
+    this.syncHeldTool(false);
     runtime.playAttackSwing();
-    runtime.playMannequinHurtFeedback();
-    // 沿视线推开假人（剑更远）
-    const dir = runtime.getDirection();
-    const impulse = knockbackImpulse(tool, [dir.x, dir.y, dir.z]);
-    runtime.applyMannequinKnockback(impulse);
-    this.sfx.play("dig", { rate: tool === "sword" ? 1.15 : 1.05 });
+    this.sfx.play("dig", { rate: 1.08 });
+    this.placeCooldownUntil = result.nextCooldownUntil;
+  }
 
-    if (isDead(this.mannequinHealth)) {
-      this.finishMannequinKill(runtime, now);
-    } else {
-      const heartsLeft = (this.mannequinHealth / 2).toFixed(
-        this.mannequinHealth % 2 === 0 ? 0 : 1,
+  /** 近战：准星命中假人时优先攻击（不挖方块）。 */
+  private tryAttack(runtime: LocalWorldRuntime, now: number): boolean {
+    const result = tryMannequinAttack(runtime, {
+      pointerLocked: runtime.isLocked,
+      primaryHeld: this.input?.primaryHeld === true,
+      wasPrimaryHeld: this.wasPrimaryHeld,
+      selectedSlot: this.state.selectedSlot,
+      now,
+      state: this.mannequin,
+    });
+    if (result.kind === "miss") return false;
+    if (result.kind === "aiming") return true;
+    this.mannequin = result.state;
+    if (result.targetName !== null) this.targetName = result.targetName;
+    if (result.notice !== null) this.showNotice(result.notice);
+    this.sfx.play("dig", { rate: result.sfxRate });
+    if (result.killDrop !== null) {
+      this.loot?.dropTool(
+        result.killDrop.tool,
+        result.killDrop.position,
+        now,
+        350,
       );
-      this.targetName = `Steve · ${heartsLeft}♥`;
+      this.sfx.play("drop");
     }
     return true;
   }
 
-  /**
-   * 击倒：立刻消失 + 掉落当前持有物；3 秒后在附近复活。
-   */
-  private finishMannequinKill(
-    runtime: LocalWorldRuntime,
-    now: number,
-  ): void {
-    const eye = runtime.getMannequinEyePosition();
-    const deathXZ: [number, number] = eye !== null ? [eye[0], eye[2]] : [0, 0];
-    this.mannequinDeathXZ = deathXZ;
-    // 掉落点：腰部附近（眼高约 1.75）
-    const dropPos: [number, number, number] =
-      eye !== null
-        ? [eye[0], eye[1] - 1.2, eye[2]]
-        : [deathXZ[0], 1, deathXZ[1]];
-
-    const held = runtime.killMannequin();
-    if (held !== null) {
-      this.loot?.dropTool(held, dropPos, now, 350);
-      this.sfx.play("drop");
-    }
-    this.mannequinRespawnAt = now + 3_000;
-    this.targetName = null;
-    this.showNotice(held !== null ? "击倒了 Steve · 掉落了物品" : "击倒了 Steve");
-  }
-
   private tickMannequinRespawn(now: number): void {
-    if (this.mannequinHealth > 0) return;
-    if (this.mannequinRespawnAt <= 0 || now < this.mannequinRespawnAt) return;
-    const runtime = this.runtime;
-    const near = this.mannequinDeathXZ ?? [0, 0];
-    runtime?.respawnMannequinNear(near);
-    this.mannequinHealth = fullHealth();
-    this.mannequinRespawnAt = 0;
-    this.mannequinDeathXZ = null;
-    this.showNotice("Steve 在附近重新站了起来");
+    const next = tickMannequinRespawn(this.runtime, this.mannequin, now);
+    this.mannequin = next.state;
+    if (next.notice !== null) this.showNotice(next.notice);
   }
 
   private collectLoot(position: Vector3, now: number, deltaMs: number): void {
+    let inventoryChanged = false;
     this.loot?.updateAndCollect(position, now, deltaMs, (pickup) => {
       if (pickup.kind === "tool") {
         // 工具快捷栏已常驻；拾取仅反馈，不占资源格
-        this.showNotice(
-          pickup.tool === "sword" ? "捡到铁剑" : "捡到铁镐",
-        );
+        this.showNotice(pickup.tool === "sword" ? "捡到铁剑" : "捡到铁镐");
         this.sfx.play("pickup");
         return 0;
       }
@@ -348,10 +371,18 @@ export class SinglePlayerController {
         pickup.resource,
         pickup.quantity,
       );
-      this.dispatch({ type: "INVENTORY_REPLACED", inventory: result.inventory });
-      if (result.remainder < pickup.quantity) this.sfx.play("pickup");
+      this.dispatch({
+        type: "INVENTORY_REPLACED",
+        inventory: result.inventory,
+      });
+      if (result.remainder < pickup.quantity) {
+        this.sfx.play("pickup");
+        inventoryChanged = true;
+      }
       return result.remainder;
     });
+    // 选中资源槽从空→有时需刷新手持方块
+    if (inventoryChanged) this.syncHeldTool(false);
   }
 
   private advanceMining(
@@ -359,135 +390,33 @@ export class SinglePlayerController {
     frame: LocalRuntimeFrame,
     now: number,
   ): void {
-    const tool = heldToolFromSlot(this.state.selectedSlot);
-    const target = frame.target;
-    const profile = target === null ? null : getBlockMiningProfile(target.id);
-    const key = target === null ? null : voxelKey(target.voxel);
-    if (
-      this.input?.primaryHeld !== true ||
-      !runtime.isLocked ||
-      target === null ||
-      profile === null ||
-      key === null ||
-      this.claimed.has(key)
-    ) {
-      // 松开/失焦：只结束本段挥挖，不清除世界耐久
-      this.stopActiveMining();
-      return;
-    }
-
-    const requiredMs = miningDurationMs(profile, tool);
-    const drop = harvestDrop(profile.drop, tool, profile);
-    const priorDamage = this.durability.get(key, target.id);
-    if (
-      this.state.mining?.targetKey !== key ||
-      this.state.mining.requiredMs !== requiredMs
-    ) {
-      this.dispatch({
-        type: "MINING_STARTED",
-        target: target.voxel,
-        resource: drop,
-        displayName: profile.displayName,
-        requiredMs,
-        // 续挖：从世界耐久恢复进度（换工具只改速度）
-        elapsedMs: priorDamage * requiredMs,
-      });
-      this.sfx.play("dig", { rate: digRateFor(drop, tool) });
-      this.lastDigAt = now;
-    }
-
-    // 按当前工具速度累加 0–1 耐久
-    const amount =
-      requiredMs > 0 ? Math.max(0, frame.deltaMs) / requiredMs : 1;
-    const damage = this.durability.apply(key, target.id, amount);
-    this.dispatch({
-      type: "MINING_ADVANCED",
-      deltaMs: frame.deltaMs,
-      targetKey: key,
-      elapsedMs: damage * requiredMs,
-    });
-    if (now - this.lastDigAt > digIntervalMs(tool)) {
-      this.sfx.play("dig", { rate: digRateFor(drop, tool) });
-      this.lastDigAt = now;
-    }
-    if (damage >= 1) {
-      this.completeMining(runtime, target, drop, now);
-    }
-  }
-
-  /**
-   * 裂纹：所有已损伤方块常驻显示，不依赖准星指向。
-   * 方块 id 已变或已 claim 的条目跳过。
-   */
-  private syncBreakCrack(
-    runtime: LocalWorldRuntime,
-    _frame: LocalRuntimeFrame,
-  ): void {
-    const entries = this.durability.snapshot().flatMap((snap) => {
-      if (this.claimed.has(snap.key) || !(snap.damage > 0)) return [];
-      // 世界方块已变（被别的逻辑替换）则不画裂纹
-      if (runtime.world.getVoxelAt(...snap.voxel) !== snap.blockId) {
-        return [];
-      }
-      return [
-        {
-          key: snap.key,
-          progress: snap.damage,
-          voxel: snap.voxel,
+    this.lastDigAt = advanceMiningSession(
+      {
+        selectedSlot: this.state.selectedSlot,
+        mining: this.state.mining,
+        claimed: this.claimed,
+        durability: this.durability,
+        primaryHeld: this.input?.primaryHeld === true,
+        pointerLocked: runtime.isLocked,
+        lastDigAt: this.lastDigAt,
+        dispatch: (action) => this.dispatch(action),
+        stopActiveMining: () => this.stopActiveMining(),
+        playSfx: (name, opts) => this.sfx.play(name, opts),
+        dropLoot: (resource, quantity, position, t, excludeMs) => {
+          this.loot?.drop(resource, quantity, position, t, excludeMs);
         },
-      ];
-    });
-    runtime.setBreakCracks(entries);
-  }
-
-  private completeMining(
-    runtime: LocalWorldRuntime,
-    target: { id: number; voxel: [number, number, number] },
-    drop: LocalResourceKey | null,
-    now: number,
-  ): void {
-    const key = voxelKey(target.voxel);
-    if (
-      this.claimed.has(key) ||
-      runtime.world.getVoxelAt(...target.voxel) !== target.id
-    ) {
-      this.durability.clear(key);
-      this.stopActiveMining();
-      return;
-    }
-    this.claimed.add(key);
-    this.durability.clear(key);
-    try {
-      runtime.adapter.applyServerVoxelUpdate(
-        runtime.world,
-        target.voxel,
-        LOCAL_BLOCK_IDS.air,
-      );
-    } catch {
-      this.claimed.delete(key);
-      this.stopActiveMining();
-      return;
-    }
-    // 完整裂纹列表由 syncBreakCrack 每帧刷新；此处只播破碎特效
-    runtime.playBlockBreakBurst(
-      target.voxel,
-      LOCAL_BLOCK_DEBRIS_COLORS[target.id] ?? "#888888",
+      },
+      runtime,
+      frame,
       now,
     );
-    this.sfx.play("break", {
-      rate: digRateFor(drop, heldToolFromSlot(this.state.selectedSlot)),
-    });
-    if (drop !== null) {
-      this.loot?.drop(
-        drop,
-        1,
-        [target.voxel[0] + 0.5, target.voxel[1] + 0.55, target.voxel[2] + 0.5],
-        now,
-        280,
-      );
-      this.sfx.play("drop");
-    }
-    this.stopActiveMining();
+  }
+
+  private syncBreakCrack(runtime: LocalWorldRuntime): void {
+    syncBreakCrackEntries(
+      { claimed: this.claimed, durability: this.durability },
+      runtime,
+    );
   }
 
   private dropSelectedSlot(): void {
@@ -509,6 +438,7 @@ export class SinglePlayerController {
       900,
     );
     this.dispatch({ type: "INVENTORY_REPLACED", inventory: result.inventory });
+    this.syncHeldTool(false);
     this.sfx.play("drop");
   }
 
@@ -525,8 +455,8 @@ export class SinglePlayerController {
   }
 
   private syncHeldTool(animate: boolean): void {
-    this.runtime?.setHeldTool(
-      heldToolFromSlot(this.state.selectedSlot),
+    this.runtime?.setHeldContent(
+      heldContentFromSlot(this.state.selectedSlot, this.state.inventory),
       animate,
     );
   }
@@ -623,10 +553,15 @@ export class SinglePlayerController {
     this.state = createInitialLocalGameState();
     this.claimed = new Set();
     this.durability.clearAll();
-    this.mannequinHealth = fullHealth();
-    this.mannequinRespawnAt = 0;
-    this.attackCooldownUntil = 0;
+    this.mannequin = {
+      health: fullHealth(),
+      respawnAt: 0,
+      deathXZ: null,
+      attackCooldownUntil: 0,
+    };
     this.wasPrimaryHeld = false;
+    this.wasSecondaryHeld = false;
+    this.placeCooldownUntil = 0;
     this.targetName = null;
     this.insideExtraction = false;
     this.lastExtractBucket = -1;
@@ -660,5 +595,3 @@ export class SinglePlayerController {
     });
   }
 }
-
-

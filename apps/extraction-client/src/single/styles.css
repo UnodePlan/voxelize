@@ -47,6 +47,7 @@ body.single-player-mode #app {
   box-shadow: none;
 }
 
+.single-local-badge,
 .single-elapsed,
 .single-style,
 .single-target,
@@ -109,6 +110,32 @@ body.single-player-mode #app {
     height: 13px;
     background-size: 14px 13px;
   }
+}
+
+/* 局内常驻：不遮挡准星/热栏，结果层仍有补充文案 */
+.single-local-badge {
+  top: 12px;
+  left: 12px;
+  z-index: 4;
+  padding: 3px 8px;
+  border: 1px solid rgb(255 255 255 / 18%);
+  border-radius: 2px;
+  color: rgb(255 255 255 / 72%);
+  background: rgb(8 10 12 / 55%);
+  font-size: 11px;
+  letter-spacing: 0.03em;
+  text-shadow: 1px 1px 0 #000;
+  pointer-events: none;
+  user-select: none;
+}
+
+.single-shell[data-phase="loading"] .single-local-badge {
+  opacity: 0.55;
+}
+
+.single-shell[data-phase="extracted"] .single-local-badge {
+  /* 结果卡已含「不保存」；角标略淡避免叠字 */
+  opacity: 0.45;
 }
 
 .single-elapsed {
