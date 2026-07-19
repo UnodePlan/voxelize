@@ -9,8 +9,16 @@ use super::{
 };
 use crate::match_world::MATCH_PLAYER_CAPACITY;
 
+/// 生产成局人数与席位上限（DEV 可在 2..=MATCH_SIZE 间缩小）。
 pub const MATCH_SIZE: usize = MATCH_PLAYER_CAPACITY;
+/// DEV 默认成局人数（需开启 DEV match mode）。
+pub const DEV_DEFAULT_MATCH_SIZE: usize = 2;
 pub const RECONNECT_WINDOW: Duration = Duration::seconds(60);
+
+/// 校验并返回合法 match capacity（2..=MATCH_SIZE）。
+pub fn sanitize_match_capacity(size: usize) -> Option<usize> {
+    (2..=MATCH_SIZE).contains(&size).then_some(size)
+}
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct SeatId(u8);
@@ -25,6 +33,7 @@ impl TryFrom<usize> for SeatId {
     type Error = SeatIdError;
 
     fn try_from(value: usize) -> Result<Self, Self::Error> {
+        // 席位索引上界仍为生产容量，允许 DEV 更短 roster
         if value < MATCH_SIZE {
             Ok(Self(value as u8))
         } else {
@@ -53,15 +62,24 @@ pub struct FrozenParticipant {
     pub enqueued_at: OffsetDateTime,
 }
 
+/// 冻结名单：长度 = 本局 capacity（2..=MATCH_SIZE）。
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct FrozenRoster([FrozenParticipant; MATCH_SIZE]);
+pub struct FrozenRoster(Vec<FrozenParticipant>);
 
 impl FrozenRoster {
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
     pub fn iter(&self) -> impl ExactSizeIterator<Item = &FrozenParticipant> {
         self.0.iter()
     }
 
-    pub fn participants(&self) -> &[FrozenParticipant; MATCH_SIZE] {
+    pub fn participants(&self) -> &[FrozenParticipant] {
         &self.0
     }
 }
@@ -70,15 +88,14 @@ impl TryFrom<Vec<QueuedPlayer>> for FrozenRoster {
     type Error = FrozenRosterError;
 
     fn try_from(players: Vec<QueuedPlayer>) -> Result<Self, Self::Error> {
-        if players.len() != MATCH_SIZE {
-            return Err(FrozenRosterError::WrongSize {
-                actual: players.len(),
-            });
+        let size = players.len();
+        if sanitize_match_capacity(size).is_none() {
+            return Err(FrozenRosterError::WrongSize { actual: size });
         }
 
-        let mut accounts = HashSet::with_capacity(MATCH_SIZE);
-        let mut public_ids = HashSet::with_capacity(MATCH_SIZE);
-        let mut participants = Vec::with_capacity(MATCH_SIZE);
+        let mut accounts = HashSet::with_capacity(size);
+        let mut public_ids = HashSet::with_capacity(size);
+        let mut participants = Vec::with_capacity(size);
         for (index, player) in players.into_iter().enumerate() {
             if !accounts.insert(player.account_id) {
                 return Err(FrozenRosterError::DuplicateAccount(player.account_id));
@@ -89,7 +106,7 @@ impl TryFrom<Vec<QueuedPlayer>> for FrozenRoster {
                 ));
             }
             let seat_id = SeatId::try_from(index)
-                .map_err(|_| FrozenRosterError::WrongSize { actual: MATCH_SIZE })?;
+                .map_err(|_| FrozenRosterError::WrongSize { actual: size })?;
             participants.push(FrozenParticipant {
                 seat_id,
                 account_id: player.account_id,
@@ -97,13 +114,6 @@ impl TryFrom<Vec<QueuedPlayer>> for FrozenRoster {
                 enqueued_at: player.enqueued_at,
             });
         }
-        let participants = participants
-            .try_into()
-            .map_err(
-                |players: Vec<FrozenParticipant>| FrozenRosterError::WrongSize {
-                    actual: players.len(),
-                },
-            )?;
         Ok(Self(participants))
     }
 }

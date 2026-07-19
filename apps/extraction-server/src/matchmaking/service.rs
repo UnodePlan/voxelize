@@ -131,22 +131,84 @@ impl MatchmakingService {
         seeds: Arc<dyn SeedGenerator>,
         versions: MatchVersions,
     ) -> Arc<Self> {
-        Self::start_with_event_sink(
+        Self::start_with_match_size(
             repository,
             clock,
             ids,
             seeds,
             versions,
+            super::MATCH_SIZE,
+        )
+    }
+
+    /// 指定成局人数（2..=MATCH_SIZE）；测试与 DEV 联调用。
+    pub fn start_with_match_size(
+        repository: Arc<dyn MatchmakingRepository>,
+        clock: Arc<dyn Clock>,
+        ids: Arc<dyn IdGenerator>,
+        seeds: Arc<dyn SeedGenerator>,
+        versions: MatchVersions,
+        match_size: usize,
+    ) -> Arc<Self> {
+        Self::start_with_capacity(
+            repository,
+            clock,
+            ids,
+            seeds,
+            versions,
+            match_size,
             Arc::new(StderrMatchEventSink),
         )
     }
 
+    #[cfg(any(test, feature = "e2e-control"))]
     pub(crate) fn start_with_event_sink(
         repository: Arc<dyn MatchmakingRepository>,
         clock: Arc<dyn Clock>,
         ids: Arc<dyn IdGenerator>,
         seeds: Arc<dyn SeedGenerator>,
         versions: MatchVersions,
+        events: Arc<dyn MatchEventSink>,
+    ) -> Arc<Self> {
+        Self::start_with_event_sink_and_size(
+            repository,
+            clock,
+            ids,
+            seeds,
+            versions,
+            super::MATCH_SIZE,
+            events,
+        )
+    }
+
+    #[cfg(any(test, feature = "e2e-control"))]
+    pub(crate) fn start_with_event_sink_and_size(
+        repository: Arc<dyn MatchmakingRepository>,
+        clock: Arc<dyn Clock>,
+        ids: Arc<dyn IdGenerator>,
+        seeds: Arc<dyn SeedGenerator>,
+        versions: MatchVersions,
+        match_size: usize,
+        events: Arc<dyn MatchEventSink>,
+    ) -> Arc<Self> {
+        Self::start_with_capacity(
+            repository,
+            clock,
+            ids,
+            seeds,
+            versions,
+            match_size,
+            events,
+        )
+    }
+
+    fn start_with_capacity(
+        repository: Arc<dyn MatchmakingRepository>,
+        clock: Arc<dyn Clock>,
+        ids: Arc<dyn IdGenerator>,
+        seeds: Arc<dyn SeedGenerator>,
+        versions: MatchVersions,
+        match_size: usize,
         events: Arc<dyn MatchEventSink>,
     ) -> Arc<Self> {
         let (sender, receiver) = mpsc::channel(COMMAND_CAPACITY);
@@ -161,6 +223,7 @@ impl MatchmakingService {
             versions,
             gate.clone(),
             sender.clone(),
+            match_size,
         )
         .with_event_sink(events.clone());
         runtime.spawn(coordinator.run(receiver));

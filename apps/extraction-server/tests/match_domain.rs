@@ -10,15 +10,18 @@ use time::{Duration, OffsetDateTime};
 use uuid::Uuid;
 
 #[test]
-fn frozen_roster_requires_ten_distinct_accounts_and_public_ids() {
+fn frozen_roster_requires_valid_capacity_and_distinct_ids() {
+    // 合法区间 2..=MATCH_SIZE；1 / 11 非法
     assert_eq!(
-        FrozenRoster::try_from(players(9)),
-        Err(FrozenRosterError::WrongSize { actual: 9 })
+        FrozenRoster::try_from(players(1)),
+        Err(FrozenRosterError::WrongSize { actual: 1 })
     );
     assert_eq!(
         FrozenRoster::try_from(players(11)),
         Err(FrozenRosterError::WrongSize { actual: 11 })
     );
+    assert!(FrozenRoster::try_from(players(2)).is_ok());
+    assert!(FrozenRoster::try_from(players(MATCH_SIZE)).is_ok());
 
     let mut duplicate_account = players(MATCH_SIZE);
     duplicate_account[9].account_id = duplicate_account[0].account_id;

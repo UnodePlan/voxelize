@@ -165,6 +165,23 @@ async fn queue_snapshot_reads_idle_queued_and_active_state_without_mutation() {
 }
 
 #[tokio::test]
+async fn dev_match_size_two_forms_roster_without_ten_players() {
+    let harness = Harness::with_match_size(2).await;
+    let accounts = accounts(2);
+    harness.connect_all(&accounts).await;
+    harness.service.enqueue(accounts[0]).await.unwrap();
+    let snapshot = harness.service.enqueue(accounts[1]).await.unwrap();
+    assert_eq!(snapshot.status, QueueStatus::Preparing);
+    let spec = harness.runtime.only_spec();
+    assert_eq!(spec.roster.iter().len(), 2);
+    harness.join_all(&accounts, &spec.world_name).await;
+    assert_eq!(
+        harness.service.queue_snapshot(accounts[0]).await.unwrap().status,
+        QueueStatus::Active
+    );
+}
+
+#[tokio::test]
 async fn exact_ten_freeze_and_eleventh_rejection_are_serialized() {
     let harness = Harness::new().await;
     let accounts = accounts(11);
@@ -1943,11 +1960,15 @@ struct Harness {
 
 impl Harness {
     async fn new() -> Self {
+        Self::with_match_size(MATCH_SIZE).await
+    }
+
+    async fn with_match_size(match_size: usize) -> Self {
         let repository = Arc::new(MemoryMatchRepository::default());
         let runtime = Arc::new(MemoryWorldRuntime::default());
         let clock = Arc::new(ManualClock::default());
         let events = Arc::new(RecordingMatchEvents::default());
-        let service = MatchmakingService::start_with_event_sink(
+        let service = MatchmakingService::start_with_event_sink_and_size(
             repository.clone(),
             clock.clone(),
             Arc::new(SequenceIds::default()),
@@ -1957,6 +1978,7 @@ impl Harness {
                 gameplay: "gameplay-v1".to_owned(),
                 config: "balance-v1".to_owned(),
             },
+            match_size,
             events.clone(),
         );
         service.bind_runtime(runtime.clone()).await.unwrap();

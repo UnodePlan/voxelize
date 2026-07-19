@@ -8,6 +8,7 @@ use std::{
 use actix_web::http::Uri;
 
 use crate::auth::AuthConfig;
+use crate::matchmaking::{sanitize_match_capacity, DEV_DEFAULT_MATCH_SIZE, MATCH_SIZE};
 
 const DEFAULT_BIND_ADDRESS: &str = "127.0.0.1:4100";
 const DEFAULT_PUBLIC_ORIGIN: &str = "http://127.0.0.1:5173";
@@ -22,6 +23,8 @@ const COOKIE_SECURE_ENV: &str = "EXTRACTION_COOKIE_SECURE";
 const RPC_ENV: &str = "EXTRACTION_ETHEREUM_RPC_URL";
 const AUTH_LOGIN_ENABLED_ENV: &str = "EXTRACTION_AUTH_LOGIN_ENABLED";
 const MATCHMAKING_ENABLED_ENV: &str = "EXTRACTION_MATCHMAKING_ENABLED";
+const DEV_MATCH_MODE_ENV: &str = "EXTRACTION_DEV_MATCH_MODE";
+const DEV_MATCH_SIZE_ENV: &str = "EXTRACTION_DEV_MATCH_SIZE";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ServerConfig {
@@ -31,6 +34,8 @@ pub struct ServerConfig {
     auth: AuthConfig,
     auth_login_enabled: bool,
     matchmaking_enabled: bool,
+    /// 成局人数：生产恒 MATCH_SIZE；DEV mode 下可为 2..=10。
+    match_size: usize,
 }
 
 impl ServerConfig {
@@ -53,6 +58,7 @@ impl ServerConfig {
             .filter(|value| !value.trim().is_empty());
         config.auth_login_enabled = env_bool_or(AUTH_LOGIN_ENABLED_ENV, true)?;
         config.matchmaking_enabled = env_bool_or(MATCHMAKING_ENABLED_ENV, true)?;
+        config.match_size = resolve_match_size_from_env()?;
         config.validate()?;
         Ok(config)
     }
@@ -68,6 +74,7 @@ impl ServerConfig {
             auth: AuthConfig::local(DEFAULT_SIWE_DOMAIN, DEFAULT_SIWE_URI),
             auth_login_enabled: true,
             matchmaking_enabled: true,
+            match_size: MATCH_SIZE,
         })
     }
 
@@ -95,8 +102,17 @@ impl ServerConfig {
         self.matchmaking_enabled
     }
 
+    pub fn match_size(&self) -> usize {
+        self.match_size
+    }
+
     pub fn with_database_url(mut self, database_url: impl Into<String>) -> Self {
         self.database_url = database_url.into();
+        self
+    }
+
+    pub fn with_match_size(mut self, match_size: usize) -> Self {
+        self.match_size = sanitize_match_capacity(match_size).unwrap_or(MATCH_SIZE);
         self
     }
 
@@ -147,6 +163,7 @@ impl ServerConfig {
 pub enum ConfigError {
     InvalidBindAddress(String),
     InvalidBoolean(&'static str),
+    InvalidMatchSize(&'static str),
     InsecureSessionCookie,
     InvalidUri(&'static str),
     MismatchedPublicOrigin,
@@ -160,6 +177,12 @@ impl fmt::Display for ConfigError {
                 write!(formatter, "{BIND_ENV} 不是有效的监听地址: {value}")
             }
             Self::InvalidBoolean(name) => write!(formatter, "{name} 必须是 true 或 false"),
+            Self::InvalidMatchSize(name) => {
+                write!(
+                    formatter,
+                    "{name} 必须是 {DEV_DEFAULT_MATCH_SIZE}..={MATCH_SIZE} 的整数"
+                )
+            }
             Self::InsecureSessionCookie => formatter.write_str(
                 "HTTPS 必须启用 Secure Cookie，非 Secure Cookie 仅允许本地 HTTP 开发地址",
             ),
@@ -173,6 +196,25 @@ impl fmt::Display for ConfigError {
 }
 
 impl Error for ConfigError {}
+
+/// DEV 成局人数：仅 `EXTRACTION_DEV_MATCH_MODE=true` 时生效，否则恒为 10。
+fn resolve_match_size_from_env() -> Result<usize, ConfigError> {
+    let dev_mode = env_bool_or(DEV_MATCH_MODE_ENV, false)?;
+    if !dev_mode {
+        return Ok(MATCH_SIZE);
+    }
+    match env::var(DEV_MATCH_SIZE_ENV) {
+        Ok(raw) => {
+            let parsed = raw
+                .trim()
+                .parse::<usize>()
+                .map_err(|_| ConfigError::InvalidMatchSize(DEV_MATCH_SIZE_ENV))?;
+            sanitize_match_capacity(parsed)
+                .ok_or(ConfigError::InvalidMatchSize(DEV_MATCH_SIZE_ENV))
+        }
+        Err(_) => Ok(DEV_DEFAULT_MATCH_SIZE),
+    }
+}
 
 fn parse_bool(name: &'static str, value: &str) -> Result<bool, ConfigError> {
     match value {

@@ -46,9 +46,10 @@ pub(crate) use coordinator_diagnostics::CoordinatorResourceSnapshot;
 #[cfg(feature = "engine")]
 pub(crate) use gate_types::GameplayTimeline;
 pub use model::{
-    ActivationDeadlines, CreatePreparingMatch, FrozenParticipant, FrozenRoster, FrozenRosterError,
-    MatchExtractionNotice, MatchRecord, MatchVersions, ParticipantRecord, QueuedPlayer, SeatId,
-    SeatIdError, StoredMatch, MATCH_SIZE, RECONNECT_WINDOW,
+    sanitize_match_capacity, ActivationDeadlines, CreatePreparingMatch, FrozenParticipant,
+    FrozenRoster, FrozenRosterError, MatchExtractionNotice, MatchRecord, MatchVersions,
+    ParticipantRecord, QueuedPlayer, SeatId, SeatIdError, StoredMatch, DEV_DEFAULT_MATCH_SIZE,
+    MATCH_SIZE, RECONNECT_WINDOW,
 };
 pub use service::{
     MatchAttachKind, MatchConnectionEvent, MatchmakingError, MatchmakingService, QueueSnapshot,

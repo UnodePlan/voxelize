@@ -10,7 +10,7 @@ use std::time::Duration;
 impl Coordinator {
     pub(super) async fn advance_time(&mut self) -> Result<(), MatchmakingError> {
         self.retry_pending_settlements().await?;
-        if self.current.is_none() && self.queue.len() == super::MATCH_SIZE {
+        if self.current.is_none() && self.queue.len() == self.match_size {
             if self.gate.is_failed_closed() {
                 return Err(MatchmakingError::Unavailable);
             }

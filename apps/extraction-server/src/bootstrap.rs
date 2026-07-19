@@ -83,7 +83,7 @@ pub(crate) async fn build(config: &ServerConfig, clock: Arc<dyn Clock>) -> io::R
         EngineCatalog::from_manifest(&manifest)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?,
     );
-    let matchmaking = MatchmakingService::start(
+    let matchmaking = MatchmakingService::start_with_match_size(
         match_repository,
         clock.clone(),
         Arc::new(RandomIdGenerator),
@@ -93,6 +93,7 @@ pub(crate) async fn build(config: &ServerConfig, clock: Arc<dyn Clock>) -> io::R
             gameplay: manifest.gameplay_version.clone(),
             config: manifest.config_version.clone(),
         },
+        config.match_size(),
     );
     matchmaking.start_ticker();
     let state = AppState::new(repository_probe, manifest)

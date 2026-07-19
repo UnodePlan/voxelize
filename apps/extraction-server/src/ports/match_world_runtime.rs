@@ -28,7 +28,11 @@ pub struct MatchWorldSpec {
 
 impl MatchWorldSpec {
     pub fn from_preparing(record: &MatchRecord, roster: FrozenRoster) -> Self {
-        debug_assert_eq!(roster.iter().len(), MATCH_PLAYER_CAPACITY);
+        debug_assert!(
+            (2..=MATCH_PLAYER_CAPACITY).contains(&roster.len()),
+            "roster length must be 2..={MATCH_PLAYER_CAPACITY}, got {}",
+            roster.len()
+        );
         Self {
             match_id: record.match_id,
             world_name: record.world_name.clone(),

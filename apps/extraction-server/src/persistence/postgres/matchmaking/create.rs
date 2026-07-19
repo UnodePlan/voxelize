@@ -5,7 +5,7 @@ use uuid::Uuid;
 use crate::{
     matchmaking::{
         ActivationDeadlines, CreatePreparingMatch, MatchRecord, MatchState, ParticipantRecord,
-        ParticipantState, StoredMatch, MATCH_SIZE,
+        ParticipantState, StoredMatch,
     },
     ports::{MatchRepositoryError, TransitionOutcome},
 };
@@ -45,7 +45,8 @@ pub(in crate::persistence::postgres) async fn create_preparing(
     .fetch_all(&mut *transaction)
     .await
     .map_err(unavailable)?;
-    if locked_accounts.len() != MATCH_SIZE {
+    let roster_len = command.roster.len();
+    if locked_accounts.len() != roster_len {
         return Err(MatchRepositoryError::Conflict);
     }
     let occupied = sqlx::query_scalar::<_, Uuid>(
@@ -79,7 +80,7 @@ pub(in crate::persistence::postgres) async fn create_preparing(
     .await
     .map_err(classify_write_error)?;
 
-    let mut participants = Vec::with_capacity(MATCH_SIZE);
+    let mut participants = Vec::with_capacity(roster_len);
     for participant in command.roster.iter() {
         sqlx::query(
             "INSERT INTO match_participants (\
@@ -138,7 +139,7 @@ fn create_matches(stored: &StoredMatch, command: &CreatePreparingMatch) -> bool 
         && stored.record.seed == command.seed
         && stored.record.versions == command.versions
         && stored.record.created_at == command.created_at
-        && stored.participants.len() == MATCH_SIZE
+        && stored.participants.len() == command.roster.len()
         && stored
             .participants
             .iter()
@@ -174,6 +175,17 @@ pub(in crate::persistence::postgres) async fn activate(
         return Err(MatchRepositoryError::Conflict);
     }
 
+    let preparing_count = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*)::bigint FROM match_participants \
+         WHERE match_id = $1 AND state = 'preparing'",
+    )
+    .bind(match_id)
+    .fetch_one(&mut *transaction)
+    .await
+    .map_err(unavailable)?;
+    if preparing_count < 2 {
+        return Err(MatchRepositoryError::Conflict);
+    }
     let participants = sqlx::query(
         "UPDATE match_participants SET state = 'active' \
          WHERE match_id = $1 AND state = 'preparing'",
@@ -182,7 +194,7 @@ pub(in crate::persistence::postgres) async fn activate(
     .execute(&mut *transaction)
     .await
     .map_err(classify_write_error)?;
-    if participants.rows_affected() != MATCH_SIZE as u64 {
+    if participants.rows_affected() != preparing_count as u64 {
         return Err(MatchRepositoryError::Conflict);
     }
     sqlx::query(
@@ -241,7 +253,8 @@ pub(in crate::persistence::postgres) async fn abort(
     .execute(&mut *transaction)
     .await
     .map_err(classify_write_error)?;
-    if state == MatchState::Preparing && participant_update.rows_affected() != MATCH_SIZE as u64 {
+    // Preparing 时至少应有 2 名参与者被中止（与 DEV 最短 roster 一致）
+    if state == MatchState::Preparing && participant_update.rows_affected() < 2 {
         return Err(MatchRepositoryError::Conflict);
     }
     sqlx::query(

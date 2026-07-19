@@ -5,7 +5,7 @@ use uuid::Uuid;
 use super::{
     coordinator::{repository_error, Coordinator, LiveMatch, LiveParticipant, QueueEntry},
     CreatePreparingMatch, FrozenRoster, MatchState, MatchmakingError, ParticipantState,
-    QueueSnapshot, QueuedPlayer, MATCH_SIZE,
+    QueueSnapshot, QueuedPlayer,
 };
 use crate::observability::{MatchEvent, ObservedMatchPhase};
 use crate::ports::MatchWorldRuntimeError;
@@ -23,7 +23,7 @@ impl Coordinator {
             .iter()
             .any(|entry| entry.account_id == account_id)
         {
-            return if self.current.is_none() && self.queue.len() == MATCH_SIZE {
+            return if self.current.is_none() && self.queue.len() == self.match_size {
                 self.prepare_first_roster(account_id).await
             } else {
                 self.snapshot_for(account_id)
@@ -40,7 +40,7 @@ impl Coordinator {
         if !self.is_connected(account_id) {
             return Err(MatchmakingError::ConnectionRequired);
         }
-        if self.queue.len() >= MATCH_SIZE {
+        if self.queue.len() >= self.match_size {
             return Err(MatchmakingError::Full);
         }
         if self
@@ -63,7 +63,7 @@ impl Coordinator {
             enqueued_at: self.utc_now(),
             order,
         });
-        if self.current.is_none() && self.queue.len() == MATCH_SIZE {
+        if self.current.is_none() && self.queue.len() == self.match_size {
             self.prepare_first_roster(account_id).await
         } else {
             self.snapshot_for(account_id)
@@ -128,10 +128,11 @@ impl Coordinator {
             .as_ref()
             .cloned()
             .ok_or(MatchmakingError::Unavailable)?;
+        let capacity = self.match_size;
         let original_queue = self
             .queue
             .iter()
-            .take(MATCH_SIZE)
+            .take(capacity)
             .cloned()
             .collect::<Vec<_>>();
         let command = match &self.prepare_attempt {
@@ -170,7 +171,7 @@ impl Coordinator {
             .map_err(repository_error)?;
         self.prepare_attempt = None;
 
-        self.queue.drain(..MATCH_SIZE);
+        self.queue.drain(..capacity);
         let participants = roster
             .iter()
             .map(|participant| {

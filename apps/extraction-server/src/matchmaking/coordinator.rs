@@ -27,6 +27,8 @@ pub(super) struct Coordinator {
     pub(super) ids: Arc<dyn IdGenerator>,
     pub(super) seeds: Arc<dyn SeedGenerator>,
     pub(super) versions: MatchVersions,
+    /// 本进程成局人数（生产 10；DEV 可为 2..=10）。
+    pub(super) match_size: usize,
     pub(super) events: Arc<dyn MatchEventSink>,
     pub(super) gate: Arc<AttachGate>,
     pub(super) sender: mpsc::Sender<Command>,
@@ -48,13 +50,17 @@ impl Coordinator {
         versions: MatchVersions,
         gate: Arc<AttachGate>,
         sender: mpsc::Sender<Command>,
+        match_size: usize,
     ) -> Self {
+        let match_size =
+            super::sanitize_match_capacity(match_size).unwrap_or(super::MATCH_SIZE);
         Self {
             repository,
             clock,
             ids,
             seeds,
             versions,
+            match_size,
             events: Arc::new(StderrMatchEventSink),
             gate,
             sender,
