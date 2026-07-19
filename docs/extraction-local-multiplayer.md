@@ -31,7 +31,15 @@ cargo run --features engine
 ```
 
 默认监听：`http://127.0.0.1:4100`  
+健康检查：`GET /health/ready`（需带 `Origin: http://127.0.0.1:5173` 或经 Vite 代理）  
 同一 `DATABASE_URL` 只能有一个 matchmaking 进程（进程锁）。
+
+协议层双人冒烟（无需浏览器钱包 UI）：
+
+```bash
+# server 已开 DEV_MATCH_MODE 后
+node apps/extraction-e2e/scripts/dev-two-player-smoke.mjs
+```
 
 ## 客户端
 
