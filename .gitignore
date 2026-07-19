@@ -37,6 +37,9 @@ yarn-error.log
 **/playwright-report/
 **/blob-report/
 
-# Playwright MCP / 本地浏览器验收临时产物
+# Playwright MCP / 本地浏览器验收临时产物（仓库根）
 .playwright-mcp/
 /single-*.png
+/held-*.png
+/accept-*.png
+/verify-*.png
