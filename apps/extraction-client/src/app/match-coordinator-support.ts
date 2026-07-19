@@ -24,6 +24,8 @@ export interface MatchNetwork {
   ): void;
   movement?(input: MovementInput): void;
   dropSlot?(slot: number, expectedInventoryRevision: number): void;
+  /** 局内 PEER 广播昵称 */
+  setPeerUsername?(username: string): void;
   requestGameplayState(): Promise<GameplayStateData>;
   resume(worldName: string): void;
   retryResume(): void;

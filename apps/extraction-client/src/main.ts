@@ -19,6 +19,11 @@ if (import.meta.env.MODE === "e2e") {
     void import("./single/main").then(({ startSinglePlayerClient }) =>
       startSinglePlayerClient(root),
     );
+  } else if (import.meta.env.DEV && parameters.get("mode") === "dev-mp") {
+    // 跳过钱包 UI：确定性 SIWE + 自动入队，专注局内多人表现
+    void import("./testing/dev-multi-main").then(({ startDevMultiplayerClient }) =>
+      startDevMultiplayerClient(root),
+    );
   } else {
     void import("./app/controller").then(({ ProductController }) => {
       const controller = new ProductController(root);

@@ -19,11 +19,17 @@ type SendMessage = (message: protocol.IMessage) => void;
 
 export class GameplayNetworkEgress {
   private readonly sequence = new IntentSequence();
+  private username = "Extractor";
 
   constructor(
     private readonly protocolVersion: ExtractionManifest["protocolVersion"],
     private readonly send: SendMessage,
   ) {}
+
+  setUsername(username: string): void {
+    const next = username.trim().slice(0, 24);
+    if (next.length > 0) this.username = next;
+  }
 
   seed(state: Parameters<IntentSequence["seed"]>[0]): void {
     this.sequence.seed(state);
@@ -65,7 +71,7 @@ export class GameplayNetworkEgress {
       peers: [
         {
           id: "",
-          username: "Extractor",
+          username: this.username,
           metadata: JSON.stringify(input),
         },
       ],

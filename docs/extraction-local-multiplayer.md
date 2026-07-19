@@ -45,23 +45,35 @@ node apps/extraction-e2e/scripts/dev-two-player-smoke.mjs
 
 ```bash
 cp apps/extraction-client/.env.example apps/extraction-client/.env
-# VITE_EXTRACTION_API_URL=http://127.0.0.1:4100   # 若默认代理不足
-# VITE_REOWN_PROJECT_ID=...
+# VITE_REOWN_PROJECT_ID=...  # 仅正式钱包入口需要；DEV 多人可跳过
 
 pnpm --filter @voxelize/extraction-client dev
 ```
 
-打开：`http://127.0.0.1:5173/`（**不要** `?mode=single`）
+### 推荐：跳过钱包 UI（局内表现联调）
 
-SIWE 域必须与 `EXTRACTION_SIWE_DOMAIN` / `EXTRACTION_PUBLIC_ORIGIN` 一致（默认 `127.0.0.1:5173`）。
+服务端已开 `EXTRACTION_DEV_MATCH_MODE=true` 后，开两个窗口：
+
+| 窗口 | URL |
+|------|-----|
+| A | `http://127.0.0.1:5173/?mode=dev-mp&seat=0` |
+| B | `http://127.0.0.1:5173/?mode=dev-mp&seat=1` |
+
+- 自动确定性 SIWE（无 MetaMask）
+- 自动点「加入匹配」
+- 顶栏显示 `DEV 多人 · seat N`
+
+### 正式钱包路径（验收用）
+
+打开：`http://127.0.0.1:5173/`（**不要** `?mode=single` / `dev-mp`）  
+SIWE 域须与 `EXTRACTION_SIWE_DOMAIN` 一致（默认 `127.0.0.1:5173`）。
 
 ## 双人流程
 
-1. **Profile A**：登录钱包 A → 进入匹配队列  
-2. **Profile B**：登录钱包 B → 进入匹配队列  
-3. 队列满 **N=2** 后自动成局，双方进入同一体素世界  
-4. 验收清单：
-   - [ ] 能看到对方角色  
+1. 两个窗口分别进 `dev-mp&seat=0/1`（或正式钱包登录）  
+2. 入队后满 N=2 成局，进入同一体素世界  
+3. 验收清单：
+   - [ ] 能看到对方角色（不同配色 + 名牌）  
    - [ ] 挖掘泥土/矿并出现权威背包或掉落  
    - [ ] 近战造成服务端确认的伤害/击退  
    - [ ] 撤离成功 **或** 死亡掉落 其一  

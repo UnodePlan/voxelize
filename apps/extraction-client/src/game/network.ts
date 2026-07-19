@@ -64,6 +64,11 @@ export class GameNetwork {
     this.events.onConnection("online");
   }
 
+  /** 局内广播昵称（PEER username） */
+  setPeerUsername(username: string): void {
+    this.egress.setUsername(username);
+  }
+
   private async ensureConnected(): Promise<void> {
     if (this.socket?.readyState === WebSocket.OPEN) return;
     if (this.connectPromise !== null) return this.connectPromise;

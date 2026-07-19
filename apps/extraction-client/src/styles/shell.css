@@ -143,3 +143,22 @@
   text-align: center;
   font-size: 13px;
 }
+
+/* DEV 多人联调角标 */
+.dev-mp-banner {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 10001;
+  padding: 6px 12px;
+  background: #1a3a2a;
+  color: #c8f5d8;
+  font: 12px/1.4 ui-monospace, monospace;
+  text-align: center;
+  pointer-events: none;
+}
+body.dev-multiplayer-mode {
+  padding-top: 28px;
+}
+

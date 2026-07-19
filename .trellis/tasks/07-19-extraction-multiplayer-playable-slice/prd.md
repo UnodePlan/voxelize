@@ -73,7 +73,7 @@ MVP 能力在，但本地必须凑满 10 账号才能成局，联调成本过高
 |----|------|
 | 切片类型 | 可玩联调，非从零重做 MVP |
 | DEV 人数 | 可配置 N，默认 2 |
-| 身份 | 真实 SIWE + 多钱包 |
+| 身份 | 生产/验收用真实 SIWE；**联调可用 `?mode=dev-mp` 自动 SIWE（无钱包 UI）** |
 | 玩法验收 | 互见 + 挖矿 + 近战 + 撤离/死亡其一 |
 | 分支 | 建议 `codex/extraction-multiplayer-playable-slice` from 当前 HEAD |
 

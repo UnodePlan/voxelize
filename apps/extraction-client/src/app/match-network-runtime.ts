@@ -153,6 +153,11 @@ export class MatchNetworkRuntime {
     this.network = this.options.networkFactory
       ? this.options.networkFactory(manifest, events)
       : new GameNetwork(manifest, events);
+    // 用会话地址短后缀作局内昵称，便于多人区分
+    const address = this.options.getState().session?.address;
+    if (address !== undefined && address.length >= 8) {
+      this.network.setPeerUsername?.(`P-${address.slice(2, 8)}`);
+    }
   }
 
   private acceptGameplayState(
