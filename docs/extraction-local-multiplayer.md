@@ -41,6 +41,24 @@ cargo run --features engine
 node apps/extraction-e2e/scripts/dev-two-player-smoke.mjs
 ```
 
+协议层完整玩法（挖矿 → 互见 → 近战击杀 → 死亡掉落/拾取）：
+
+```bash
+cd apps/extraction-e2e
+EXTRACTION_E2E_SERVER_URL=http://127.0.0.1:4100 \
+EXTRACTION_E2E_CLIENT_URL=http://127.0.0.1:5173 \
+EXTRACTION_E2E_PUBLIC_ORIGIN=http://127.0.0.1:5173 \
+pnpm exec vitest run --config vitest.actor.config.ts src/live/dev-mp-gameplay.actor.ts
+```
+
+浏览器双独立 context 进局（避免同 profile 共享 cookie）：
+
+```bash
+node apps/extraction-e2e/scripts/dev-two-browser-smoke.mjs
+```
+
+> 上一局结束后约 1 分钟（reconnect timeout）才释放座位；连跑失败见 `MATCH_FULL` 时稍等再试。
+
 ## 客户端
 
 ```bash
@@ -73,10 +91,11 @@ SIWE 域须与 `EXTRACTION_SIWE_DOMAIN` 一致（默认 `127.0.0.1:5173`）。
 1. 两个窗口分别进 `dev-mp&seat=0/1`（或正式钱包登录）  
 2. 入队后满 N=2 成局，进入同一体素世界  
 3. 验收清单：
-   - [ ] 能看到对方角色（不同配色 + 名牌）  
-   - [ ] 挖掘泥土/矿并出现权威背包或掉落  
-   - [ ] 近战造成服务端确认的伤害/击退  
-   - [ ] 撤离成功 **或** 死亡掉落 其一  
+   - [x] 能看到对方角色（不同配色 + 名牌）— 协议 PEER 互见已自动化  
+   - [x] 挖掘泥土/矿并出现权威背包或掉落  
+   - [x] 近战造成服务端确认的伤害 → 击杀  
+   - [x] 死亡掉落进入击杀者背包（贴脸可能秒吸，实体帧可不稳）  
+   - [ ] 撤离成功（本切片玩法脚本未覆盖）  
 
 ## 常见问题
 
