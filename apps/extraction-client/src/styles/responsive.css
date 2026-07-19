@@ -81,35 +81,36 @@
   }
 
   .health-row {
-    grid-template-columns: repeat(10, 19px);
+    grid-template-columns: repeat(10, 16px);
   }
 
   .heart {
-    width: 19px;
-    height: 20px;
+    width: 16px;
+    height: 16px;
   }
 
   .heart > svg,
   .heart-fill,
   .heart-fill svg {
-    width: 18px;
-    height: 18px;
+    width: 16px;
+    height: 16px;
   }
 
   .loadout-row {
-    display: grid;
-    grid-template-columns: repeat(2, 42px) minmax(0, 267px);
-    align-items: start;
+    flex-wrap: wrap;
+    max-width: min(100vw - 16px, 400px);
   }
 
   .equipment-slot,
   .inventory-slot {
-    width: 42px;
-    height: 42px;
+    width: 32px;
+    height: 32px;
+    flex: 0 0 32px;
   }
 
   .inventory-grid {
-    grid-template-columns: repeat(6, 42px);
+    flex-wrap: wrap;
+    max-width: calc(6 * 32px + 5 * 3px);
   }
 }
 

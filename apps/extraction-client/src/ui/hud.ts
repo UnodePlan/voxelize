@@ -1,6 +1,8 @@
 import type {
+  DeathResultData,
   ExtractionStateData,
   GameplayStateData,
+  ResourceTally,
 } from "../../../../contracts/extraction/v1/typescript";
 import type { AppState } from "../app/state";
 import { projectHearts } from "../combat-state";
@@ -35,20 +37,70 @@ function renderPlayerHud(gameplay: GameplayStateData): string {
     deathResult: gameplay.deathResult,
   });
   const halfHearts = gameplay.health.data.currentHalfHearts;
+  const dead = gameplay.deathResult !== null || gameplay.health.data.status === "dead";
   return `
-    <div class="player-hud">
-      <div class="health-row" role="img" aria-label="生命值 ${halfHearts}/20">
-        ${hearts.map((fill) => renderHeart(fill)).join("")}
-      </div>
-      <div class="loadout-row">
-        <div class="equipment-slot" title="基础镐"><i data-lucide="pickaxe"></i><span>镐</span></div>
-        <div class="equipment-slot" title="近战武器"><i data-lucide="swords"></i><span>近战</span></div>
-        <div class="inventory-grid" aria-label="12 格背包">
-          ${gameplay.inventory.slots.map((slot, index) => renderSlot(slot, index)).join("")}
+    <div class="player-hud${dead ? " is-dead" : ""}">
+      ${renderDeathBanner(gameplay)}
+      <div class="player-hud-stack">
+        <div class="health-row" role="img" aria-label="生命值 ${halfHearts}/20">
+          ${hearts.map((fill) => renderHeart(fill)).join("")}
+        </div>
+        <div class="loadout-row" aria-label="工具与背包">
+          <div class="equipment-slot" title="基础镐" data-tool="pickaxe">
+            <i data-lucide="pickaxe"></i><span>镐</span>
+          </div>
+          <div class="equipment-slot" title="近战武器" data-tool="melee">
+            <i data-lucide="swords"></i><span>剑</span>
+          </div>
+          <div class="inventory-grid" aria-label="12 格背包">
+            ${gameplay.inventory.slots.map((slot, index) => renderSlot(slot, index)).join("")}
+          </div>
         </div>
       </div>
     </div>
   `;
+}
+
+/** 死亡瞬间：说明掉落已进世界，并摘要 lost 资源 */
+function renderDeathBanner(gameplay: GameplayStateData): string {
+  const death = gameplay.deathResult;
+  if (death === null) return "";
+  const data = death.data;
+  const lostLine = formatTallyLine(data.lost);
+  const cause = deathCauseLabel(data);
+  return `
+    <div class="death-banner" role="status" aria-live="polite">
+      <div class="death-banner-title">
+        <i data-lucide="swords"></i>
+        <strong>你已阵亡</strong>
+        <span>${escapeHtml(cause)}</span>
+      </div>
+      <p class="death-banner-drop">
+        ${lostLine === "" ? "背包已清空，资源掉落在世界中" : `掉落 ${lostLine} · 他人可拾取`}
+      </p>
+    </div>
+  `;
+}
+
+export function formatTallyLine(tally: ResourceTally): string {
+  const parts: string[] = [];
+  if (tally.dirt > 0) parts.push(`泥土×${tally.dirt}`);
+  if (tally.gold > 0) parts.push(`黄金×${tally.gold}`);
+  if (tally.diamond > 0) parts.push(`钻石×${tally.diamond}`);
+  return parts.join(" ");
+}
+
+function deathCauseLabel(data: DeathResultData): string {
+  switch (data.cause) {
+    case "melee":
+      return data.killerPublicPlayerId === null
+        ? "近战阵亡"
+        : `被 ${data.killerPublicPlayerId.slice(0, 8)} 击杀`;
+    case "hardDeadline":
+      return "硬截止淘汰";
+    case "reconnectTimeout":
+      return "重连超时";
+  }
 }
 
 function renderUnknownRuntime(): string {
@@ -74,12 +126,13 @@ function renderSlot(
   index: number,
 ): string {
   if (slot === null) {
-    return `<div class="inventory-slot" aria-label="背包格 ${index + 1}，空"></div>`;
+    return `<div class="inventory-slot" data-empty="true" aria-label="背包格 ${index + 1}，空"></div>`;
   }
   const label = { dirt: "泥土", gold: "黄金", diamond: "钻石" }[slot.resource];
   return `
     <div class="inventory-slot" data-resource="${slot.resource}" aria-label="背包格 ${index + 1}，${label} ${slot.quantity}">
-      <span class="resource-cube"></span><strong>${slot.quantity}</strong>
+      <span class="resource-cube" data-resource="${slot.resource}"></span>
+      <strong>${slot.quantity}</strong>
     </div>
   `;
 }
