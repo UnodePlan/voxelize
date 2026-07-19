@@ -55,6 +55,7 @@ export class GameNetwork {
         this.egress.seed(state);
         this.events.onGameplayState(state);
       },
+      (result) => this.events.onAttackResult?.(result),
     );
   }
 

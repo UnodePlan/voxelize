@@ -1,9 +1,15 @@
 import type { MessageProtocol } from "@voxelize/protocol";
 
 import type {
+  AttackResultData,
   ExtractionManifest,
   GameplayStateData,
 } from "../../../../contracts/extraction/v1/typescript";
+import {
+  cuesFromAttackResolution,
+  cuesFromGameplayTransition,
+} from "../game/match-sfx-feedback";
+import { MatchSfx } from "../game/match-sfx";
 import { GameNetwork, type MovementInput } from "../game/network";
 
 import {
@@ -31,6 +37,10 @@ export class MatchNetworkRuntime {
   private joinedWorld: string | null = null;
   private gameplayReady = false;
   private worldReady = false;
+  /** 上一帧 gameplay，供音效差分（不读 store，避免 dispatch 后丢 previous） */
+  private lastSfxState: GameplayStateData | null = null;
+  private readonly sfx = new MatchSfx();
+  private audioUnlockBound = false;
 
   constructor(private readonly options: MatchNetworkRuntimeOptions) {}
 
@@ -58,6 +68,8 @@ export class MatchNetworkRuntime {
   enter(matchId: string, worldName: string, mode: "join" | "resume"): void {
     this.leave();
     this.resetReadiness();
+    this.lastSfxState = null;
+    this.bindAudioUnlock();
     this.options.dispatch({
       type: "MATCH_CONNECTING",
       matchId,
@@ -87,6 +99,7 @@ export class MatchNetworkRuntime {
   }
 
   attack(): void {
+    this.sfx.unlock();
     this.network?.attack?.();
   }
 
@@ -94,6 +107,7 @@ export class MatchNetworkRuntime {
     action: "cancel" | "maintain" | "start",
     voxel?: [number, number, number],
   ): void {
+    this.sfx.unlock();
     this.network?.mining?.(action, voxel);
   }
 
@@ -102,6 +116,7 @@ export class MatchNetworkRuntime {
   }
 
   dropSlot(slot: number, expectedInventoryRevision: number): void {
+    this.sfx.unlock();
     this.network?.dropSlot?.(slot, expectedInventoryRevision);
   }
 
@@ -117,6 +132,7 @@ export class MatchNetworkRuntime {
   leave(): void {
     if (this.joinedWorld !== null) this.network?.leave();
     this.joinedWorld = null;
+    this.lastSfxState = null;
     this.resetReadiness();
   }
 
@@ -124,6 +140,8 @@ export class MatchNetworkRuntime {
     this.network?.close();
     this.network = null;
     this.joinedWorld = null;
+    this.lastSfxState = null;
+    this.unbindAudioUnlock();
     this.resetReadiness();
     this.options.onVoxelReset?.();
   }
@@ -137,6 +155,7 @@ export class MatchNetworkRuntime {
       onAuthenticationInvalidated: this.options.onAuthenticationInvalidated,
       onConnection: (connection) => this.handleConnection(connection),
       onGameplayState: (state) => this.acceptGameplayState(state, token, false),
+      onAttackResult: (result) => this.handleAttackResult(result, token),
       onReconnectExpired: () => {
         this.joinedWorld = null;
         this.resetReadiness();
@@ -166,11 +185,38 @@ export class MatchNetworkRuntime {
     dispatch: boolean,
   ): void {
     if (!this.options.isCurrent(token)) return;
+    // 在 dispatch 前做差分，避免 store 已是 next
+    const cues = cuesFromGameplayTransition(this.lastSfxState, state);
+    if (cues.length > 0) this.sfx.playAll(cues);
+    this.lastSfxState = state;
     if (dispatch) this.options.dispatch({ type: "GAMEPLAY_STATE", state });
     this.gameplayReady = true;
     this.markConnectedWhenReady();
     if (hasTerminalGameplay(state)) this.options.startResultPoll(token);
   }
+
+  private handleAttackResult(result: AttackResultData, token: number): void {
+    if (!this.options.isCurrent(token)) return;
+    this.sfx.playAll(cuesFromAttackResolution(result.resolution));
+  }
+
+  private bindAudioUnlock(): void {
+    if (this.audioUnlockBound || typeof window === "undefined") return;
+    this.audioUnlockBound = true;
+    window.addEventListener("pointerdown", this.unlockAudio, { once: true });
+    window.addEventListener("keydown", this.unlockAudio, { once: true });
+  }
+
+  private unbindAudioUnlock(): void {
+    if (!this.audioUnlockBound || typeof window === "undefined") return;
+    this.audioUnlockBound = false;
+    window.removeEventListener("pointerdown", this.unlockAudio);
+    window.removeEventListener("keydown", this.unlockAudio);
+  }
+
+  private readonly unlockAudio = (): void => {
+    this.sfx.unlock();
+  };
 
   private resetReadiness(): void {
     this.gameplayReady = false;

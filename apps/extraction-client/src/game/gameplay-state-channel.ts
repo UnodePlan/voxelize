@@ -1,6 +1,8 @@
 import {
+  decodeAttackResultData,
   decodeGameplayStateData,
   decodeProtocolEnvelope,
+  type AttackResultData,
   type ExtractionManifest,
   type GameplayStateData,
 } from "../../../../contracts/extraction/v1/typescript";
@@ -20,6 +22,7 @@ export class GameplayStateChannel {
     private readonly manifest: ExtractionManifest,
     private readonly sendMethod: (name: string, payload: unknown) => void,
     private readonly onState: (state: GameplayStateData) => void,
+    private readonly onAttackResult?: (result: AttackResultData) => void,
   ) {}
 
   request(): Promise<GameplayStateData> {
@@ -41,6 +44,22 @@ export class GameplayStateChannel {
   handleResult(value: unknown): void {
     const envelope = decodeProtocolEnvelope(value, this.manifest);
     if (envelope.type !== "result") return;
+
+    // 攻击结果：data 为 AttackResultData（含 resolution），非完整 gameplay state
+    if (
+      envelope.outcome.status === "ok" &&
+      this.tryEmitAttackResult(envelope.outcome.data)
+    ) {
+      const pending = this.pending.get(envelope.requestId);
+      if (pending !== undefined) {
+        clearTimeout(pending.timeout);
+        this.pending.delete(envelope.requestId);
+        pending.reject(new Error("attack-result"));
+      }
+      this.scheduleSync();
+      return;
+    }
+
     const pending = this.pending.get(envelope.requestId);
     if (pending === undefined) return;
     clearTimeout(pending.timeout);
@@ -82,6 +101,16 @@ export class GameplayStateChannel {
       request.reject(new Error(message));
     });
     this.pending.clear();
+  }
+
+  private tryEmitAttackResult(data: unknown): boolean {
+    try {
+      const result = decodeAttackResultData(data);
+      this.onAttackResult?.(result);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   private nextRequestSequence(): number {

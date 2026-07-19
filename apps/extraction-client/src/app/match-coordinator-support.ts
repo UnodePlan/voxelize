@@ -1,6 +1,7 @@
 import type { MessageProtocol } from "@voxelize/protocol";
 
 import type {
+  AttackResultData,
   ExtractionManifest,
   GameplayStateData,
 } from "../../../../contracts/extraction/v1/typescript";
@@ -95,6 +96,7 @@ interface MatchNetworkEventOptions {
   onAuthenticationInvalidated(): void;
   onConnection?(connection: AppState["connection"]): void;
   onGameplayState?(state: GameplayStateData): void;
+  onAttackResult?(result: AttackResultData): void;
   onReconnectExpired(): void;
   startResultPoll(): void;
   stopResultPoll(): void;
@@ -146,6 +148,9 @@ export function createMatchNetworkEvents(
       options.dispatch({ type: "GAMEPLAY_STATE", state: snapshot });
       options.onGameplayState?.(snapshot);
       if (hasTerminalGameplay(snapshot)) options.startResultPoll();
+    },
+    onAttackResult: (result) => {
+      if (options.isCurrent()) options.onAttackResult?.(result);
     },
     onProtocolError: (message) => {
       if (!options.isCurrent()) return;
