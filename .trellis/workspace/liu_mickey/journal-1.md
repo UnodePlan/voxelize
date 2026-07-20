@@ -38,3 +38,42 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 2: 验收并归档 Extraction 多人联调可玩切片
+
+**Date**: 2026-07-20
+**Task**: 验收并归档 Extraction 多人联调可玩切片
+**Branch**: `codex/extraction-multiplayer-playable-slice`
+
+### Summary
+
+本机起服完成 AC1–AC6：DEV 双人成局、协议/玩法 actor/浏览器冒烟、生产 boundary；同步 match capacity-N 规格并归档任务。
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `17084eb13` | (see git log) |
+| `3c5e01302` | (see git log) |
+| `8cc739261` | (see git log) |
+| `8c2e8c8ff` | (see git log) |
+| `a43c741bc` | (see git log) |
+| `897bf156b` | (see git log) |
+| `ff7e8ecd2` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 1
-- **Last Active**: 2026-07-14
+- **Total Sessions**: 2
+- **Last Active**: 2026-07-20
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~40 | Active |
+| `journal-1.md` | ~79 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 2 | 2026-07-20 | 验收并归档 Extraction 多人联调可玩切片 | `17084eb13`, `3c5e01302`, `8cc739261`, `8c2e8c8ff`, `a43c741bc`, `897bf156b`, `ff7e8ecd2` | `codex/extraction-multiplayer-playable-slice` |
 | 1 | 2026-07-14 | 完成体素撤离 PVP MVP | `c2bcf6d97` | `codex/extraction-pvp-stage1` |
 <!-- @@@/auto:session-history -->
 
