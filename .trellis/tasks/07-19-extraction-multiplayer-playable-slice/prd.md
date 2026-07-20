@@ -54,12 +54,12 @@ MVP 能力在，但本地必须凑满 10 账号才能成局，联调成本过高
 
 ## Acceptance Criteria
 
-- [ ] AC1：按文档可本地起服并打开客户端。
-- [ ] AC2：DEV 模式默认 2 人成局；`EXTRACTION_DEV_MATCH_SIZE` 可调 2–10；非 DEV 恒 10。
-- [ ] AC3：双客户端 SIWE 后同局互见。
-- [ ] AC4：双客户端演示挖矿（权威）与近战（权威）各至少一次。
-- [ ] AC5：完成撤离或死亡结果展示至少一种。
-- [ ] AC6：生产相关测试/typecheck 通过；生产 build 无 DEV 泄漏。
+- [x] AC1：按文档可本地起服并打开客户端。（2026-07-20：server `:4100` ready + Vite `:5173`）
+- [x] AC2：DEV 模式默认 2 人成局；`EXTRACTION_DEV_MATCH_SIZE` 可调 2–10；非 DEV 恒 10。（`dev_match_size_two_forms_roster_without_ten_players` + 双人 smoke）
+- [x] AC3：双客户端 SIWE 后同局互见。（gameplay actor `peerMutual` + browser seat0/1 同 MATCH）
+- [x] AC4：双客户端演示挖矿（权威）与近战（权威）各至少一次。（`dev-mp-gameplay`：mined dirt + kill）
+- [x] AC5：完成撤离或死亡结果展示至少一种。（死亡掉落/拾取自动化通过；撤离路径未自动化）
+- [x] AC6：生产相关测试/typecheck 通过；生产 build 无 DEV 泄漏。（typecheck + boundary assert；`dev-mp` 受 `import.meta.env.DEV` 门控）
 
 ## Out of Scope
 

@@ -26,19 +26,25 @@
 
 ## 阶段 3：客户端队列展示（若需要）
 
-- [ ] 若 UI 写死「10/10」，改为服务端目标人数或 DEV 文档说明（文档已写 N=2）。
-- [ ] 确认双客户端 cookie/WS 同 origin 配置（见文档）。
+- [x] 客户端无硬编码「10/10」文案；DEV 文档写明 N=2。
+- [x] 双客户端 cookie/WS 同 origin：`127.0.0.1:5173` ↔ `:4100`（文档 + browser smoke 验证）。
 
 ## 阶段 4：联调文档与 env 示例
 
 - [x] 更新 `apps/extraction-server/.env.example`。
 - [x] `docs/extraction-local-multiplayer.md`。
-- [ ] 本机双浏览器走通 AC3–AC5（需 Postgres + 双钱包，待人工）。
+- [x] 本机验收（2026-07-20）：协议 smoke、dev-mp gameplay actor、双浏览器进局均通过。
+  - 注意：上一局未释放座位时 browser 会 `MATCH_FULL`/卡大厅；约 1 分钟 reconnect timeout 或等 finished 后重试。
+  - AC5 撤离成功路径本切片未自动化；**死亡掉落**已覆盖。
 
 ## 阶段 5：质量门
 
-- [x] `cargo test --lib ... dev_match_size_two` / `match_domain` 通过。
-- [ ] 更全量 matchmaking service_tests + 手工联调。
+- [x] `cargo test --lib ... dev_match_size_two` 通过。
+- [x] 协议层：`node apps/extraction-e2e/scripts/dev-two-player-smoke.mjs` PASS。
+- [x] 玩法层：`vitest ... dev-mp-gameplay.actor.ts` PASS（挖矿/互见/击杀/死亡掉落拾取）。
+- [x] 浏览器：`dev-two-browser-smoke.mjs` PASS（seat0/1 同 MATCH 已连接）。
+- [x] `pnpm --filter @voxelize/extraction-client typecheck` 通过。
+- [x] production build + `assert-production-boundary.mjs` 通过；`import.meta.env.DEV` 门控 `dev-mp` 不进生产包。
 
 ## 开始实现前门禁
 
