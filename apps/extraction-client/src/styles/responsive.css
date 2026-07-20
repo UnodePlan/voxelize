@@ -24,9 +24,18 @@
     height: auto;
     max-height: 100%;
     align-self: end;
-    padding: 26px 18px max(20px, env(safe-area-inset-bottom));
+    padding: 24px 18px max(20px, env(safe-area-inset-bottom));
     border-top: 1px solid var(--color-line-strong);
     border-left: 0;
+  }
+
+  .lobby-actions .primary-command--hero,
+  .primary-command--hero {
+    min-height: 50px;
+  }
+
+  .resource-balance strong {
+    font-size: 18px;
   }
 
   .panel-heading {

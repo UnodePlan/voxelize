@@ -96,7 +96,7 @@ function renderAuth(state: AppState): string {
       ? "使用钱包签名登录"
       : "连接钱包";
   return `
-    <section class="access-panel" aria-labelledby="access-title">
+    <section class="access-panel side-rail" aria-labelledby="access-title">
       <div class="panel-heading">
         <span class="section-kicker">PVP EXTRACTION</span>
         <h1 id="access-title">Voxel Extraction</h1>
@@ -104,14 +104,12 @@ function renderAuth(state: AppState): string {
           <span>10 人</span><span>300 x 300</span><span>12 分钟</span>
         </div>
       </div>
-      <div class="auth-status">
+      <div class="auth-identity-row">
         <i data-lucide="wallet"></i>
-        <div>
-          <span>身份</span>
-          <strong>${authStatus(state)}</strong>
-        </div>
+        <span>身份</span>
+        <strong>${authStatus(state)}</strong>
       </div>
-      <button class="primary-command" type="button" data-action="connect-wallet" ${configured ? disabled(state) : "disabled"}>
+      <button class="primary-command primary-command--hero" type="button" data-action="connect-wallet" ${configured ? disabled(state) : "disabled"}>
         <i data-lucide="wallet"></i><span>${buttonLabel}</span>
       </button>
       ${renderSinglePlayerEntry()}
@@ -137,13 +135,13 @@ function renderSinglePlayerEntry(): string {
 
 function renderLobby(state: AppState): string {
   return `
-    <section class="lobby-panel" aria-labelledby="lobby-title">
+    <section class="lobby-panel side-rail" aria-labelledby="lobby-title">
       <div class="panel-heading compact-heading">
         <span class="section-kicker">READY ROOM</span>
         <h1 id="lobby-title">行动大厅</h1>
       </div>
       <div class="lobby-actions">
-        <button class="primary-command" type="button" data-action="join-queue" ${disabled(state)}>
+        <button class="primary-command primary-command--hero" type="button" data-action="join-queue" ${disabled(state)}>
           <i data-lucide="swords"></i><span>开始匹配</span>
         </button>
         <button class="secondary-command" type="button" data-action="refresh-lobby" ${disabled(state)}>
@@ -161,7 +159,7 @@ export function renderWarehouse(state: AppState): string {
   const resources = warehouse?.resources;
   return `
     <section class="warehouse-section" aria-labelledby="warehouse-title">
-      <div class="section-title"><i data-lucide="warehouse"></i><h2 id="warehouse-title">永久仓库</h2></div>
+      <div class="section-title"><h2 id="warehouse-title">永久仓库</h2></div>
       <div class="resource-balances">
         ${resourceBalance("dirt", "泥土", resources?.dirt ?? "--")}
         ${resourceBalance("gold", "黄金", resources?.gold ?? "--")}
