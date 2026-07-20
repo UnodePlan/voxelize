@@ -21,6 +21,13 @@
 .match-code {
   min-height: 34px;
   border: 1px solid var(--color-line);
+  background: var(--color-surface);
+}
+
+/* 对局深色半透明：选择器在后，覆盖浅色默认 */
+.game-shell[data-screen="match"] .connection-state,
+.game-shell[data-screen="match"] .phase-clock,
+.game-shell[data-screen="match"] .match-code {
   background: oklch(15% 0.014 165 / 84%);
   backdrop-filter: blur(10px);
 }
@@ -109,6 +116,10 @@
   transform: translateX(-50%);
   padding: 11px 12px;
   border: 1px solid var(--color-line);
+  background: var(--color-surface);
+}
+
+.game-shell[data-screen="match"] .action-progress {
   background: oklch(15% 0.014 165 / 88%);
 }
 
@@ -161,18 +172,27 @@
   padding: 10px 14px;
   border: 1px solid var(--color-line);
   color: var(--color-ink-muted);
-  background: oklch(15% 0.014 165 / 82%);
+  background: var(--color-surface);
   font-size: 12px;
 }
 
-/* 死亡条：在热栏上方居中 */
+.game-shell[data-screen="match"] .player-hud-loading {
+  background: oklch(15% 0.014 165 / 82%);
+}
+
+/* 死亡条：默认用 token；对局再覆盖为深色危险底 */
 .death-banner {
   width: min(420px, 92vw);
   padding: 10px 14px;
+  border: 1px solid var(--color-danger);
+  background: var(--color-surface);
+  text-align: center;
+}
+
+.game-shell[data-screen="match"] .death-banner {
   border: 1px solid oklch(55% 0.12 25 / 55%);
   background: oklch(18% 0.04 25 / 92%);
   box-shadow: 0 0 0 1px oklch(8% 0.02 25 / 50%);
-  text-align: center;
 }
 
 .death-banner-title {
@@ -181,8 +201,12 @@
   align-items: center;
   justify-content: center;
   gap: 8px;
-  color: oklch(88% 0.06 25);
+  color: var(--color-danger);
   font-size: 13px;
+}
+
+.game-shell[data-screen="match"] .death-banner-title {
+  color: oklch(88% 0.06 25);
 }
 
 .death-banner-title strong {
@@ -196,9 +220,13 @@
 
 .death-banner-drop {
   margin: 6px 0 0;
-  color: oklch(82% 0.08 85);
+  color: var(--color-warning);
   font-size: 12px;
   font-family: var(--font-mono);
+}
+
+.game-shell[data-screen="match"] .death-banner-drop {
+  color: oklch(82% 0.08 85);
 }
 
 .player-hud.is-dead .health-row {

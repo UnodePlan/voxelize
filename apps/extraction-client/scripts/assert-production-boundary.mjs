@@ -9,6 +9,10 @@ const forbidden = [
   "core-facade",
   "single-player-mode",
   "single-extraction-beacon",
+  // DEV-only entry modules must not ship in production chunks
+  "dev-multi-main",
+  "startDevMultiplayerClient",
+  "startSinglePlayerClient",
 ];
 const forbiddenPatterns = [
   /\/assets\/data:application\/wasm/iu,

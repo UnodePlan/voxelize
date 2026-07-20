@@ -102,6 +102,16 @@
   outline-offset: 3px;
 }
 
+/* 禁用态保持白底黑描边可读，避免全局 opacity 洗成不可见灰块 */
+.primary-command:disabled,
+.primary-command[aria-disabled="true"] {
+  opacity: 1;
+  border-color: var(--color-line-strong);
+  color: var(--color-ink-faint);
+  background: var(--color-surface-soft);
+  cursor: not-allowed;
+}
+
 .primary-command--hero {
   width: 100%;
   min-height: var(--control-height-hero);
@@ -120,7 +130,7 @@
 }
 
 .secondary-command:hover:not(:disabled) {
-  background: oklch(100% 0 0 / 6%);
+  background: color-mix(in oklab, var(--color-ink) 6%, transparent);
 }
 
 .text-command {
